@@ -517,11 +517,33 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
             {plata(cfg.saldoHoy)}
           </div>
         )}
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
+          Lo que hay en tu cuenta ahora mismo, sin descontar nada.
+        </div>
+        {pendiente > 0 && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.linea}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+              <span style={{ color: T.suave }}>Te falta pagar este mes</span>
+              <span className="num" style={{ color: T.rojo, fontWeight: 600 }}>{plata(-pendiente)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 8 }}>
+              <span style={{ fontWeight: 620 }}>Te queda libre</span>
+              <span className="num" style={{ fontWeight: 640,
+                    color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.verde }}>
+                {plata(cfg.saldoHoy - pendiente)}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
         <button onClick={onAbrirAjustes} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>Ajustes</button>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+        Arranca en {etiqMesLargo(cfg.desdeMes)}. Del mes en curso solo cuenta lo que no marcaste como pagado.
       </div>
 
       <div className="scroll" style={{ display: "flex", gap: 7, overflowX: "auto", marginTop: 11, paddingBottom: 3 }}>
@@ -1165,6 +1187,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
+const SEED_VERSION = 3;
 const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, pagados: {} };
 
 export default function App() {
@@ -1176,6 +1199,8 @@ export default function App() {
   const [verAjustes, setVerAjustes] = useState(false);
   const medios = MEDIOS_INI;
 
+  const [hayUpdate, setHayUpdate] = useState(false);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem("flujo:v2");
@@ -1183,6 +1208,7 @@ export default function App() {
         const d = JSON.parse(raw);
         if (d.cfg) setCfgRaw({ ...CFG_INI, ...d.cfg, pagados: d.cfg.pagados || {} });
         if (Array.isArray(d.movs)) setMovs(d.movs);
+        if ((d.seedVersion || 0) < SEED_VERSION) setHayUpdate(true);
       } else {
         // Primera vez: el mes en curso ya lo pagaste, asi que lo marco entero.
         const mk = mesDeHoy();
@@ -1192,8 +1218,19 @@ export default function App() {
     setCargando(false);
   }, []);
 
+  // Reemplaza solo los movimientos base (id "s...") y conserva los que cargaste vos ("m...").
+  const actualizarBase = () => {
+    const mios = movs.filter((m) => !String(m.id).startsWith("s"));
+    const n = [...SEED, ...mios];
+    setMovs(n);
+    persistir(cfg, n);
+    setHayUpdate(false);
+  };
+
   const persistir = useCallback((c, m) => {
-    try { localStorage.setItem("flujo:v2", JSON.stringify({ cfg: c, movs: m })); } catch (e) { /* lleno */ }
+    try {
+      localStorage.setItem("flujo:v2", JSON.stringify({ cfg: c, movs: m, seedVersion: SEED_VERSION }));
+    } catch (e) { /* lleno */ }
   }, []);
   const setCfg = (c) => { setCfgRaw(c); persistir(c, movs); };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
@@ -1237,6 +1274,30 @@ export default function App() {
   return (
     <div className="bz" style={{ maxWidth: 470, margin: "0 auto", paddingBottom: 96 }}>
       <style>{CSS}</style>
+
+      {hayUpdate && (
+        <div style={{ background: T.ambarBg, padding: "13px 16px", borderBottom: `1px solid ${T.linea}` }}>
+          <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            Hay datos base nuevos para cargar. Se reemplazan los movimientos originales y se conserva
+            todo lo que agregaste vos.
+          </div>
+          <div style={{ display: "flex", gap: 9, marginTop: 11 }}>
+            <button
+              onClick={actualizarBase}
+              style={{ padding: "9px 15px", borderRadius: 9, background: T.tinta, color: "#fff",
+                       fontSize: 13.5, fontWeight: 600 }}
+            >
+              Actualizar
+            </button>
+            <button
+              onClick={() => setHayUpdate(false)}
+              style={{ padding: "9px 15px", fontSize: 13.5, color: T.suave }}
+            >
+              Ahora no
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab === "hoy" && (
         <Hoy
