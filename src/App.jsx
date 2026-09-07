@@ -500,7 +500,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
     <div style={{ padding: 16, paddingBottom: 30 }}>
       <div className="card" style={{ padding: 17 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: T.suave }}>Plata disponible hoy</span>
+          <span style={{ fontSize: 13, color: T.suave }}>
+            {pendiente > 0 ? "Te queda libre" : "Plata disponible hoy"}
+          </span>
           <button onClick={() => setEditSaldo(!editSaldo)} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
             {editSaldo ? "Listo" : "Cambiar"}
           </button>
@@ -513,26 +515,24 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
           />
         ) : (
           <div className="num" style={{ fontSize: 34, fontWeight: 640, marginTop: 3,
-                                        color: cfg.saldoHoy < 0 ? T.rojo : T.tinta }}>
-            {plata(cfg.saldoHoy)}
+                color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.tinta }}>
+            {plata(cfg.saldoHoy - pendiente)}
           </div>
         )}
-        <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
-          Lo que hay en tu cuenta ahora mismo, sin descontar nada.
-        </div>
-        {pendiente > 0 && (
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.linea}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+        {pendiente > 0 ? (
+          <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.linea}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span style={{ color: T.suave }}>En la cuenta</span>
+              <span className="num" style={{ color: T.suave }}>{plata(cfg.saldoHoy)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 5 }}>
               <span style={{ color: T.suave }}>Te falta pagar este mes</span>
-              <span className="num" style={{ color: T.rojo, fontWeight: 600 }}>{plata(-pendiente)}</span>
+              <span className="num" style={{ color: T.rojo }}>{plata(-pendiente)}</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 8 }}>
-              <span style={{ fontWeight: 620 }}>Te queda libre</span>
-              <span className="num" style={{ fontWeight: 640,
-                    color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.verde }}>
-                {plata(cfg.saldoHoy - pendiente)}
-              </span>
-            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
+            No te queda nada pendiente este mes.
           </div>
         )}
       </div>
@@ -1206,13 +1206,21 @@ export default function App() {
       const raw = localStorage.getItem("flujo:v2");
       if (raw) {
         const d = JSON.parse(raw);
-        if (d.cfg) setCfgRaw({ ...CFG_INI, ...d.cfg, pagados: d.cfg.pagados || {} });
-        if (Array.isArray(d.movs)) setMovs(d.movs);
+        const movsG = Array.isArray(d.movs) ? d.movs : SEED;
+        const mk = mesDeHoy();
+        const c = { ...CFG_INI, ...d.cfg, pagados: (d.cfg && d.cfg.pagados) || {} };
+        // Si nunca se inicializo, damos por pagado lo que ya venia del mes en curso.
+        if (!c.pagadosInit) {
+          c.pagados = { ...c.pagados, [mk]: idsActivosEn(movsG.filter((m) => String(m.id).startsWith("s")), mk, c.tc) };
+          c.pagadosInit = true;
+        }
+        setCfgRaw(c);
+        setMovs(movsG);
         if ((d.seedVersion || 0) < SEED_VERSION) setHayUpdate(true);
       } else {
         // Primera vez: el mes en curso ya lo pagaste, asi que lo marco entero.
         const mk = mesDeHoy();
-        setCfgRaw({ ...CFG_INI, pagados: { [mk]: idsActivosEn(SEED, mk, CFG_INI.tc) } });
+        setCfgRaw({ ...CFG_INI, pagadosInit: true, pagados: { [mk]: idsActivosEn(SEED, mk, CFG_INI.tc) } });
       }
     } catch (e) { /* primera vez */ }
     setCargando(false);
@@ -1222,8 +1230,12 @@ export default function App() {
   const actualizarBase = () => {
     const mios = movs.filter((m) => !String(m.id).startsWith("s"));
     const n = [...SEED, ...mios];
-    setMovs(n);
-    persistir(cfg, n);
+    const mk = mesDeHoy();
+    const yaMarcados = (cfg.pagados && cfg.pagados[mk]) || [];
+    const nuevos = idsActivosEn(SEED, mk, cfg.tc);
+    const c = { ...cfg, pagadosInit: true,
+                pagados: { ...cfg.pagados, [mk]: [...new Set([...yaMarcados, ...nuevos])] } };
+    setMovs(n); setCfgRaw(c); persistir(c, n);
     setHayUpdate(false);
   };
 
