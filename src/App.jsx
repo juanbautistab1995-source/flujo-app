@@ -199,10 +199,15 @@ function proyectar(cfg, movs, medios, meses, extra) {
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
     arr.forEach((mv) => {
-      let m = montoEnMes(mv, mk, cfg.tc);
+      const base = montoEnMes(mv, mk, cfg.tc);
+      const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
       // Ajuste puntual: este mes vale otra cosa (0 = ya pagado o no aplica).
-      if (Object.prototype.hasOwnProperty.call(aj, mv.id)) m = aj[mv.id];
-      if (!m) return;
+      let m = tocado ? aj[mv.id] : base;
+      if (!m) {
+        // Si lo diste por saldado, lo dejamos visible para poder revertirlo.
+        if (tocado && base > 0) items.push({ mv, monto: 0, base, saldado: true, cuota: nroCuota(mv, mk) });
+        return;
+      }
       if (mv.recurrente) m *= infl;
       if (mv.tipo === "ingreso") {
         ingresos += m;
@@ -644,9 +649,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
 
                   <div style={{ marginTop: 12, borderTop: `1px solid ${T.linea}`, paddingTop: 10 }}>
                     <div style={{ fontSize: 12, color: T.suave, marginBottom: 8, lineHeight: 1.5 }}>
-                      Tocá un gasto para corregir cuánto vale ESTE mes. El estimado de los otros meses no se toca.
+                      Tocá un gasto para marcarlo como pagado o corregir cuánto vale ESTE mes.
+                      El estimado de los otros meses no se toca.
                     </div>
-                    {f.items.slice().sort((a, b) => b.monto - a.monto).map(({ mv, monto, cuota, ingreso, deuda }) => {
+                    {f.items.slice().sort((a, b) => (b.monto - a.monto) || (a.saldado ? 1 : -1))
+                      .map(({ mv, monto, cuota, ingreso, deuda, saldado, base }) => {
                       const clave = f.mk + "|" + mv.id;
                       const abierto = editItem === clave;
                       const ajustado = !!(cfg.ajustes && cfg.ajustes[f.mk] &&
@@ -654,18 +661,20 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
                       return (
                         <div key={mv.id}>
                           <button
-                            onClick={() => { setEditItem(abierto ? null : clave); setValor(String(Math.round(monto))); }}
+                            onClick={() => { setEditItem(abierto ? null : clave);
+                                             setValor(String(Math.round(saldado ? base : monto))); }}
                             style={{ width: "100%", display: "flex", justifyContent: "space-between",
                                      alignItems: "center", gap: 10, padding: "7px 0", textAlign: "left" }}
                           >
-                            <span style={{ fontSize: 12.5, color: T.suave, overflow: "hidden",
-                                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap", color: saldado ? T.tenue : T.suave,
+                                  textDecoration: saldado ? "line-through" : "none" }}>
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
-                              {deuda ? ` · a ${mv.persona}` : ""}{ajustado ? "  ✎" : ""}
+                              {deuda ? ` · a ${mv.persona}` : ""}{ajustado && !saldado ? "  ✎" : ""}
                             </span>
                             <span className="num" style={{ fontSize: 12.5, flexShrink: 0,
-                                  color: ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
-                              {ingreso ? "+" : ""}{corta(monto)}
+                                  color: saldado ? T.tenue : ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
+                              {saldado ? "pagado" : (ingreso ? "+" : "") + corta(monto)}
                             </span>
                           </button>
                           {abierto && (
@@ -683,10 +692,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
                                 >Guardar</button>
                               </div>
                               <div style={{ display: "flex", gap: 7, marginTop: 9, flexWrap: "wrap" }}>
-                                <button className="chip sm"
-                                  onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
-                                  Ya lo pagué
-                                </button>
+                                {!saldado && (
+                                  <button className="chip sm"
+                                    onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
+                                    Ya lo pagué
+                                  </button>
+                                )}
                                 {ajustado && (
                                   <button className="chip sm"
                                     onClick={() => { onAjustar(f.mk, mv.id, null); setEditItem(null); }}>
