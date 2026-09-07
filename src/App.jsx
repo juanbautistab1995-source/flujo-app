@@ -177,8 +177,11 @@ function nroCuota(mv, mk) {
   return distMes(mv.mesInicio, mk) + 1;
 }
 
-function idsActivosEn(movs, mk, tc) {
-  return movs.filter((mv) => montoEnMes(mv, mk, tc) > 0).map((mv) => mv.id);
+// Deja todo el mes en cero: sirve para dar por saldado el mes en curso.
+function ajustesEnCero(movs, mk, tc) {
+  const o = {};
+  movs.forEach((mv) => { if (montoEnMes(mv, mk, tc) > 0) o[mv.id] = 0; });
+  return o;
 }
 
 function proyectar(cfg, movs, medios, meses, extra) {
@@ -194,10 +197,11 @@ function proyectar(cfg, movs, medios, meses, extra) {
     const deudas = [];
     let ingresos = 0, excepcional = 0;
 
-    const yaPagados = (cfg.pagados && cfg.pagados[mk]) || [];
+    const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
     arr.forEach((mv) => {
-      if (yaPagados.includes(mv.id)) return;
       let m = montoEnMes(mv, mk, cfg.tc);
+      // Ajuste puntual: este mes vale otra cosa (0 = ya pagado o no aplica).
+      if (Object.prototype.hasOwnProperty.call(aj, mv.id)) m = aj[mv.id];
       if (!m) return;
       if (mv.recurrente) m *= infl;
       if (mv.tipo === "ingreso") {
@@ -639,34 +643,62 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado 
                   )}
 
                   <div style={{ marginTop: 12, borderTop: `1px solid ${T.linea}`, paddingTop: 10 }}>
-                    <div style={{ fontSize: 12, color: T.suave, marginBottom: 8 }}>
-                      Tocá cualquiera para marcarlo como ya pagado o cobrado.
+                    <div style={{ fontSize: 12, color: T.suave, marginBottom: 8, lineHeight: 1.5 }}>
+                      Tocá un gasto para corregir cuánto vale ESTE mes. El estimado de los otros meses no se toca.
                     </div>
-                    {f.items.slice().sort((a, b) => b.monto - a.monto).map(({ mv, monto, cuota, ingreso }) => (
-                      <button
-                        key={mv.id}
-                        onClick={() => onTogglePagado(f.mk, mv.id)}
-                        style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
-                                 gap: 10, padding: "7px 0", textAlign: "left" }}
-                      >
-                        <span style={{ fontSize: 12.5, color: T.suave, overflow: "hidden",
-                                       textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
-                        </span>
-                        <span className="num" style={{ fontSize: 12.5, flexShrink: 0,
-                                                       color: ingreso ? T.verde : T.tinta }}>
-                          {ingreso ? "+" : ""}{corta(monto)}
-                        </span>
-                      </button>
-                    ))}
-                    {!!((cfg.pagados && cfg.pagados[f.mk]) || []).length && (
-                      <button
-                        onClick={() => onTogglePagado(f.mk, null)}
-                        style={{ marginTop: 9, fontSize: 12.5, color: T.ambar, fontWeight: 600 }}
-                      >
-                        Desmarcar los {(cfg.pagados[f.mk] || []).length} que marcaste como pagados
-                      </button>
-                    )}
+                    {f.items.slice().sort((a, b) => b.monto - a.monto).map(({ mv, monto, cuota, ingreso, deuda }) => {
+                      const clave = f.mk + "|" + mv.id;
+                      const abierto = editItem === clave;
+                      const ajustado = !!(cfg.ajustes && cfg.ajustes[f.mk] &&
+                        Object.prototype.hasOwnProperty.call(cfg.ajustes[f.mk], mv.id));
+                      return (
+                        <div key={mv.id}>
+                          <button
+                            onClick={() => { setEditItem(abierto ? null : clave); setValor(String(Math.round(monto))); }}
+                            style={{ width: "100%", display: "flex", justifyContent: "space-between",
+                                     alignItems: "center", gap: 10, padding: "7px 0", textAlign: "left" }}
+                          >
+                            <span style={{ fontSize: 12.5, color: T.suave, overflow: "hidden",
+                                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
+                              {deuda ? ` · a ${mv.persona}` : ""}{ajustado ? "  ✎" : ""}
+                            </span>
+                            <span className="num" style={{ fontSize: 12.5, flexShrink: 0,
+                                  color: ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
+                              {ingreso ? "+" : ""}{corta(monto)}
+                            </span>
+                          </button>
+                          {abierto && (
+                            <div style={{ padding: "4px 0 12px" }}>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <input
+                                  className="num" inputMode="decimal" value={valor}
+                                  onChange={(e) => setValor(e.target.value.replace(/[^\d]/g, ""))}
+                                  style={{ textAlign: "right", padding: "9px 11px" }}
+                                />
+                                <button
+                                  onClick={() => { onAjustar(f.mk, mv.id, +valor || 0); setEditItem(null); }}
+                                  style={{ padding: "10px 15px", borderRadius: 9, background: T.tinta,
+                                           color: "#fff", fontSize: 13.5, fontWeight: 600, flexShrink: 0 }}
+                                >Guardar</button>
+                              </div>
+                              <div style={{ display: "flex", gap: 7, marginTop: 9, flexWrap: "wrap" }}>
+                                <button className="chip sm"
+                                  onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
+                                  Ya lo pagué
+                                </button>
+                                {ajustado && (
+                                  <button className="chip sm"
+                                    onClick={() => { onAjustar(f.mk, mv.id, null); setEditItem(null); }}>
+                                    Volver al estimado
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1187,8 +1219,8 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
-const SEED_VERSION = 3;
-const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, pagados: {} };
+const SEED_VERSION = 4;
+const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {} };
 
 export default function App() {
   const [tab, setTab] = useState("hoy");
@@ -1208,11 +1240,13 @@ export default function App() {
         const d = JSON.parse(raw);
         const movsG = Array.isArray(d.movs) ? d.movs : SEED;
         const mk = mesDeHoy();
-        const c = { ...CFG_INI, ...d.cfg, pagados: (d.cfg && d.cfg.pagados) || {} };
-        // Si nunca se inicializo, damos por pagado lo que ya venia del mes en curso.
-        if (!c.pagadosInit) {
-          c.pagados = { ...c.pagados, [mk]: idsActivosEn(movsG.filter((m) => String(m.id).startsWith("s")), mk, c.tc) };
-          c.pagadosInit = true;
+        const c = { ...CFG_INI, ...d.cfg, desdeMes: null, ajustes: (d.cfg && d.cfg.ajustes) || {} };
+        // El mes en curso arranca dado por saldado; despues corregis lo que falte.
+        if (!c.ajustesInit) {
+          c.ajustes = { ...c.ajustes,
+            [mk]: { ...ajustesEnCero(movsG.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
+                    ...(c.ajustes[mk] || {}) } };
+          c.ajustesInit = true;
         }
         setCfgRaw(c);
         setMovs(movsG);
@@ -1220,7 +1254,7 @@ export default function App() {
       } else {
         // Primera vez: el mes en curso ya lo pagaste, asi que lo marco entero.
         const mk = mesDeHoy();
-        setCfgRaw({ ...CFG_INI, pagadosInit: true, pagados: { [mk]: idsActivosEn(SEED, mk, CFG_INI.tc) } });
+        setCfgRaw({ ...CFG_INI, ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, CFG_INI.tc) } });
       }
     } catch (e) { /* primera vez */ }
     setCargando(false);
@@ -1231,10 +1265,9 @@ export default function App() {
     const mios = movs.filter((m) => !String(m.id).startsWith("s"));
     const n = [...SEED, ...mios];
     const mk = mesDeHoy();
-    const yaMarcados = (cfg.pagados && cfg.pagados[mk]) || [];
-    const nuevos = idsActivosEn(SEED, mk, cfg.tc);
-    const c = { ...cfg, pagadosInit: true,
-                pagados: { ...cfg.pagados, [mk]: [...new Set([...yaMarcados, ...nuevos])] } };
+    const c = { ...cfg, ajustesInit: true,
+                ajustes: { ...cfg.ajustes,
+                           [mk]: { ...ajustesEnCero(SEED, mk, cfg.tc), ...((cfg.ajustes || {})[mk] || {}) } } };
     setMovs(n); setCfgRaw(c); persistir(c, n);
     setHayUpdate(false);
   };
@@ -1244,7 +1277,10 @@ export default function App() {
       localStorage.setItem("flujo:v2", JSON.stringify({ cfg: c, movs: m, seedVersion: SEED_VERSION }));
     } catch (e) { /* lleno */ }
   }, []);
-  const setCfg = (c) => { setCfgRaw(c); persistir(c, movs); };
+  const setCfg = (c) => {
+    const limpio = { ...c, desdeMes: null };  // se recalcula siempre desde el mes actual
+    setCfgRaw(limpio); persistir(limpio, movs);
+  };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
 
   const guardarMov = (mv) => {
@@ -1256,21 +1292,21 @@ export default function App() {
   const reiniciar = () => {
     const mk = mesDeHoy();
     const c = { ...CFG_INI, saldoHoy: cfg.saldoHoy, tc: cfg.tc, horizonte: cfg.horizonte,
-                pagados: { [mk]: idsActivosEn(SEED, mk, cfg.tc) } };
+                ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, cfg.tc) } };
     setMovs(SEED); setCfgRaw(c); persistir(c, SEED); setVerAjustes(false);
   };
   const importar = (d) => {
     const c = { ...CFG_INI, ...(d.cfg || {}) };
     setMovs(d.movs); setCfgRaw(c); persistir(c, d.movs); setVerAjustes(false);
   };
-  const togglePagado = (mk, id) => {
-    const p = { ...(cfg.pagados || {}) };
-    if (id === null) delete p[mk];
-    else {
-      const l = p[mk] || [];
-      p[mk] = l.includes(id) ? l.filter((x) => x !== id) : [...l, id];
-    }
-    setCfg({ ...cfg, pagados: p });
+  // monto = null borra el ajuste y vuelve al estimado
+  const ajustar = (mk, id, monto) => {
+    const a = { ...(cfg.ajustes || {}) };
+    const delMes = { ...(a[mk] || {}) };
+    if (monto === null) delete delMes[id];
+    else delMes[id] = monto;
+    a[mk] = delMes;
+    setCfg({ ...cfg, ajustes: a });
   };
 
   const desde = cfg.desdeMes || mesDeHoy();
@@ -1314,7 +1350,7 @@ export default function App() {
       {tab === "hoy" && (
         <Hoy
           cfg={{ ...cfg, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
-          onAbrirAjustes={() => setVerAjustes(true)} onTogglePagado={togglePagado}
+          onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar}
         />
       )}
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfg} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
