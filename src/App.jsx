@@ -75,49 +75,53 @@ const SEED = [
   {"tipo": "gasto", "detalle": "Federación Patronal (resto)", "medio": "master", "recurrente": true, "monto": 136918, "id": "s23"},
   {"tipo": "gasto", "detalle": "Rappi", "medio": "master", "recurrente": true, "monto": 14880, "id": "s24"},
   {"tipo": "gasto", "detalle": "PlayStation", "medio": "master", "recurrente": true, "montoUsd": 11.99, "moneda": "USD", "id": "s25"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 3158.83, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-02", "id": "s26"},
-  {"tipo": "gasto", "detalle": "Almundo", "monto": 40322.53, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-03", "id": "s27"},
-  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 8544, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-05", "id": "s28"},
-  {"tipo": "gasto", "detalle": "Run", "monto": 4218.33, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s29"},
-  {"tipo": "gasto", "detalle": "Run", "monto": 1068.33, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s30"},
-  {"tipo": "gasto", "detalle": "Perfumsnow", "monto": 21991.66, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "id": "s31"},
-  {"tipo": "gasto", "detalle": "Nike La Plata", "monto": 37999.66, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "persona": "Betty", "pct": 0.4737, "id": "s32"},
-  {"tipo": "gasto", "detalle": "Gaona", "monto": 6832.5, "medio": "icbc", "cuotas": 9, "mesInicio": "2026-07", "id": "s33"},
-  {"tipo": "gasto", "detalle": "Perfumeriaspigmento", "monto": 9313.33, "medio": "icbc", "cuotas": 24, "mesInicio": "2026-07", "id": "s34"},
-  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 10499.66, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s35"},
-  {"tipo": "gasto", "detalle": "Kingofkings", "monto": 32998, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s36"},
-  {"tipo": "gasto", "detalle": "Confeccionesseman", "monto": 11665, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s37"},
-  {"tipo": "gasto", "detalle": "Kevingston", "monto": 20666.66, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s38"},
-  {"tipo": "gasto", "detalle": "Seven Electronics", "monto": 26962.68, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s39"},
-  {"tipo": "gasto", "detalle": "Thebrandschoi", "monto": 19108.34, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s40"},
-  {"tipo": "gasto", "detalle": "Opensports", "monto": 6666.68, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s41"},
-  {"tipo": "gasto", "detalle": "Iey", "monto": 5998.5, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-09", "id": "s42"},
-  {"tipo": "gasto", "detalle": "Blossomfragancias", "monto": 38000, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s43"},
-  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 57310.8, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s44"},
-  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 7333, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s45"},
-  {"tipo": "gasto", "detalle": "Fiambreriaale (Compra Nueva)", "monto": 13426.25, "medio": "icbc", "cuotas": 2, "mesInicio": "2026-10", "id": "s46"},
-  {"tipo": "gasto", "detalle": "Bidcom", "monto": 42209.44, "medio": "master", "cuotas": 18, "mesInicio": "2025-06", "id": "s47"},
-  {"tipo": "gasto", "detalle": "Bidcom", "monto": 4373.54, "medio": "master", "cuotas": 18, "mesInicio": "2025-12", "id": "s48"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 17051.13, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s49"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 4366.44, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s50"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 14277.18, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s51"},
-  {"tipo": "gasto", "detalle": "Www.Fravega.Com", "monto": 1562.43, "medio": "master", "cuotas": 12, "mesInicio": "2026-03", "id": "s52"},
-  {"tipo": "gasto", "detalle": "Shop Gallery Mendoza", "monto": 11683.33, "medio": "master", "cuotas": 6, "mesInicio": "2026-07", "id": "s53"},
-  {"tipo": "gasto", "detalle": "Alfisjeans", "monto": 26300, "medio": "master", "cuotas": 3, "mesInicio": "2026-08", "id": "s54"},
-  {"tipo": "gasto", "detalle": "Visaur", "monto": 86666.63, "medio": "bna", "cuotas": 30, "mesInicio": "2025-02", "id": "s55"},
-  {"tipo": "gasto", "detalle": "Home Sweet S.A.", "monto": 3094.33, "medio": "bna", "cuotas": 24, "mesInicio": "2025-06", "id": "s56"},
-  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 492.83, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s57"},
-  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 2469.88, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s58"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 2653.25, "medio": "bna", "cuotas": 18, "mesInicio": "2026-03", "id": "s59"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 7054.7, "medio": "bna", "cuotas": 18, "mesInicio": "2026-05", "id": "s60"},
-  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 3595.41, "medio": "bna", "cuotas": 12, "mesInicio": "2026-05", "id": "s61"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 2912.42, "medio": "bna", "cuotas": 18, "mesInicio": "2026-07", "id": "s62"},
-  {"tipo": "gasto", "detalle": "Busplus", "monto": 8400, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s63"},
-  {"tipo": "gasto", "detalle": "Busplus", "monto": 9660, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s64"},
-  {"tipo": "gasto", "detalle": "Gadnic", "monto": 3145.86, "medio": "hipo", "cuotas": 15, "mesInicio": "2025-10", "id": "s65"},
-  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 8188.11, "medio": "hipo", "cuotas": 6, "mesInicio": "2026-05", "id": "s66"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 37905.96, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-02", "id": "s26"},
+  {"tipo": "gasto", "detalle": "Almundo", "monto": 483870.36, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-03", "id": "s27"},
+  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 102528, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-05", "id": "s28"},
+  {"tipo": "gasto", "detalle": "Run", "monto": 25309.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s29"},
+  {"tipo": "gasto", "detalle": "Run", "monto": 6409.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s30"},
+  {"tipo": "gasto", "detalle": "Perfumsnow", "monto": 131949.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "id": "s31"},
+  {"tipo": "gasto", "detalle": "Nike La Plata", "monto": 227997.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "persona": "Betty", "pct": 0.4737, "id": "s32"},
+  {"tipo": "gasto", "detalle": "Gaona", "monto": 61492.5, "medio": "icbc", "cuotas": 9, "mesInicio": "2026-07", "id": "s33"},
+  {"tipo": "gasto", "detalle": "Perfumeriaspigmento", "monto": 223519.92, "medio": "icbc", "cuotas": 24, "mesInicio": "2026-07", "id": "s34"},
+  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 31498.98, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s35"},
+  {"tipo": "gasto", "detalle": "Kingofkings", "monto": 98994, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s36"},
+  {"tipo": "gasto", "detalle": "Confeccionesseman", "monto": 69990, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s37"},
+  {"tipo": "gasto", "detalle": "Kevingston", "monto": 123999.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s38"},
+  {"tipo": "gasto", "detalle": "Seven Electronics", "monto": 80888.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s39"},
+  {"tipo": "gasto", "detalle": "Thebrandschoi", "monto": 57325.02, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s40"},
+  {"tipo": "gasto", "detalle": "Opensports", "monto": 20000.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s41"},
+  {"tipo": "gasto", "detalle": "Iey", "monto": 35991.0, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-09", "id": "s42"},
+  {"tipo": "gasto", "detalle": "Blossomfragancias", "monto": 114000, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s43", "persona": "Federico Catenazzi", "pct": 0.5},
+  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 171932.4, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s44"},
+  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 21999, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s45"},
+  {"tipo": "gasto", "detalle": "Fiambreriaale (Compra Nueva)", "monto": 26852.5, "medio": "icbc", "cuotas": 2, "mesInicio": "2026-10", "id": "s46"},
+  {"tipo": "gasto", "detalle": "Bidcom", "monto": 759769.92, "medio": "master", "cuotas": 18, "mesInicio": "2025-06", "id": "s47"},
+  {"tipo": "gasto", "detalle": "Bidcom", "monto": 78723.72, "medio": "master", "cuotas": 18, "mesInicio": "2025-12", "id": "s48"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 204613.56, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s49"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 52397.28, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s50"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 171326.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s51"},
+  {"tipo": "gasto", "detalle": "Www.Fravega.Com", "monto": 18749.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-03", "id": "s52"},
+  {"tipo": "gasto", "detalle": "Shop Gallery Mendoza", "monto": 70099.98, "medio": "master", "cuotas": 6, "mesInicio": "2026-07", "id": "s53"},
+  {"tipo": "gasto", "detalle": "Alfisjeans", "monto": 78900, "medio": "master", "cuotas": 3, "mesInicio": "2026-08", "id": "s54"},
+  {"tipo": "gasto", "detalle": "Visaur", "monto": 2599998.9, "medio": "bna", "cuotas": 30, "mesInicio": "2025-02", "id": "s55"},
+  {"tipo": "gasto", "detalle": "Home Sweet S.A.", "monto": 74263.92, "medio": "bna", "cuotas": 24, "mesInicio": "2025-06", "id": "s56"},
+  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 8870.94, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s57"},
+  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 44457.84, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s58"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 47758.5, "medio": "bna", "cuotas": 18, "mesInicio": "2026-03", "id": "s59"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 126984.6, "medio": "bna", "cuotas": 18, "mesInicio": "2026-05", "id": "s60"},
+  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 43144.92, "medio": "bna", "cuotas": 12, "mesInicio": "2026-05", "id": "s61"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 52423.56, "medio": "bna", "cuotas": 18, "mesInicio": "2026-07", "id": "s62"},
+  {"tipo": "gasto", "detalle": "Busplus", "monto": 25200, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s63"},
+  {"tipo": "gasto", "detalle": "Busplus", "monto": 28980, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s64"},
+  {"tipo": "gasto", "detalle": "Gadnic", "monto": 47187.9, "medio": "hipo", "cuotas": 15, "mesInicio": "2025-10", "id": "s65"},
+  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 49128.66, "medio": "hipo", "cuotas": 6, "mesInicio": "2026-05", "id": "s66"},
   {"tipo": "gasto", "detalle": "Viaje: nafta, Ubers, Patagonia, comidas", "monto": 450385, "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s67"},
-  {"tipo": "gasto", "detalle": "Viaje: Airbnb Bariloche", "montoUsd": 105, "moneda": "USD", "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s68"}
+  {"tipo": "gasto", "detalle": "Viaje: Airbnb Bariloche", "montoUsd": 105, "moneda": "USD", "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s68"},
+  {"tipo": "gasto", "detalle": "Bariloche: 23 consumos en 1 pago", "monto": 1079779, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s69"},
+  {"tipo": "gasto", "detalle": "Aerolíneas Maestro EZE", "monto": 68970, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s70"},
+  {"tipo": "gasto", "detalle": "Catedral Alta Patagonia (pases Bariloche)", "monto": 334000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 6, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s71"},
+  {"tipo": "gasto", "detalle": "Villa La Angostura: alojamiento, pases, escuela y equipos", "monto": 1980000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 11, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s72"}
 ];
 
 /* ===================== FECHAS ===================== */
@@ -129,7 +133,6 @@ const distMes = (a, b) => idxMes(b) - idxMes(a);
 const etiqMes = (mk) => `${MESN[+mk.slice(5, 7) - 1]} ${mk.slice(2, 4)}`;
 const etiqMesLargo = (mk) => `${MESN[+mk.slice(5, 7) - 1]} 20${mk.slice(2, 4)}`;
 const mesDeHoy = () => new Date().toISOString().slice(0, 7);
-const mesArranque = () => sumaMes(mesDeHoy(), 1);
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 
 const plata = (n, d = 0) =>
@@ -165,7 +168,8 @@ function montoEnMes(mv, mk, tc) {
   }
   const n = mv.cuotas || 1;
   const k = distMes(mv.mesInicio, mk);
-  return k >= 0 && k < n ? base : 0;
+  // `monto` es el TOTAL de la compra; el motor lo reparte en las cuotas.
+  return k >= 0 && k < n ? base / n : 0;
 }
 
 function nroCuota(mv, mk) {
@@ -173,9 +177,13 @@ function nroCuota(mv, mk) {
   return distMes(mv.mesInicio, mk) + 1;
 }
 
+function idsActivosEn(movs, mk, tc) {
+  return movs.filter((mv) => montoEnMes(mv, mk, tc) > 0).map((mv) => mv.id);
+}
+
 function proyectar(cfg, movs, medios, meses, extra) {
   const arr = extra ? [...movs, extra] : movs;
-  const desde = cfg.desdeMes || mesArranque();
+  const desde = cfg.desdeMes || mesDeHoy();
   const filas = [];
   for (let i = 0; i < meses; i++) {
     const mk = sumaMes(desde, i);
@@ -183,15 +191,27 @@ function proyectar(cfg, movs, medios, meses, extra) {
     const porMedio = {};
     const items = [];
     const reint = [];
+    const deudas = [];
     let ingresos = 0, excepcional = 0;
 
+    const yaPagados = (cfg.pagados && cfg.pagados[mk]) || [];
     arr.forEach((mv) => {
+      if (yaPagados.includes(mv.id)) return;
       let m = montoEnMes(mv, mk, cfg.tc);
       if (!m) return;
       if (mv.recurrente) m *= infl;
       if (mv.tipo === "ingreso") {
         ingresos += m;
         items.push({ mv, monto: m, ingreso: true });
+        return;
+      }
+      if (mv.pagadoPor === "otro") {
+        // Lo puso otra persona con su plata: a vos te sale solo tu parte, y se la transferís.
+        const mio = m * (mv.pct != null ? mv.pct : 1);
+        porMedio.efectivo = (porMedio.efectivo || 0) + mio;
+        items.push({ mv, monto: mio, cuota: nroCuota(mv, mk), deuda: true });
+        if (mv.persona) deudas.push({ persona: mv.persona, monto: mio, detalle: mv.detalle });
+        if (mv.excepcional) excepcional += mio;
         return;
       }
       porMedio[mv.medio] = (porMedio[mv.medio] || 0) + m;
@@ -211,9 +231,10 @@ function proyectar(cfg, movs, medios, meses, extra) {
     const totalReint = reint.reduce((a, r) => a + r.monto, 0);
     const totIng = ingresos + totalReint;
     const egresos = tarjetas + efvo;
+    const totalDeudas = deudas.reduce((a, d) => a + d.monto, 0);
     filas.push({
       mk, ingresos: totIng, egresos, tarjetas, efvo, reint, totalReint,
-      excepcional, porMedio, items, resultado: totIng - egresos,
+      deudas, totalDeudas, excepcional, porMedio, items, resultado: totIng - egresos,
     });
   }
   let s = cfg.saldoHoy;
@@ -237,6 +258,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
     meses: [],
     persona: "",
     pct: 50,
+    pagadoPor: "yo",
     excepcional: false,
     ...inicial,
     monto: inicial?.monto ?? "",
@@ -251,8 +273,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
   const mesPago = useMemo(() => {
     if (f.recurrente) return null;
     if (f.mesInicio && !f.fecha) return f.mesInicio;
+    if (f.pagadoPor === "otro") return (f.fecha || hoyISO()).slice(0, 7);
     return mesDePago(f.fecha, f.medio, medios);
-  }, [f.fecha, f.medio, f.recurrente, f.mesInicio, medios]);
+  }, [f.fecha, f.medio, f.recurrente, f.mesInicio, f.pagadoPor, medios]);
 
   const guardar = () => {
     if (!valido) return;
@@ -275,6 +298,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
       mv.fecha = f.fecha;
     }
     if (f.persona) { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
+    if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
     onGuardar(mv);
   };
 
@@ -296,7 +320,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
           ))}
         </div>
 
-        <label className="lbl">Monto</label>
+        <label className="lbl">
+          {!f.recurrente && +f.cuotas > 1 ? "Monto total de la compra" : "Monto"}
+        </label>
         <div style={{ display: "flex", gap: 8 }}>
           <input
             className="num" inputMode="decimal"
@@ -316,14 +342,38 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
         <label className="lbl" style={{ marginTop: 16 }}>Detalle</label>
         <input value={f.detalle} onChange={(e) => set("detalle", e.target.value)} placeholder="Comercio o concepto" />
 
-        <label className="lbl" style={{ marginTop: 16 }}>Medio de pago</label>
-        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-          {medios.map((m) => (
-            <button key={m.id} className={"chip" + (f.medio === m.id ? " on" : "")} onClick={() => set("medio", m.id)}>
-              {m.corto}
-            </button>
-          ))}
-        </div>
+        {f.tipo === "gasto" && (
+          <>
+            <label className="lbl" style={{ marginTop: 16 }}>¿Quién lo puso?</label>
+            <div style={{ display: "flex", gap: 7 }}>
+              <button className={"chip" + (f.pagadoPor === "yo" ? " on" : "")} onClick={() => set("pagadoPor", "yo")}>
+                Yo
+              </button>
+              <button className={"chip" + (f.pagadoPor === "otro" ? " on" : "")} onClick={() => set("pagadoPor", "otro")}>
+                Otra persona
+              </button>
+            </div>
+            {f.pagadoPor === "otro" && (
+              <div style={{ marginTop: 9, fontSize: 12.5, color: T.suave, lineHeight: 1.5 }}>
+                Cargá el importe TOTAL del gasto y abajo el porcentaje que te toca a vos. Se lo transferís
+                en el mes que elijas, no cuando cierra su tarjeta.
+              </div>
+            )}
+          </>
+        )}
+
+        {f.pagadoPor === "yo" && (
+          <>
+            <label className="lbl" style={{ marginTop: 16 }}>Medio de pago</label>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {medios.map((m) => (
+                <button key={m.id} className={"chip" + (f.medio === m.id ? " on" : "")} onClick={() => set("medio", m.id)}>
+                  {m.corto}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <label className="lbl" style={{ marginTop: 18 }}>Frecuencia</label>
         <div style={{ display: "flex", gap: 7 }}>
@@ -337,7 +387,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
 
         {!f.recurrente ? (
           <>
-            <label className="lbl" style={{ marginTop: 16 }}>Fecha de la compra</label>
+            <label className="lbl" style={{ marginTop: 16 }}>
+              {f.pagadoPor === "otro" ? "Cuándo empezás a pagarle" : "Fecha de la compra"}
+            </label>
             <input type="date" value={f.fecha || hoyISO()} onChange={(e) => set("fecha", e.target.value)} />
 
             <label className="lbl" style={{ marginTop: 16 }}>Cuotas</label>
@@ -353,8 +405,17 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
             </div>
             {mesPago && (
               <div style={{ marginTop: 14, padding: "11px 13px", background: T.ambarBg, borderRadius: 11, fontSize: 13.5, lineHeight: 1.5 }}>
-                Primera cuota en <b>{etiqMesLargo(mesPago)}</b>
+                {f.pagadoPor === "otro" ? "Le transferís desde " : "Primera cuota en "}
+                <b>{etiqMesLargo(mesPago)}</b>
+                {+f.cuotas > 1 && (
+                  <> · cuota de <b>{plata((f.moneda === "USD" ? +f.montoUsd * 1550 : +f.monto) / +f.cuotas)}</b></>
+                )}
                 {+f.cuotas > 1 && <> y la última en <b>{etiqMesLargo(sumaMes(mesPago, +f.cuotas - 1))}</b></>}.
+                {idxMes(mesPago) < idxMes(mesDeHoy()) && (
+                  <div style={{ marginTop: 6, color: T.rojo }}>
+                    Ojo: ese mes ya pasó, así que no va a aparecer en la proyección.
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -377,7 +438,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
           </>
         )}
 
-        <label className="lbl" style={{ marginTop: 18 }}>Lo comparto con</label>
+        <label className="lbl" style={{ marginTop: 18 }}>
+          {f.pagadoPor === "otro" ? "Se lo debo a" : "Lo comparto con"}
+        </label>
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
           <button className={"chip" + (!f.persona ? " on" : "")} onClick={() => set("persona", "")}>Nadie</button>
           {personas.map((p) => (
@@ -390,7 +453,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
         />
         {f.persona && (
           <div style={{ marginTop: 11, display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 13.5, color: T.suave }}>Recupero el</span>
+            <span style={{ fontSize: 13.5, color: T.suave }}>
+              {f.pagadoPor === "otro" ? "Me toca el" : "Recupero el"}
+            </span>
             <input
               className="num" inputMode="numeric" value={f.pct}
               onChange={(e) => set("pct", Math.min(100, +e.target.value.replace(/\D/g, "") || 0))}
@@ -424,10 +489,12 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
 /* ===================== PANTALLA: HOY ===================== */
 const HORIZONTES = [1, 2, 3, 6, 12, 18, 24];
 
-function Hoy({ cfg, setCfg, filas, medios, onAbrirAjustes }) {
+function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const fin = filas[filas.length - 1];
+  const mesAct = mesDeHoy();
+  const pendiente = filas[0] && filas[0].mk === mesAct ? filas[0].egresos - filas[0].ingresos : 0;
 
   return (
     <div style={{ padding: 16, paddingBottom: 30 }}>
@@ -450,18 +517,11 @@ function Hoy({ cfg, setCfg, filas, medios, onAbrirAjustes }) {
             {plata(cfg.saldoHoy)}
           </div>
         )}
-        <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
-          Poné lo que te queda libre de verdad: descontá lo que todavía tenés que pagar este mes.
-        </div>
       </div>
 
       <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
         <button onClick={onAbrirAjustes} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>Ajustes</button>
-      </div>
-
-      <div style={{ fontSize: 12, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
-        Arranca en {etiqMesLargo(cfg.desdeMes)}: los vencimientos de este mes ya están corriendo.
       </div>
 
       <div className="scroll" style={{ display: "flex", gap: 7, overflowX: "auto", marginTop: 11, paddingBottom: 3 }}>
@@ -504,9 +564,11 @@ function Hoy({ cfg, setCfg, filas, medios, onAbrirAjustes }) {
               <button onClick={() => setAbierta(open ? null : f.mk)} style={{ width: "100%", textAlign: "left", padding: 14 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>{etiqMesLargo(f.mk)}</div>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>
+                      {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : ""}
+                    </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                      cobrado el 28 de {etiqMes(sumaMes(f.mk, -1))}
+                      {f.mk === mesAct ? "este mes, en curso" : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -530,7 +592,9 @@ function Hoy({ cfg, setCfg, filas, medios, onAbrirAjustes }) {
               {open && (
                 <div style={{ borderTop: `1px solid ${T.linea}`, padding: "12px 14px", fontSize: 13.5 }}>
                   {[["Ingresos", f.ingresos - f.totalReint], ["Te reintegran", f.totalReint],
-                    ["Tarjetas", -f.tarjetas], ["Efectivo y débito", -f.efvo]]
+                    ["Tarjetas", -f.tarjetas],
+                    ["Efectivo y débito", -(f.efvo - f.totalDeudas)],
+                    ["Le transferís a otros", -f.totalDeudas]]
                     .filter(([, v]) => v)
                     .map(([n, v]) => (
                       <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
@@ -551,6 +615,37 @@ function Hoy({ cfg, setCfg, filas, medios, onAbrirAjustes }) {
                       Incluye <span className="num">{plata(f.excepcional)}</span> de gastos excepcionales.
                     </div>
                   )}
+
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${T.linea}`, paddingTop: 10 }}>
+                    <div style={{ fontSize: 12, color: T.suave, marginBottom: 8 }}>
+                      Tocá cualquiera para marcarlo como ya pagado o cobrado.
+                    </div>
+                    {f.items.slice().sort((a, b) => b.monto - a.monto).map(({ mv, monto, cuota, ingreso }) => (
+                      <button
+                        key={mv.id}
+                        onClick={() => onTogglePagado(f.mk, mv.id)}
+                        style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+                                 gap: 10, padding: "7px 0", textAlign: "left" }}
+                      >
+                        <span style={{ fontSize: 12.5, color: T.suave, overflow: "hidden",
+                                       textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
+                        </span>
+                        <span className="num" style={{ fontSize: 12.5, flexShrink: 0,
+                                                       color: ingreso ? T.verde : T.tinta }}>
+                          {ingreso ? "+" : ""}{corta(monto)}
+                        </span>
+                      </button>
+                    ))}
+                    {!!((cfg.pagados && cfg.pagados[f.mk]) || []).length && (
+                      <button
+                        onClick={() => onTogglePagado(f.mk, null)}
+                        style={{ marginTop: 9, fontSize: 12.5, color: T.ambar, fontWeight: 600 }}
+                      >
+                        Desmarcar los {(cfg.pagados[f.mk] || []).length} que marcaste como pagados
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -636,7 +731,9 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
       <div style={{ marginTop: 12 }}>
         {lista.map((m) => {
           const marcado = sel.includes(m.id);
-          const valor = m.moneda === "USD" ? (m.montoUsd || 0) * cfg.tc : m.monto || 0;
+          const total = m.moneda === "USD" ? (m.montoUsd || 0) * cfg.tc : m.monto || 0;
+          const nc = m.recurrente ? 1 : (m.cuotas || 1);
+          const valor = total / nc;
           return (
             <button
               key={m.id}
@@ -669,7 +766,10 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
                 <div className="num" style={{ fontSize: 14.5, fontWeight: 600, color: m.tipo === "ingreso" ? T.verde : T.tinta }}>
                   {m.tipo === "ingreso" ? "+" : ""}{corta(valor)}
                 </div>
-                {m.moneda === "USD" && (
+                {nc > 1 && (
+                  <div className="num" style={{ fontSize: 11, color: T.tenue }}>de {corta(total)}</div>
+                )}
+                {m.moneda === "USD" && nc === 1 && (
                   <div className="num" style={{ fontSize: 11, color: T.tenue }}>U$S {m.montoUsd}</div>
                 )}
               </div>
@@ -774,58 +874,123 @@ function Simular({ cfg, movs, medios }) {
   );
 }
 
-/* ===================== PANTALLA: REPARTO ===================== */
-function Reparto({ filas }) {
+/* ===================== PANTALLA: PERSONAS ===================== */
+function Personas({ filas }) {
+  const [abierta, setAbierta] = useState(null);
   const por = {};
-  filas.forEach((f) =>
+  const tocar = (p) => (por[p] = por[p] || { deben: 0, debo: 0, meses: {}, itDeben: {}, itDebo: {} });
+
+  filas.forEach((f) => {
     f.reint.forEach((r) => {
-      por[r.persona] = por[r.persona] || { total: 0, meses: {}, items: {} };
-      por[r.persona].total += r.monto;
-      por[r.persona].meses[f.mk] = (por[r.persona].meses[f.mk] || 0) + r.monto;
-      por[r.persona].items[r.detalle] = (por[r.persona].items[r.detalle] || 0) + r.monto;
-    })
+      const d = tocar(r.persona);
+      d.deben += r.monto;
+      d.meses[f.mk] = (d.meses[f.mk] || 0) + r.monto;
+      d.itDeben[r.detalle] = (d.itDeben[r.detalle] || 0) + r.monto;
+    });
+    f.deudas.forEach((r) => {
+      const d = tocar(r.persona);
+      d.debo += r.monto;
+      d.meses[f.mk] = (d.meses[f.mk] || 0) - r.monto;
+      d.itDebo[r.detalle] = (d.itDebo[r.detalle] || 0) + r.monto;
+    });
+  });
+
+  const gente = Object.keys(por).sort(
+    (a, b) => Math.abs(por[b].deben - por[b].debo) - Math.abs(por[a].deben - por[a].debo)
   );
-  const gente = Object.keys(por).sort((a, b) => por[b].total - por[a].total);
 
   if (!gente.length)
     return (
       <div style={{ padding: 30, textAlign: "center", color: T.suave, fontSize: 14.5, lineHeight: 1.6 }}>
-        Ningún movimiento está marcado como compartido.<br />
-        Editá uno y elegí con quién lo compartís.
+        Todavía no compartís ningún gasto.<br />
+        Cargá uno y elegí con quién.
       </div>
     );
 
+  const totalNeto = gente.reduce((a, p) => a + por[p].deben - por[p].debo, 0);
+
   return (
     <div style={{ padding: 16, paddingBottom: 30 }}>
+      <div className="card" style={{ padding: 15, marginBottom: 14,
+                                     background: totalNeto < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
+        <div style={{ fontSize: 13, color: T.suave }}>
+          {totalNeto < 0 ? "En total le debés a otros" : "En total te deben"}
+        </div>
+        <div className="num" style={{ fontSize: 27, fontWeight: 640, marginTop: 2,
+                                      color: totalNeto < 0 ? T.rojo : T.verde }}>
+          {plata(Math.abs(totalNeto))}
+        </div>
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+          Neto de {filas.length} {filas.length === 1 ? "mes" : "meses"}, ya descontando lo que va en las dos direcciones.
+        </div>
+      </div>
+
       {gente.map((p) => {
         const d = por[p];
+        const neto = d.deben - d.debo;
+        const open = abierta === p;
         return (
-          <div key={p} className="card" style={{ padding: 15, marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <span style={{ fontSize: 16.5, fontWeight: 620 }}>{p}</span>
-              <span className="num" style={{ fontSize: 16.5, fontWeight: 620, color: T.verde }}>{plata(d.total)}</span>
-            </div>
-            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 2 }}>
-              te devuelve en {filas.length} {filas.length === 1 ? "mes" : "meses"}
-            </div>
-            <div style={{ marginTop: 12, borderTop: `1px solid ${T.linea}`, paddingTop: 10 }}>
-              {Object.entries(d.items).sort((a, b) => b[1] - a[1]).map(([n, v]) => (
-                <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "4px 0", gap: 12 }}>
-                  <span style={{ color: T.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</span>
-                  <span className="num" style={{ flexShrink: 0 }}>{plata(v)}</span>
+          <div key={p} className="card" style={{ marginBottom: 11, overflow: "hidden" }}>
+            <button onClick={() => setAbierta(open ? null : p)} style={{ width: "100%", textAlign: "left", padding: 15 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <span style={{ fontSize: 16.5, fontWeight: 620 }}>{p}</span>
+                <span className="num" style={{ fontSize: 16.5, fontWeight: 620, color: neto < 0 ? T.rojo : T.verde }}>
+                  {neto < 0 ? "−" : "+"}{plata(Math.abs(neto))}
+                </span>
+              </div>
+              <div style={{ fontSize: 12.5, color: T.suave, marginTop: 3 }}>
+                {neto < 0 ? "le transferís vos" : "te transfiere"}
+              </div>
+
+              {d.deben > 0 && d.debo > 0 && (
+                <div style={{ display: "flex", gap: 14, marginTop: 11, fontSize: 12.5 }}>
+                  <span style={{ color: T.verde }}>te debe {corta(d.deben)}</span>
+                  <span style={{ color: T.rojo }}>le debés {corta(d.debo)}</span>
                 </div>
-              ))}
-            </div>
-            <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 12 }}>
-              {filas.map((f) => (
-                <div key={f.mk} style={{ minWidth: 58, textAlign: "center", padding: "6px 4px", background: T.papel, borderRadius: 9 }}>
-                  <div style={{ fontSize: 10.5, color: T.tenue }}>{etiqMes(f.mk)}</div>
-                  <div className="num" style={{ fontSize: 12, fontWeight: 600, marginTop: 2 }}>
-                    {d.meses[f.mk] ? corta(d.meses[f.mk]) : "—"}
-                  </div>
+              )}
+            </button>
+
+            {open && (
+              <div style={{ borderTop: `1px solid ${T.linea}`, padding: "12px 15px" }}>
+                {Object.keys(d.itDebo).length > 0 && (
+                  <>
+                    <div style={{ fontSize: 11.5, color: T.tenue, marginBottom: 5 }}>LE DEBÉS</div>
+                    {Object.entries(d.itDebo).sort((a, b) => b[1] - a[1]).map(([n, v]) => (
+                      <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", gap: 12 }}>
+                        <span style={{ color: T.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</span>
+                        <span className="num" style={{ flexShrink: 0, color: T.rojo }}>{plata(v)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+                {Object.keys(d.itDeben).length > 0 && (
+                  <>
+                    <div style={{ fontSize: 11.5, color: T.tenue, margin: "11px 0 5px" }}>TE DEBE</div>
+                    {Object.entries(d.itDeben).sort((a, b) => b[1] - a[1]).map(([n, v]) => (
+                      <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", gap: 12 }}>
+                        <span style={{ color: T.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</span>
+                        <span className="num" style={{ flexShrink: 0, color: T.verde }}>{plata(v)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+                <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 13 }}>
+                  {filas.map((f) => {
+                    const v = d.meses[f.mk] || 0;
+                    return (
+                      <div key={f.mk} style={{ minWidth: 60, textAlign: "center", padding: "6px 4px",
+                                               background: T.papel, borderRadius: 9 }}>
+                        <div style={{ fontSize: 10.5, color: T.tenue }}>{etiqMes(f.mk)}</div>
+                        <div className="num" style={{ fontSize: 12, fontWeight: 600, marginTop: 2,
+                                                      color: v < 0 ? T.rojo : v > 0 ? T.verde : T.tenue }}>
+                          {v ? (v < 0 ? "−" : "+") + corta(Math.abs(v)).replace("$", "$") : "—"}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -834,7 +999,46 @@ function Reparto({ filas }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onCerrar }) {
+  const [texto, setTexto] = useState("");
+  const [modo, setModo] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const datos = () => JSON.stringify({ v: 2, cfg, movs }, null, 0);
+
+  const exportar = async () => {
+    const j = datos();
+    setTexto(j); setModo("exp");
+    try { await navigator.clipboard.writeText(j); setMsg("Copiado al portapapeles."); }
+    catch (e) { setMsg("No pude copiarlo solo. Seleccioná el texto de abajo y copialo a mano."); }
+    setTimeout(() => setMsg(""), 4000);
+  };
+
+  const bajarArchivo = () => {
+    try {
+      const b = new Blob([datos()], { type: "application/json" });
+      const u = URL.createObjectURL(b);
+      const a = document.createElement("a");
+      a.href = u;
+      a.download = `flujo-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 2000);
+    } catch (e) { setMsg("No se pudo descargar. Usá el copiado."); }
+  };
+
+  const importar = () => {
+    try {
+      const d = JSON.parse(texto);
+      if (!Array.isArray(d.movs)) throw new Error("formato");
+      if (!confirm(`Vas a reemplazar todo por ${d.movs.length} movimientos. ¿Seguro?`)) return;
+      onImportar(d);
+      setMsg("Listo, datos restaurados.");
+      setModo(null); setTexto("");
+    } catch (e) {
+      setMsg("Ese texto no es un respaldo válido. Fijate de haber copiado todo.");
+    }
+  };
+
   const num = (k, etiq, nota, paso) => (
     <div style={{ marginBottom: 18 }}>
       <label className="lbl">{etiq}</label>
@@ -877,6 +1081,42 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onCer
             A 12 o 24 meses conviene poner algo.
           </div>
         </div>
+
+        <div style={{ marginTop: 28, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Respaldo</div>
+        <div style={{ fontSize: 12, color: T.suave, marginBottom: 12, lineHeight: 1.5 }}>
+          Tus datos viven solo en este navegador. Si no abrís la app por más de una semana, iOS puede borrarlos.
+          Exportá cada tanto y guardate el texto en Notas.
+        </div>
+        <button className="btn ghost" style={{ marginBottom: 8, fontSize: 14.5, fontWeight: 500 }} onClick={exportar}>
+          Exportar y copiar ({movs.length} movimientos)
+        </button>
+        <button className="btn ghost" style={{ marginBottom: 8, fontSize: 14.5, fontWeight: 500 }} onClick={bajarArchivo}>
+          Descargar como archivo
+        </button>
+        <button
+          className="btn ghost" style={{ marginBottom: 8, fontSize: 14.5, fontWeight: 500 }}
+          onClick={() => { setModo(modo === "imp" ? null : "imp"); setTexto(""); }}
+        >
+          Importar un respaldo
+        </button>
+        {msg && (
+          <div style={{ fontSize: 12.5, color: T.ambar, margin: "4px 0 10px", lineHeight: 1.5 }}>{msg}</div>
+        )}
+        {modo && (
+          <div style={{ marginTop: 6 }}>
+            <textarea
+              value={texto}
+              onChange={(e) => setTexto(e.target.value)}
+              placeholder={modo === "imp" ? "Pegá acá el respaldo" : ""}
+              style={{ minHeight: 130, fontSize: 12, fontFamily: "ui-monospace, monospace" }}
+            />
+            {modo === "imp" && (
+              <button className="btn" style={{ marginTop: 9 }} onClick={importar} disabled={!texto.trim()}>
+                Restaurar estos datos
+              </button>
+            )}
+          </div>
+        )}
 
         <div style={{ marginTop: 28, marginBottom: 12, fontSize: 14.5, fontWeight: 620 }}>Borrado masivo</div>
         {medios.map((m) => {
@@ -924,8 +1164,8 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onCer
 }
 
 /* ===================== SHELL ===================== */
-const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Reparto"]];
-const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null };
+const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
+const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, pagados: {} };
 
 export default function App() {
   const [tab, setTab] = useState("hoy");
@@ -941,8 +1181,12 @@ export default function App() {
       const raw = localStorage.getItem("flujo:v2");
       if (raw) {
         const d = JSON.parse(raw);
-        if (d.cfg) setCfgRaw({ ...CFG_INI, ...d.cfg });
+        if (d.cfg) setCfgRaw({ ...CFG_INI, ...d.cfg, pagados: d.cfg.pagados || {} });
         if (Array.isArray(d.movs)) setMovs(d.movs);
+      } else {
+        // Primera vez: el mes en curso ya lo pagaste, asi que lo marco entero.
+        const mk = mesDeHoy();
+        setCfgRaw({ ...CFG_INI, pagados: { [mk]: idsActivosEn(SEED, mk, CFG_INI.tc) } });
       }
     } catch (e) { /* primera vez */ }
     setCargando(false);
@@ -960,9 +1204,27 @@ export default function App() {
     setEditando(null);
   };
   const borrarVarios = (ids) => { setM(movs.filter((x) => !ids.includes(x.id))); setEditando(null); };
-  const reiniciar = () => { setM(SEED); setVerAjustes(false); };
+  const reiniciar = () => {
+    const mk = mesDeHoy();
+    const c = { ...CFG_INI, saldoHoy: cfg.saldoHoy, tc: cfg.tc, horizonte: cfg.horizonte,
+                pagados: { [mk]: idsActivosEn(SEED, mk, cfg.tc) } };
+    setMovs(SEED); setCfgRaw(c); persistir(c, SEED); setVerAjustes(false);
+  };
+  const importar = (d) => {
+    const c = { ...CFG_INI, ...(d.cfg || {}) };
+    setMovs(d.movs); setCfgRaw(c); persistir(c, d.movs); setVerAjustes(false);
+  };
+  const togglePagado = (mk, id) => {
+    const p = { ...(cfg.pagados || {}) };
+    if (id === null) delete p[mk];
+    else {
+      const l = p[mk] || [];
+      p[mk] = l.includes(id) ? l.filter((x) => x !== id) : [...l, id];
+    }
+    setCfg({ ...cfg, pagados: p });
+  };
 
-  const desde = cfg.desdeMes || mesArranque();
+  const desde = cfg.desdeMes || mesDeHoy();
   const filas = useMemo(
     () => proyectar({ ...cfg, desdeMes: desde }, movs, medios, cfg.horizonte, null),
     [cfg, movs, medios, desde]
@@ -976,10 +1238,15 @@ export default function App() {
     <div className="bz" style={{ maxWidth: 470, margin: "0 auto", paddingBottom: 96 }}>
       <style>{CSS}</style>
 
-      {tab === "hoy" && <Hoy cfg={{ ...cfg, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} onAbrirAjustes={() => setVerAjustes(true)} />}
+      {tab === "hoy" && (
+        <Hoy
+          cfg={{ ...cfg, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
+          onAbrirAjustes={() => setVerAjustes(true)} onTogglePagado={togglePagado}
+        />
+      )}
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfg} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
       {tab === "sim" && <Simular cfg={{ ...cfg, desdeMes: desde }} movs={movs} medios={medios} />}
-      {tab === "rep" && <Reparto filas={filas} />}
+      {tab === "rep" && <Personas filas={filas} />}
 
       <button
         onClick={() => setEditando({})}
@@ -1018,7 +1285,8 @@ export default function App() {
       {verAjustes && (
         <Ajustes
           cfg={cfg} setCfg={setCfg} medios={medios} movs={movs}
-          onBorrarVarios={borrarVarios} onReiniciar={reiniciar} onCerrar={() => setVerAjustes(false)}
+          onBorrarVarios={borrarVarios} onReiniciar={reiniciar} onImportar={importar}
+          onCerrar={() => setVerAjustes(false)}
         />
       )}
     </div>
