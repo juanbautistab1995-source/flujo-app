@@ -498,9 +498,11 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
 /* ===================== PANTALLA: HOY ===================== */
 const HORIZONTES = [1, 2, 3, 6, 12, 18, 24];
 
-function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onTogglePagado }) {
+function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [valor, setValor] = useState("");
   const fin = filas[filas.length - 1];
   const mesAct = mesDeHoy();
   const pendiente = filas[0] && filas[0].mk === mesAct ? filas[0].egresos - filas[0].ingresos : 0;
