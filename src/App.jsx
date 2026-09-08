@@ -876,6 +876,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                   <span className="num" style={{ color: c }}>{plata(v)}</span>
                 </div>
               ))}
+            {cfg.saldoHoy - pendiente < 0 && (
+              <div style={{ marginTop: 11, padding: "10px 12px", background: T.rojoBg,
+                            borderRadius: 10, fontSize: 12.5, color: T.rojo, lineHeight: 1.55 }}>
+                Lo que tenés pendiente supera lo que hay en la cuenta. Te faltan{" "}
+                <b className="num">{plata(pendiente - cfg.saldoHoy)}</b>.
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
@@ -1093,7 +1100,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                   <button className="chip sm"
                                     onClick={() => {
                                       if (it.ahorro) {
-                                        onAjustar(f.mk, mv.id, 0, it.usd || 0, -(monto || 0));
+                                        onAjustar(f.mk, mv.id, 0, { usd: it.usd || 0, pesos: monto || 0 });
                                       } else {
                                         onAjustar(f.mk, mv.id, 0);
                                       }
@@ -1112,12 +1119,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                 {ajustado && (
                                   <button className="chip sm"
                                     onClick={() => {
-                                      if (mv.tipo === "ahorro") {
-                                        const usd = mv.montoUsd || 0;
-                                        onAjustar(f.mk, mv.id, null, -usd, usd * (mv.tcCompra || cfg.tc));
-                                      } else {
-                                        onAjustar(f.mk, mv.id, null);
-                                      }
+                                      onAjustar(f.mk, mv.id, null);
                                       setEditItem(null);
                                     }}>
                                     Volver al estimado
@@ -1738,7 +1740,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 5;
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {}, aplicados: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -1787,7 +1789,8 @@ export default function App() {
       if (!movsN) movsN = [];
 
       const mk = mesDeHoy();
-      const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null, ajustes: (cfgN && cfgN.ajustes) || {} };
+      const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
+                  ajustes: (cfgN && cfgN.ajustes) || {}, aplicados: (cfgN && cfgN.aplicados) || {} };
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
@@ -1868,16 +1871,34 @@ export default function App() {
   };
   // monto = null borra el ajuste y vuelve al estimado
   // monto = null borra el ajuste.
-  // Al dar por hecha una compra de dolares movemos las dos puntas: sale de la caja, entra a reservas.
-  const ajustar = (mk, id, monto, deltaUsd, deltaPesos) => {
+  // Para compras de dolares ya hechas guardamos EXACTAMENTE lo que movimos, asi deshacer es exacto
+  // y nunca se aplica dos veces.
+  const ajustar = (mk, id, monto, mover) => {
     const a = { ...(cfg.ajustes || {}) };
     const delMes = { ...(a[mk] || {}) };
     if (monto === null) delete delMes[id];
     else delMes[id] = monto;
     a[mk] = delMes;
-    const res = Math.max(0, Math.round(((cfg.reservasUsd || 0) + (deltaUsd || 0)) * 100) / 100);
-    const caja = Math.round((cfg.saldoHoy || 0) + (deltaPesos || 0));
-    setCfg({ ...cfg, ajustes: a, reservasUsd: res, saldoHoy: caja });
+
+    const ap = { ...(cfg.aplicados || {}) };
+    const apMes = { ...(ap[mk] || {}) };
+    let caja = cfg.saldoHoy || 0;
+    let res = cfg.reservasUsd || 0;
+
+    if (mover && !apMes[id]) {
+      // Aplicar: sale de la caja, entra a reservas
+      caja -= mover.pesos; res += mover.usd;
+      apMes[id] = { usd: mover.usd, pesos: mover.pesos };
+    } else if (!mover && apMes[id]) {
+      // Deshacer: revertimos exactamente lo mismo que aplicamos
+      caja += apMes[id].pesos; res -= apMes[id].usd;
+      delete apMes[id];
+    }
+    ap[mk] = apMes;
+
+    setCfg({ ...cfg, ajustes: a, aplicados: ap,
+             saldoHoy: Math.round(caja),
+             reservasUsd: Math.max(0, Math.round(res * 100) / 100) });
   };
 
   const { coti, estado: estadoCoti, refrescar } = useCotizacion(cfg.tcFuente || "blue", !!cfg.tcAuto);
