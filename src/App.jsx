@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 /* ===================== TOKENS ===================== */
 const T = {
@@ -249,6 +250,185 @@ function proyectar(cfg, movs, medios, meses, extra) {
   let s = cfg.saldoHoy;
   filas.forEach((f) => { s += f.resultado; f.saldo = s; });
   return filas;
+}
+
+/* ===================== SUPABASE ===================== */
+const SUPABASE_URL = "https://xlgiwplfirizzmjgayzh.supabase.co";
+const SUPABASE_KEY = "sb_publishable_0EJv3nmLutzCuosws_husg_lVLyBnVX";
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const limpiarUsuario = (s) =>
+  (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9_.]/g, "").slice(0, 20);
+
+/* ===================== ACCESO ===================== */
+function Acceso() {
+  const [modo, setModo] = useState("entrar");
+  const [mail, setMail] = useState("");
+  const [pass, setPass] = useState("");
+  const [usuario, setUsuario] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+
+  const valido =
+    modo === "entrar"
+      ? mail.includes("@") && pass.length >= 6
+      : mail.includes("@") && pass.length >= 6 && usuario.length >= 3 && nombre.trim();
+
+  const entrar = async () => {
+    setCargando(true); setError(""); setAviso("");
+    try {
+      if (modo === "entrar") {
+        const { error } = await sb.auth.signInWithPassword({ email: mail.trim(), password: pass });
+        if (error) throw error;
+      } else if (modo === "crear") {
+        const { data: existe } = await sb.from("perfiles").select("usuario").eq("usuario", usuario).maybeSingle();
+        if (existe) throw new Error("Ese usuario ya está tomado. Probá otro.");
+        const { data, error } = await sb.auth.signUp({ email: mail.trim(), password: pass });
+        if (error) throw error;
+        const uid = data.user && data.user.id;
+        if (uid) {
+          await sb.from("perfiles").insert({ id: uid, usuario, nombre: nombre.trim() });
+          await sb.from("datos").insert({ id: uid, cfg: {}, movs: [] });
+        }
+        if (!data.session) setAviso("Te mandamos un mail para confirmar la cuenta.");
+      } else {
+        const { error } = await sb.auth.resetPasswordForEmail(mail.trim(), { redirectTo: window.location.origin });
+        if (error) throw error;
+        setAviso("Si ese mail está registrado, te va a llegar un link para cambiar la contraseña.");
+      }
+    } catch (e) {
+      const m = String(e.message || e);
+      setError(
+        m.includes("Invalid login") ? "Mail o contraseña incorrectos."
+        : m.includes("already registered") ? "Ese mail ya tiene cuenta. Probá entrar."
+        : m.includes("at least 6") ? "La contraseña necesita 6 caracteres como mínimo."
+        : m
+      );
+    }
+    setCargando(false);
+  };
+
+  return (
+    <div className="bz" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 22 }}>
+      <style>{CSS}</style>
+      <div style={{ width: "100%", maxWidth: 380 }}>
+        <div style={{ textAlign: "center", marginBottom: 30 }}>
+          <div style={{ fontSize: 30, fontWeight: 680, letterSpacing: "-0.02em" }}>Bancame</div>
+          <div style={{ fontSize: 13.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+            Tus gastos, tus cuotas y lo que te deben, en un solo lugar.
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ display: "flex", gap: 7, marginBottom: 18 }}>
+            {[["entrar", "Entrar"], ["crear", "Crear cuenta"]].map(([v, n]) => (
+              <button key={v} className={"chip" + (modo === v ? " on" : "")}
+                onClick={() => { setModo(v); setError(""); setAviso(""); }}>{n}</button>
+            ))}
+          </div>
+
+          {modo === "crear" && (
+            <>
+              <label className="lbl">Cómo te llamás</label>
+              <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Tu nombre" />
+
+              <label className="lbl" style={{ marginTop: 14 }}>Tu usuario</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 19, color: T.tenue }}>@</span>
+                <input value={usuario} onChange={(e) => setUsuario(limpiarUsuario(e.target.value))} placeholder="jbblanco" />
+              </div>
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+                Es tu nombre público. Con esto te van a encontrar para compartir gastos. Tu mail no lo ve nadie.
+              </div>
+            </>
+          )}
+
+          <label className="lbl" style={{ marginTop: modo === "crear" ? 14 : 0 }}>Mail</label>
+          <input type="email" inputMode="email" autoCapitalize="none" value={mail}
+            onChange={(e) => setMail(e.target.value)} placeholder="vos@mail.com" />
+
+          {modo !== "olvide" && (
+            <>
+              <label className="lbl" style={{ marginTop: 14 }}>Contraseña</label>
+              <input type="password" value={pass} onChange={(e) => setPass(e.target.value)}
+                placeholder={modo === "crear" ? "Mínimo 6 caracteres" : ""} />
+            </>
+          )}
+
+          {error && (
+            <div style={{ marginTop: 14, padding: "10px 12px", background: T.rojoBg, borderRadius: 10,
+                          fontSize: 13, color: T.rojo, lineHeight: 1.5 }}>{error}</div>
+          )}
+          {aviso && (
+            <div style={{ marginTop: 14, padding: "10px 12px", background: T.ambarBg, borderRadius: 10,
+                          fontSize: 13, lineHeight: 1.5 }}>{aviso}</div>
+          )}
+
+          <button
+            className="btn"
+            onClick={entrar}
+            disabled={cargando || (modo !== "olvide" && !valido)}
+            style={{ marginTop: 18, opacity: cargando || (modo !== "olvide" && !valido) ? 0.45 : 1 }}
+          >
+            {cargando ? "Un segundo…" : modo === "entrar" ? "Entrar" : modo === "crear" ? "Crear mi cuenta" : "Mandarme el link"}
+          </button>
+
+          {modo === "entrar" && (
+            <button onClick={() => { setModo("olvide"); setError(""); }}
+              style={{ marginTop: 14, width: "100%", fontSize: 13, color: T.suave }}>
+              Me olvidé la contraseña
+            </button>
+          )}
+          {modo === "olvide" && (
+            <button onClick={() => { setModo("entrar"); setError(""); setAviso(""); }}
+              style={{ marginTop: 14, width: "100%", fontSize: 13, color: T.suave }}>
+              Volver
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== CUENTA ===================== */
+function Cuenta({ perfil, onCerrar, onSalir, estado }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 60, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 15.5, fontWeight: 620 }}>Mi cuenta</span>
+        <button onClick={onCerrar} style={{ fontSize: 15, fontWeight: 620 }}>Listo</button>
+      </div>
+      <div style={{ padding: 16 }}>
+        <div className="card" style={{ padding: 17 }}>
+          <div style={{ fontSize: 22, fontWeight: 640 }}>{perfil ? perfil.nombre : "—"}</div>
+          <div style={{ fontSize: 15, color: T.ambar, marginTop: 3, fontWeight: 600 }}>
+            @{perfil ? perfil.usuario : "…"}
+          </div>
+          <div style={{ fontSize: 12.5, color: T.suave, marginTop: 12, lineHeight: 1.5 }}>
+            Compartí tu usuario con quien quieras dividir gastos. Tu mail no lo ve nadie.
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 15, marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+            <span style={{ color: T.suave }}>Tus datos</span>
+            <span style={{ color: estado === "guardado" ? T.verde : estado === "error" ? T.rojo : T.suave }}>
+              {estado === "guardando" ? "Guardando…" : estado === "error" ? "Sin conexión" : "Guardados en la nube"}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+            Se sincronizan solos. Podés entrar desde cualquier teléfono con tu mail y contraseña.
+          </div>
+        </div>
+
+        <button className="btn ghost" style={{ marginTop: 20 }} onClick={onSalir}>Cerrar sesión</button>
+      </div>
+    </div>
+  );
 }
 
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
@@ -1285,10 +1465,14 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
-const SEED_VERSION = 4;
+const SEED_VERSION = 5;
 const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {} };
 
 export default function App() {
+  const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
+  const [perfil, setPerfil] = useState(null);
+  const [estado, setEstado] = useState("");
+  const [verCuenta, setVerCuenta] = useState(false);
   const [tab, setTab] = useState("hoy");
   const [cfg, setCfgRaw] = useState(CFG_INI);
   const [movs, setMovs] = useState(SEED);
@@ -1297,34 +1481,76 @@ export default function App() {
   const [verAjustes, setVerAjustes] = useState(false);
   const medios = MEDIOS_INI;
 
+  // Sesion
+  useEffect(() => {
+    let vivo = true;
+    sb.auth.getSession().then(({ data }) => { if (vivo) setSesion(data.session || null); })
+      .catch(() => { if (vivo) setSesion(null); });
+    const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSesion(s || null));
+    return () => { vivo = false; if (sub && sub.subscription) sub.subscription.unsubscribe(); };
+  }, []);
+
   const [hayUpdate, setHayUpdate] = useState(false);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("flujo:v2");
-      if (raw) {
-        const d = JSON.parse(raw);
-        const movsG = Array.isArray(d.movs) ? d.movs : SEED;
-        const mk = mesDeHoy();
-        const c = { ...CFG_INI, ...d.cfg, desdeMes: null, ajustes: (d.cfg && d.cfg.ajustes) || {} };
-        // El mes en curso arranca dado por saldado; despues corregis lo que falte.
-        if (!c.ajustesInit) {
-          c.ajustes = { ...c.ajustes,
-            [mk]: { ...ajustesEnCero(movsG.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
-                    ...(c.ajustes[mk] || {}) } };
-          c.ajustesInit = true;
-        }
-        setCfgRaw(c);
-        setMovs(movsG);
-        if ((d.seedVersion || 0) < SEED_VERSION) setHayUpdate(true);
-      } else {
-        // Primera vez: el mes en curso ya lo pagaste, asi que lo marco entero.
-        const mk = mesDeHoy();
-        setCfgRaw({ ...CFG_INI, ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, CFG_INI.tc) } });
+    if (sesion === undefined) return;
+    if (sesion === null) { setCargando(false); return; }
+    let vivo = true;
+    (async () => {
+      const uid = sesion.user.id;
+      let cfgN = null, movsN = null;
+      try {
+        const { data } = await sb.from("datos").select("cfg, movs").eq("id", uid).maybeSingle();
+        if (data && data.movs && data.movs.length) { cfgN = data.cfg; movsN = data.movs; }
+      } catch (e) { /* sin conexion: caemos al respaldo local */ }
+
+      if (!movsN) {
+        // Cuenta nueva: si habia datos en este navegador, se los llevamos a la nube.
+        try {
+          const raw = localStorage.getItem("flujo:v2");
+          if (raw) { const d = JSON.parse(raw); if (d.movs && d.movs.length) { cfgN = d.cfg; movsN = d.movs; } }
+        } catch (e) { /* nada guardado */ }
       }
-    } catch (e) { /* primera vez */ }
-    setCargando(false);
+      if (!movsN) movsN = SEED;
+
+      const mk = mesDeHoy();
+      const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null, ajustes: (cfgN && cfgN.ajustes) || {} };
+      if (!c.ajustesInit) {
+        c.ajustes = { ...c.ajustes,
+          [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
+                  ...(c.ajustes[mk] || {}) } };
+        c.ajustesInit = true;
+      }
+      if (!vivo) return;
+      setCfgRaw(c); setMovs(movsN);
+      if ((cfgN && cfgN.seedVersion ? cfgN.seedVersion : 0) < SEED_VERSION) setHayUpdate(true);
+      setCargando(false);
+      guardarNube(uid, c, movsN);
+    })();
+    return () => { vivo = false; };
+  }, [sesion]);
+
+  // Guardado en la nube, sin atropellarse
+  const timer = React.useRef(null);
+  const guardarNube = useCallback((uid, c, m) => {
+    if (!uid) return;
+    setEstado("guardando");
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      try {
+        const { error } = await sb.from("datos")
+          .upsert({ id: uid, cfg: { ...c, seedVersion: SEED_VERSION }, movs: m, actualizado: new Date().toISOString() });
+        setEstado(error ? "error" : "guardado");
+      } catch (e) { setEstado("error"); }
+    }, 700);
   }, []);
+
+  // Perfil
+  useEffect(() => {
+    if (!sesion) { setPerfil(null); return; }
+    sb.from("perfiles").select("usuario, nombre").eq("id", sesion.user.id).maybeSingle()
+      .then(({ data }) => setPerfil(data || null)).catch(() => {});
+  }, [sesion]);
 
   // Reemplaza solo los movimientos base (id "s...") y conserva los que cargaste vos ("m...").
   const actualizarBase = () => {
@@ -1342,7 +1568,8 @@ export default function App() {
     try {
       localStorage.setItem("flujo:v2", JSON.stringify({ cfg: c, movs: m, seedVersion: SEED_VERSION }));
     } catch (e) { /* lleno */ }
-  }, []);
+    if (sesion) guardarNube(sesion.user.id, c, m);
+  }, [sesion, guardarNube]);
   const setCfg = (c) => {
     const limpio = { ...c, desdeMes: null };  // se recalcula siempre desde el mes actual
     setCfgRaw(limpio); persistir(limpio, movs);
@@ -1382,8 +1609,9 @@ export default function App() {
   );
   const personas = useMemo(() => [...new Set(movs.filter((m) => m.persona).map((m) => m.persona))], [movs]);
 
-  if (cargando)
+  if (sesion === undefined || (sesion && cargando))
     return <div className="bz" style={{ padding: 40, textAlign: "center", color: T.suave }}><style>{CSS}</style>Cargando…</div>;
+  if (sesion === null) return <Acceso />;
 
   return (
     <div className="bz" style={{ maxWidth: 470, margin: "0 auto", paddingBottom: 96 }}>
@@ -1412,6 +1640,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "12px 16px 0" }}>
+        <span style={{ fontSize: 15, fontWeight: 680, letterSpacing: "-0.01em" }}>Bancame</span>
+        <button onClick={() => setVerCuenta(true)}
+          style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+          @{perfil ? perfil.usuario : "…"}
+        </button>
+      </div>
 
       {tab === "hoy" && (
         <Hoy
@@ -1455,6 +1692,12 @@ export default function App() {
         <FormMov
           inicial={editando} medios={medios} personas={personas}
           onGuardar={guardarMov} onBorrar={(id) => borrarVarios([id])} onCerrar={() => setEditando(null)}
+        />
+      )}
+      {verCuenta && (
+        <Cuenta
+          perfil={perfil} estado={estado} onCerrar={() => setVerCuenta(false)}
+          onSalir={async () => { await sb.auth.signOut(); setVerCuenta(false); }}
         />
       )}
       {verAjustes && (
