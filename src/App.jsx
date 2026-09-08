@@ -729,6 +729,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
         )}
       </div>
 
+      {!movs.length && (
+        <div className="card" style={{ padding: 18, marginTop: 16, background: T.ambarBg, borderColor: "transparent" }}>
+          <div style={{ fontSize: 15, fontWeight: 620, marginBottom: 6 }}>Empecemos</div>
+          <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6 }}>
+            Todavía no cargaste nada. Tocá el <b>+</b> de abajo a la derecha y cargá primero tu sueldo,
+            marcándolo como ingreso que se repite todos los meses. Después sumá tus gastos fijos y
+            lo que tengas en cuotas.
+          </div>
+        </div>
+      )}
+
       <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
         <button onClick={onAbrirAjustes} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>Ajustes</button>
@@ -1077,8 +1088,9 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
           );
         })}
         {!lista.length && (
-          <div style={{ textAlign: "center", color: T.tenue, fontSize: 14, padding: 30 }}>
-            No hay movimientos con ese filtro.
+          <div style={{ textAlign: "center", color: T.tenue, fontSize: 14, padding: 30, lineHeight: 1.6 }}>
+            {movs.length ? "No hay movimientos con ese filtro."
+                         : "Todavía no cargaste ningún movimiento. Tocá el + para empezar."}
           </div>
         )}
       </div>
@@ -1466,7 +1478,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 5;
-const CFG_INI = { saldoHoy: 775000, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {} };
+const CFG_INI = { saldoHoy: 0, tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -1511,7 +1523,8 @@ export default function App() {
           if (raw) { const d = JSON.parse(raw); if (d.movs && d.movs.length) { cfgN = d.cfg; movsN = d.movs; } }
         } catch (e) { /* nada guardado */ }
       }
-      if (!movsN) movsN = SEED;
+      // Cuenta nueva de verdad: arranca vacia. La semilla es solo de quien la cargo.
+      if (!movsN) movsN = [];
 
       const mk = mesDeHoy();
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null, ajustes: (cfgN && cfgN.ajustes) || {} };
@@ -1523,7 +1536,8 @@ export default function App() {
       }
       if (!vivo) return;
       setCfgRaw(c); setMovs(movsN);
-      if ((cfgN && cfgN.seedVersion ? cfgN.seedVersion : 0) < SEED_VERSION) setHayUpdate(true);
+      const tieneSemilla = movsN.some((m) => String(m.id).startsWith("s"));
+      if (tieneSemilla && (cfgN && cfgN.seedVersion ? cfgN.seedVersion : 0) < SEED_VERSION) setHayUpdate(true);
       setCargando(false);
       guardarNube(uid, c, movsN);
     })();
