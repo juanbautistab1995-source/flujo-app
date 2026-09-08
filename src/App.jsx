@@ -493,7 +493,7 @@ function Cuenta({ perfil, onCerrar, onSalir, estado }) {
 }
 
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
-function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
+function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null }) {
   const esNuevo = !inicial?.id;
   const [f, setF] = useState(() => ({
     tipo: "gasto",
@@ -504,6 +504,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
     medio: "icbc",
     fecha: hoyISO(),
     tcCompra: "",
+    montoArs: "",
+    ladoAhorro: "usd",
     cuotas: 1,
     recurrente: false,
     meses: [],
@@ -518,8 +520,28 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
   }));
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
-  const valorOk = f.moneda === "USD" ? +f.montoUsd > 0 : +f.monto > 0;
+  const tcUsar = +f.tcCompra || tcRef;
+  const usdFinal = f.tipo === "ahorro"
+    ? ((f.ladoAhorro || "usd") === "usd" ? +f.montoUsd || 0 : (+f.montoArs || 0) / (tcUsar || 1))
+    : 0;
+  const pesosFinal = usdFinal * tcUsar;
+
+  const valorOk = f.tipo === "ahorro" ? usdFinal > 0
+                : f.moneda === "USD" ? +f.montoUsd > 0 : +f.monto > 0;
   const valido = valorOk && f.detalle.trim();
+
+  // Cuanto sale de la caja en la PRIMERA cuota, para avisar si no alcanza
+  const saleAhora = (() => {
+    if (f.recurrente) return 0;
+    const n = Math.max(1, +f.cuotas || 1);
+    if (f.tipo === "ahorro") return pesosFinal / n;
+    if (f.tipo === "ingreso") return 0;
+    const base = f.moneda === "USD" ? (+f.montoUsd || 0) * tcRef : +f.monto || 0;
+    const mio = f.pagadoPor === "otro" ? base * ((+f.pct || 0) / 100) : base;
+    return mio / n;
+  })();
+  const cae = f.recurrente ? null : mesDePago(f.fecha || hoyISO(), f.medio, medios);
+  const noAlcanza = disponible != null && cae === mesDeHoy() && saleAhora > disponible;
 
   const mesPago = useMemo(() => {
     if (f.recurrente) return null;
@@ -530,6 +552,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
 
   const guardar = () => {
     if (!valido) return;
+    if (noAlcanza && !confirm(
+      `Esto son ${plata(saleAhora)} y hoy te quedan libres ${plata(disponible)}. ` +
+      `Vas a quedar en ${plata(disponible - saleAhora)}. ¿Lo cargo igual?`)) return;
     const mv = {
       id: f.id || "m" + Date.now(),
       tipo: f.tipo,
@@ -550,7 +575,12 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
     }
     if (f.persona) { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
-    if (f.tipo === "ahorro") { mv.montoUsd = +f.montoUsd; mv.tcCompra = +f.tcCompra || 0; delete mv.monto; }
+    if (f.tipo === "ahorro") {
+      mv.montoUsd = Math.round(usdFinal * 100) / 100;
+      mv.tcCompra = tcUsar;
+      mv.moneda = "USD";
+      delete mv.monto;
+    }
     onGuardar(mv);
   };
 
@@ -565,6 +595,14 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
         </button>
       </div>
 
+      {noAlcanza && (
+        <div style={{ padding: "12px 16px", background: T.rojoBg, borderBottom: `1px solid ${T.linea}` }}>
+          <div style={{ fontSize: 13, color: T.rojo, lineHeight: 1.55 }}>
+            <b>Ojo:</b> esto son {plata(saleAhora)} y hoy te quedan libres {plata(disponible)}.
+            Te faltarían {plata(saleAhora - disponible)}.
+          </div>
+        </div>
+      )}
       <div style={{ padding: 16, paddingBottom: 40 }}>
         <div style={{ display: "flex", gap: 7, marginBottom: 16, flexWrap: "wrap" }}>
           {[["gasto", "Gasto"], ["ingreso", "Ingreso"], ["ahorro", "Compra de dólares"]].map(([v, n]) => (
@@ -582,39 +620,64 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar }) {
           </div>
         )}
 
-        <label className="lbl">
-          {!f.recurrente && +f.cuotas > 1 ? "Monto total de la compra" : "Monto"}
-        </label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            className="num" inputMode="decimal"
-            value={f.moneda === "USD" ? f.montoUsd : f.monto}
-            onChange={(e) => set(f.moneda === "USD" ? "montoUsd" : "monto", e.target.value.replace(/[^\d.]/g, ""))}
-            style={{ fontSize: 26, fontWeight: 600, textAlign: "right" }}
-          />
-          <button
-            className={"chip" + (f.moneda === "USD" ? " on" : "")}
-            onClick={() => set("moneda", f.moneda === "USD" ? "ARS" : "USD")}
-            style={{ minWidth: 62 }}
-          >
-            {f.moneda === "USD" ? "U$S" : "$"}
-          </button>
-        </div>
-
-        {f.tipo === "ahorro" && (
+        {f.tipo === "ahorro" ? (
           <>
-            <label className="lbl" style={{ marginTop: 14 }}>A qué precio comprás el dólar</label>
+            <label className="lbl">A qué precio comprás el dólar</label>
             <input className="num" inputMode="decimal" value={f.tcCompra || ""}
               onChange={(e) => set("tcCompra", e.target.value.replace(/[^\d]/g, ""))}
-              placeholder="1550" style={{ textAlign: "right" }} />
-            {+f.montoUsd > 0 && +f.tcCompra > 0 && (
-              <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-                Salen <b className="num">{plata(+f.montoUsd * +f.tcCompra)}</b> de tu caja
-                y entran <b className="num">U$S {f.montoUsd}</b> a tus reservas.
+              placeholder={String(Math.round(tcRef))} style={{ textAlign: "right" }} />
+
+            <label className="lbl" style={{ marginTop: 15 }}>¿Cómo lo querés poner?</label>
+            <div style={{ display: "flex", gap: 7, marginBottom: 10 }}>
+              {[["usd", "Cuántos dólares"], ["ars", "Cuántos pesos"]].map(([v, n]) => (
+                <button key={v} className={"chip" + ((f.ladoAhorro || "usd") === v ? " on" : "")}
+                  onClick={() => set("ladoAhorro", v)}>{n}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                className="num" inputMode="decimal"
+                value={(f.ladoAhorro || "usd") === "usd" ? f.montoUsd : f.montoArs}
+                onChange={(e) => set((f.ladoAhorro || "usd") === "usd" ? "montoUsd" : "montoArs",
+                                     e.target.value.replace(/[^\d.]/g, ""))}
+                style={{ fontSize: 26, fontWeight: 600, textAlign: "right" }}
+              />
+              <div className="chip on" style={{ minWidth: 62, display: "flex", alignItems: "center",
+                                                justifyContent: "center" }}>
+                {(f.ladoAhorro || "usd") === "usd" ? "U$S" : "$"}
+              </div>
+            </div>
+            {usdFinal > 0 && tcUsar > 0 && (
+              <div style={{ marginTop: 11, padding: "11px 13px", background: T.papel, borderRadius: 11,
+                            fontSize: 13, lineHeight: 1.6 }}>
+                Salen <b className="num">{plata(pesosFinal)}</b> de tu caja y entran{" "}
+                <b className="num">U$S {usdFinal.toFixed(2).replace(/\.00$/, "")}</b> a tus reservas.
               </div>
             )}
           </>
+        ) : (
+          <>
+            <label className="lbl">
+              {!f.recurrente && +f.cuotas > 1 ? "Monto total de la compra" : "Monto"}
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                className="num" inputMode="decimal"
+                value={f.moneda === "USD" ? f.montoUsd : f.monto}
+                onChange={(e) => set(f.moneda === "USD" ? "montoUsd" : "monto", e.target.value.replace(/[^\d.]/g, ""))}
+                style={{ fontSize: 26, fontWeight: 600, textAlign: "right" }}
+              />
+              <button
+                className={"chip" + (f.moneda === "USD" ? " on" : "")}
+                onClick={() => set("moneda", f.moneda === "USD" ? "ARS" : "USD")}
+                style={{ minWidth: 62 }}
+              >
+                {f.moneda === "USD" ? "U$S" : "$"}
+              </button>
+            </div>
+          </>
         )}
+
 
         <label className="lbl" style={{ marginTop: 16 }}>Detalle</label>
         <input value={f.detalle} onChange={(e) => set("detalle", e.target.value)} placeholder="Comercio o concepto" />
@@ -774,7 +837,10 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
   const [verSaldados, setVerSaldados] = useState(null);
   const fin = filas[filas.length - 1];
   const mesAct = mesDeHoy();
-  const pendiente = filas[0] && filas[0].mk === mesAct ? filas[0].egresos - filas[0].ingresos : 0;
+  const mesEnCurso = filas[0] && filas[0].mk === mesAct ? filas[0] : null;
+  const ahorroMes = mesEnCurso ? mesEnCurso.ahorro : 0;
+  const pendiente = mesEnCurso ? mesEnCurso.egresos - mesEnCurso.ingresos : 0;
+  const gastoPend = pendiente - ahorroMes;
 
   return (
     <div style={{ padding: 16, paddingBottom: 30 }}>
@@ -801,14 +867,15 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         )}
         {pendiente > 0 ? (
           <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.linea}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span style={{ color: T.suave }}>En la cuenta</span>
-              <span className="num" style={{ color: T.suave }}>{plata(cfg.saldoHoy)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 5 }}>
-              <span style={{ color: T.suave }}>Te falta pagar este mes</span>
-              <span className="num" style={{ color: T.rojo }}>{plata(-pendiente)}</span>
-            </div>
+            {[["En la cuenta", cfg.saldoHoy, T.suave],
+              ...(gastoPend > 0 ? [["Te falta pagar este mes", -gastoPend, T.rojo]] : []),
+              ...(ahorroMes > 0 ? [["Vas a pasar a dólares", -ahorroMes, T.ambar]] : [])]
+              .map(([n, v, c]) => (
+                <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: T.suave }}>{n}</span>
+                  <span className="num" style={{ color: c }}>{plata(v)}</span>
+                </div>
+              ))}
           </div>
         ) : (
           <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
@@ -884,6 +951,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         ))}
       </div>
 
+      {(cfg.horizonte > 1 || Math.round(fin.saldo) !== Math.round(cfg.saldoHoy - pendiente)) && (
       <div className="card" style={{ padding: 15, marginTop: 13,
                                      background: fin.saldo < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
         <div style={{ fontSize: 13, color: T.suave }}>
@@ -902,6 +970,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           ) : null;
         })()}
       </div>
+      )}
 
       <div style={{ marginTop: 16 }}>
         {filas.map((f) => {
@@ -1875,6 +1944,9 @@ export default function App() {
       {editando && (
         <FormMov
           inicial={editando} medios={medios} personas={personas}
+          tcRef={cfgTC.tc}
+          disponible={filas[0] && filas[0].mk === mesDeHoy()
+            ? cfg.saldoHoy - (filas[0].egresos - filas[0].ingresos) : cfg.saldoHoy}
           onGuardar={guardarMov} onBorrar={(id) => borrarVarios([id])} onCerrar={() => setEditando(null)}
         />
       )}
