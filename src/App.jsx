@@ -1209,6 +1209,7 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
     else if (filtro === "recurrentes") l = l.filter((m) => m.recurrente);
     else if (filtro === "cuotas") l = l.filter((m) => !m.recurrente && (m.cuotas || 1) > 1);
     else if (filtro === "compartidos") l = l.filter((m) => m.persona);
+    else if (filtro === "dolares") l = l.filter((m) => m.tipo === "ahorro");
     else if (filtro !== "todos") l = l.filter((m) => m.medio === filtro);
     if (busca.trim()) {
       const q = busca.toLowerCase();
@@ -1234,7 +1235,8 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
 
       <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 11, paddingBottom: 3 }}>
         {[["todos", "Todos"], ["ingresos", "Ingresos"], ["recurrentes", "Fijos"], ["cuotas", "En cuotas"],
-          ["compartidos", "Compartidos"], ...medios.map((m) => [m.id, m.corto])].map(([v, n]) => (
+          ["compartidos", "Compartidos"], ["dolares", "Dólares"],
+          ...medios.map((m) => [m.id, m.corto])].map(([v, n]) => (
           <button key={v} className={"chip sm" + (filtro === v ? " on" : "")} onClick={() => setFiltro(v)}>{n}</button>
         ))}
       </div>
@@ -1858,7 +1860,31 @@ export default function App() {
     setM(existe ? movs.map((x) => (x.id === mv.id ? mv : x)) : [mv, ...movs]);
     setEditando(null);
   };
-  const borrarVarios = (ids) => { setM(movs.filter((x) => !ids.includes(x.id))); setEditando(null); };
+  const borrarVarios = (ids) => {
+    // Al borrar hay que revertir lo que ese movimiento ya habia movido y limpiar sus ajustes,
+    // si no quedan reservas o saldo fantasma.
+    const a = { ...(cfg.ajustes || {}) };
+    const ap = { ...(cfg.aplicados || {}) };
+    let caja = cfg.saldoHoy || 0;
+    let res = cfg.reservasUsd || 0;
+    Object.keys(ap).forEach((mk) => {
+      const mes = { ...ap[mk] };
+      ids.forEach((id) => {
+        if (mes[id]) { caja += mes[id].pesos; res -= mes[id].usd; delete mes[id]; }
+      });
+      ap[mk] = mes;
+    });
+    Object.keys(a).forEach((mk) => {
+      const mes = { ...a[mk] };
+      ids.forEach((id) => { delete mes[id]; });
+      a[mk] = mes;
+    });
+    const c = { ...cfg, ajustes: a, aplicados: ap,
+                saldoHoy: Math.round(caja), reservasUsd: Math.max(0, Math.round(res * 100) / 100) };
+    const n = movs.filter((x) => !ids.includes(x.id));
+    setCfgRaw(c); setMovs(n); persistir(c, n);
+    setEditando(null);
+  };
   const reiniciar = () => {
     const mk = mesDeHoy();
     const c = { ...CFG_INI, saldoHoy: cfg.saldoHoy, tc: cfg.tc, horizonte: cfg.horizonte,
