@@ -503,6 +503,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [valor, setValor] = useState("");
+  const [verSaldados, setVerSaldados] = useState(null);
   const fin = filas[filas.length - 1];
   const mesAct = mesDeHoy();
   const pendiente = filas[0] && filas[0].mk === mesAct ? filas[0].egresos - filas[0].ingresos : 0;
@@ -613,74 +614,73 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
                     </div>
                   </div>
                 </div>
-                <div style={{ display: "grid", gap: 4, marginTop: 9 }}>
-                  {[[f.ingresos, T.verde], [f.egresos, T.rojo]].map(([v, c], i) => (
-                    <div key={i} style={{ height: 6, background: T.papel, borderRadius: 3, overflow: "hidden" }}>
-                      <div className="grow" style={{ width: `${(v / max) * 100}%`, height: "100%", background: c }} />
-                    </div>
-                  ))}
-                </div>
-              </button>
-
-              {open && (
-                <div style={{ borderTop: `1px solid ${T.linea}`, padding: "12px 14px", fontSize: 13.5 }}>
-                  {[["Ingresos", f.ingresos - f.totalReint], ["Te reintegran", f.totalReint],
-                    ["Tarjetas", -f.tarjetas],
-                    ["Efectivo y débito", -(f.efvo - f.totalDeudas)],
-                    ["Le transferís a otros", -f.totalDeudas]]
-                    .filter(([, v]) => v)
-                    .map(([n, v]) => (
-                      <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
-                        <span style={{ color: T.suave }}>{n}</span>
-                        <span className="num" style={{ color: v < 0 ? T.rojo : T.verde }}>{plata(v)}</span>
-                      </div>
-                    ))}
-                  <div style={{ borderTop: `1px solid ${T.linea}`, marginTop: 8, paddingTop: 8 }}>
-                    {medios.filter((m) => f.porMedio[m.id] && m.id !== "efectivo").map((m) => (
-                      <div key={m.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 13 }}>
-                        <span style={{ color: T.suave }}>{m.nombre} · vence el {m.vto}</span>
-                        <span className="num">{plata(f.porMedio[m.id])}</span>
+                {(f.ingresos > 0 || f.egresos > 0) && (
+                  <div style={{ display: "grid", gap: 4, marginTop: 9 }}>
+                    {[[f.ingresos, T.verde], [f.egresos, T.rojo]].map(([v, c], i) => (
+                      <div key={i} style={{ height: 6, background: T.papel, borderRadius: 3, overflow: "hidden" }}>
+                        <div className="grow" style={{ width: `${(v / max) * 100}%`, height: "100%", background: c }} />
                       </div>
                     ))}
                   </div>
-                  {f.excepcional > 0 && (
-                    <div style={{ marginTop: 10, padding: "9px 11px", background: T.ambarBg, borderRadius: 9, fontSize: 12.5 }}>
-                      Incluye <span className="num">{plata(f.excepcional)}</span> de gastos excepcionales.
-                    </div>
-                  )}
+                )}
+              </button>
 
-                  <div style={{ marginTop: 12, borderTop: `1px solid ${T.linea}`, paddingTop: 10 }}>
-                    <div style={{ fontSize: 12, color: T.suave, marginBottom: 8, lineHeight: 1.5 }}>
-                      Tocá un gasto para marcarlo como pagado o corregir cuánto vale ESTE mes.
-                      El estimado de los otros meses no se toca.
-                    </div>
-                    {f.items.slice().sort((a, b) => (b.monto - a.monto) || (a.saldado ? 1 : -1))
-                      .map(({ mv, monto, cuota, ingreso, deuda, saldado, base }) => {
+              {open && (
+                <div style={{ borderTop: `1px solid ${T.linea}` }}>
+                  <div style={{ padding: "13px 15px", fontSize: 13.5 }}>
+                    {[["Ingresos", f.ingresos],
+                      ["Tarjetas", -f.tarjetas],
+                      ["Efectivo y débito", -(f.efvo - f.totalDeudas)],
+                      ["A otras personas", -f.totalDeudas]]
+                      .filter(([, v]) => v)
+                      .map(([n, v]) => (
+                        <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
+                          <span style={{ color: T.suave }}>{n}</span>
+                          <span className="num" style={{ color: v < 0 ? T.rojo : T.verde }}>{plata(v)}</span>
+                        </div>
+                      ))}
+                    {f.excepcional > 0 && (
+                      <div style={{ marginTop: 10, padding: "9px 11px", background: T.ambarBg,
+                                    borderRadius: 9, fontSize: 12.5 }}>
+                        Incluye <span className="num">{plata(f.excepcional)}</span> de gastos excepcionales.
+                      </div>
+                    )}
+                  </div>
+
+                  {(() => {
+                    const pend = f.items.filter((i) => !i.saldado);
+                    const sald = f.items.filter((i) => i.saldado);
+                    const verS = verSaldados === f.mk;
+
+                    const fila = (it) => {
+                      const { mv, monto, cuota, ingreso, saldado, base } = it;
                       const clave = f.mk + "|" + mv.id;
                       const abierto = editItem === clave;
                       const ajustado = !!(cfg.ajustes && cfg.ajustes[f.mk] &&
                         Object.prototype.hasOwnProperty.call(cfg.ajustes[f.mk], mv.id));
                       return (
-                        <div key={mv.id}>
+                        <div key={mv.id} style={{ background: abierto ? T.papel : "transparent",
+                                                  borderRadius: abierto ? 10 : 0,
+                                                  padding: abierto ? "2px 10px 10px" : "0" }}>
                           <button
                             onClick={() => { setEditItem(abierto ? null : clave);
                                              setValor(String(Math.round(saldado ? base : monto))); }}
                             style={{ width: "100%", display: "flex", justifyContent: "space-between",
-                                     alignItems: "center", gap: 10, padding: "7px 0", textAlign: "left" }}
+                                     alignItems: "center", gap: 10, padding: "8px 0", textAlign: "left" }}
                           >
-                            <span style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap", color: saldado ? T.tenue : T.suave,
-                                  textDecoration: saldado ? "line-through" : "none" }}>
+                            <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap", color: saldado ? T.tenue : T.tinta }}>
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
-                              {deuda ? ` · a ${mv.persona}` : ""}{ajustado && !saldado ? "  ✎" : ""}
+                              {ajustado && !saldado ? "  ✎" : ""}
                             </span>
-                            <span className="num" style={{ fontSize: 12.5, flexShrink: 0,
+                            <span className="num" style={{ fontSize: 13, flexShrink: 0,
                                   color: saldado ? T.tenue : ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
-                              {saldado ? "pagado" : (ingreso ? "+" : "") + corta(monto)}
+                              {saldado ? (ingreso ? "cobrado" : "pagado")
+                                       : (ingreso ? "+" : "") + corta(monto)}
                             </span>
                           </button>
                           {abierto && (
-                            <div style={{ padding: "4px 0 12px" }}>
+                            <div>
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 <input
                                   className="num" inputMode="decimal" value={valor}
@@ -697,7 +697,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
                                 {!saldado && (
                                   <button className="chip sm"
                                     onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
-                                    Ya lo pagué
+                                    {ingreso ? "Ya lo cobré" : "Ya lo pagué"}
                                   </button>
                                 )}
                                 {ajustado && (
@@ -711,8 +711,61 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar }) {
                           )}
                         </div>
                       );
-                    })}
-                  </div>
+                    };
+
+                    const grupos = [];
+                    const meter = (titulo, sub, arr, color) => {
+                      if (arr.length) grupos.push({ titulo, sub, arr, color,
+                        total: arr.reduce((a, b) => a + b.monto, 0) });
+                    };
+                    meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
+                    medios.filter((m) => m.id !== "efectivo").forEach((m) =>
+                      meter(m.nombre, "vence el " + m.vto,
+                            pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === m.id)));
+                    meter("Efectivo y débito", "",
+                          pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === "efectivo"));
+                    [...new Set(pend.filter((i) => i.deuda).map((i) => i.mv.persona))].forEach((per) =>
+                      meter("Le transferís a " + per, "", pend.filter((i) => i.deuda && i.mv.persona === per)));
+
+                    return (
+                      <>
+                        {grupos.map((g) => (
+                          <div key={g.titulo} style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between",
+                                          alignItems: "baseline", marginBottom: 4 }}>
+                              <span style={{ fontSize: 11.5, letterSpacing: ".03em", color: T.tenue,
+                                             textTransform: "uppercase" }}>
+                                {g.titulo}{g.sub ? " · " + g.sub : ""}
+                              </span>
+                              <span className="num" style={{ fontSize: 13, fontWeight: 620,
+                                    color: g.color || T.tinta }}>{plata(g.total)}</span>
+                            </div>
+                            {g.arr.map(fila)}
+                          </div>
+                        ))}
+
+                        {sald.length > 0 && (
+                          <div style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
+                            <button
+                              onClick={() => setVerSaldados(verS ? null : f.mk)}
+                              style={{ width: "100%", display: "flex", justifyContent: "space-between",
+                                       alignItems: "center", fontSize: 12.5, color: T.suave, padding: "3px 0" }}
+                            >
+                              <span>Ya saldado · {sald.length} {sald.length === 1 ? "movimiento" : "movimientos"}</span>
+                              <span style={{ color: T.ambar, fontWeight: 600 }}>{verS ? "Ocultar" : "Ver"}</span>
+                            </button>
+                            {verS && <div style={{ marginTop: 6 }}>{sald.map(fila)}</div>}
+                          </div>
+                        )}
+
+                        {!pend.length && (
+                          <div style={{ padding: "0 15px 14px", fontSize: 12.5, color: T.suave, lineHeight: 1.5 }}>
+                            No queda nada por pagar ni por cobrar en este mes.
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
