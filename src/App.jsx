@@ -1010,6 +1010,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
 
               {open && (
                 <div style={{ borderTop: `1px solid ${T.linea}` }}>
+                  {(f.ingresos || f.tarjetas || f.efvo) > 0 && (
                   <div style={{ padding: "13px 15px", fontSize: 13.5 }}>
                     {[["Ingresos", f.ingresos],
                       ["Tarjetas", -f.tarjetas],
@@ -1038,6 +1039,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       </div>
                     )}
                   </div>
+                  )}
 
                   {(() => {
                     const pend = f.items.filter((i) => !i.saldado);
@@ -1090,18 +1092,32 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                 {!saldado && (
                                   <button className="chip sm"
                                     onClick={() => {
-                                      const usd = it.ahorro ? (it.usd || 0) : 0;
-                                      onAjustar(f.mk, mv.id, 0, usd);
+                                      if (it.ahorro) {
+                                        onAjustar(f.mk, mv.id, 0, it.usd || 0, -(monto || 0));
+                                      } else {
+                                        onAjustar(f.mk, mv.id, 0);
+                                      }
                                       setEditItem(null);
                                     }}>
                                     {it.ahorro ? "Ya la hice" : ingreso ? "Ya lo cobré" : "Ya lo pagué"}
                                   </button>
                                 )}
+                                {it.ahorro && !saldado && (
+                                  <div style={{ width: "100%", fontSize: 12, color: T.suave,
+                                                marginTop: 6, lineHeight: 1.5 }}>
+                                    Al marcarla, descuento {plata(monto)} de tu caja y sumo
+                                    U$S {Math.round(it.usd)} a tus reservas.
+                                  </div>
+                                )}
                                 {ajustado && (
                                   <button className="chip sm"
                                     onClick={() => {
-                                      const usd = it.ahorro || (mv.tipo === "ahorro") ? -(mv.montoUsd || 0) : 0;
-                                      onAjustar(f.mk, mv.id, null, usd);
+                                      if (mv.tipo === "ahorro") {
+                                        const usd = mv.montoUsd || 0;
+                                        onAjustar(f.mk, mv.id, null, -usd, usd * (mv.tcCompra || cfg.tc));
+                                      } else {
+                                        onAjustar(f.mk, mv.id, null);
+                                      }
                                       setEditItem(null);
                                     }}>
                                     Volver al estimado
@@ -1851,15 +1867,17 @@ export default function App() {
     setMovs(d.movs); setCfgRaw(c); persistir(c, d.movs); setVerAjustes(false);
   };
   // monto = null borra el ajuste y vuelve al estimado
-  // monto = null borra el ajuste. deltaUsd mueve reservas cuando la compra ya se hizo.
-  const ajustar = (mk, id, monto, deltaUsd) => {
+  // monto = null borra el ajuste.
+  // Al dar por hecha una compra de dolares movemos las dos puntas: sale de la caja, entra a reservas.
+  const ajustar = (mk, id, monto, deltaUsd, deltaPesos) => {
     const a = { ...(cfg.ajustes || {}) };
     const delMes = { ...(a[mk] || {}) };
     if (monto === null) delete delMes[id];
     else delMes[id] = monto;
     a[mk] = delMes;
     const res = Math.max(0, Math.round(((cfg.reservasUsd || 0) + (deltaUsd || 0)) * 100) / 100);
-    setCfg({ ...cfg, ajustes: a, reservasUsd: res });
+    const caja = Math.round((cfg.saldoHoy || 0) + (deltaPesos || 0));
+    setCfg({ ...cfg, ajustes: a, reservasUsd: res, saldoHoy: caja });
   };
 
   const { coti, estado: estadoCoti, refrescar } = useCotizacion(cfg.tcFuente || "blue", !!cfg.tcAuto);
