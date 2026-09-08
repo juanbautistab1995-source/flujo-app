@@ -1636,7 +1636,9 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
             num("tc", "Dólar ($ por U$S)", "Se usa para valuar tus reservas y convertir los consumos en dólares.")
           )}
         </div>
-        {num("reservasUsd", "Dólares que ya tenés guardados", "Tus reservas de hoy, antes de lo que compres en los meses que vienen.")}
+        {num("reservasUsd", "Dólares que ya tenés guardados",
+             "Tus reservas de hoy, antes de lo que compres más adelante. Si algún número quedó raro, corregilo acá.")}
+        {num("saldoHoy", "Plata en la cuenta hoy", "Lo mismo que editás desde la pantalla Hoy.")}
         <div style={{ marginBottom: 18 }}>
           <label className="lbl">Sellos e IIBB sobre tarjetas (%)</label>
           <input
@@ -1793,6 +1795,35 @@ export default function App() {
       const mk = mesDeHoy();
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
                   ajustes: (cfgN && cfgN.ajustes) || {}, aplicados: (cfgN && cfgN.aplicados) || {} };
+
+      // Limpieza: si quedo el efecto de un movimiento que ya no existe, lo revertimos.
+      // Pasa si se borro el movimiento sin deshacer primero.
+      const vivos = new Set(movsN.map((m) => m.id));
+      let cajaFix = c.saldoHoy || 0, resFix = c.reservasUsd || 0, huerfanos = 0;
+      const apLimpio = {};
+      Object.keys(c.aplicados || {}).forEach((k) => {
+        const mes = {};
+        Object.keys(c.aplicados[k] || {}).forEach((id) => {
+          if (vivos.has(id)) mes[id] = c.aplicados[k][id];
+          else {
+            cajaFix += c.aplicados[k][id].pesos;
+            resFix -= c.aplicados[k][id].usd;
+            huerfanos++;
+          }
+        });
+        apLimpio[k] = mes;
+      });
+      if (huerfanos) {
+        c.aplicados = apLimpio;
+        c.saldoHoy = Math.round(cajaFix);
+        c.reservasUsd = Math.max(0, Math.round(resFix * 100) / 100);
+      }
+      // Ajustes que apuntan a movimientos borrados: sobran
+      Object.keys(c.ajustes || {}).forEach((k) => {
+        const mes = {};
+        Object.keys(c.ajustes[k] || {}).forEach((id) => { if (vivos.has(id)) mes[id] = c.ajustes[k][id]; });
+        c.ajustes[k] = mes;
+      });
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
