@@ -1028,6 +1028,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                     borderRadius: 9, fontSize: 12.5, lineHeight: 1.5 }}>
                         De ese total, <span className="num">{plata(f.ahorro)}</span> no es gasto:
                         son <span className="num">U$S {Math.round(f.usdComprados)}</span> que sumás a tus reservas.
+                        {f.mk === mesAct && " Si ya los compraste, tocá la compra y marcá \u201cYa la hice\u201d."}
                       </div>
                     )}
                     {f.excepcional > 0 && (
@@ -1045,6 +1046,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
 
                     const fila = (it) => {
                       const { mv, monto, cuota, ingreso, saldado, base } = it;
+                      // it.ahorro / it.usd se usan mas abajo
                       const clave = f.mk + "|" + mv.id;
                       const abierto = editItem === clave;
                       const ajustado = !!(cfg.ajustes && cfg.ajustes[f.mk] &&
@@ -1087,13 +1089,21 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                               <div style={{ display: "flex", gap: 7, marginTop: 9, flexWrap: "wrap" }}>
                                 {!saldado && (
                                   <button className="chip sm"
-                                    onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
-                                    {ingreso ? "Ya lo cobré" : "Ya lo pagué"}
+                                    onClick={() => {
+                                      const usd = it.ahorro ? (it.usd || 0) : 0;
+                                      onAjustar(f.mk, mv.id, 0, usd);
+                                      setEditItem(null);
+                                    }}>
+                                    {it.ahorro ? "Ya la hice" : ingreso ? "Ya lo cobré" : "Ya lo pagué"}
                                   </button>
                                 )}
                                 {ajustado && (
                                   <button className="chip sm"
-                                    onClick={() => { onAjustar(f.mk, mv.id, null); setEditItem(null); }}>
+                                    onClick={() => {
+                                      const usd = it.ahorro || (mv.tipo === "ahorro") ? -(mv.montoUsd || 0) : 0;
+                                      onAjustar(f.mk, mv.id, null, usd);
+                                      setEditItem(null);
+                                    }}>
                                     Volver al estimado
                                   </button>
                                 )}
@@ -1841,13 +1851,15 @@ export default function App() {
     setMovs(d.movs); setCfgRaw(c); persistir(c, d.movs); setVerAjustes(false);
   };
   // monto = null borra el ajuste y vuelve al estimado
-  const ajustar = (mk, id, monto) => {
+  // monto = null borra el ajuste. deltaUsd mueve reservas cuando la compra ya se hizo.
+  const ajustar = (mk, id, monto, deltaUsd) => {
     const a = { ...(cfg.ajustes || {}) };
     const delMes = { ...(a[mk] || {}) };
     if (monto === null) delete delMes[id];
     else delMes[id] = monto;
     a[mk] = delMes;
-    setCfg({ ...cfg, ajustes: a });
+    const res = Math.max(0, Math.round(((cfg.reservasUsd || 0) + (deltaUsd || 0)) * 100) / 100);
+    setCfg({ ...cfg, ajustes: a, reservasUsd: res });
   };
 
   const { coti, estado: estadoCoti, refrescar } = useCotizacion(cfg.tcFuente || "blue", !!cfg.tcAuto);
