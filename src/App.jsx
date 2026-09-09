@@ -3,38 +3,64 @@ import { createClient } from "@supabase/supabase-js";
 
 /* ===================== TOKENS ===================== */
 const T = {
-  tinta: "#12312B",
-  suave: "#5C6F68",
-  tenue: "#8B9A93",
-  papel: "#F3F5F0",
+  tinta: "#0E2B25",   // pino profundo: texto y acciones primarias
+  suave: "#576A64",
+  tenue: "#8A9992",
+  papel: "#EEF1EB",
   card: "#FFFFFF",
-  linea: "#DDE2D9",
-  verde: "#1E7A5A",
-  rojo: "#AF3F2E",
-  ambar: "#C98A1F",
-  ambarBg: "#FBF1DC",
-  rojoBg: "#FBE9E6",
+  linea: "#DCE2D9",
+  eje: "#CFD8CD",     // el hilo de la línea de tiempo
+  verde: "#17714F",
+  rojo: "#A93B28",
+  ambar: "#A8761A",
+  ambarBg: "#FAF0DA",
+  rojoBg: "#FAE7E3",
+  verdeBg: "#E4F0EA",
 };
 
 const CSS = `
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   .bz { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         color: ${T.tinta}; background: ${T.papel}; min-height: 100vh; }
-  .bz .num { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .bz .num { font-variant-numeric: tabular-nums; letter-spacing: -0.015em; font-feature-settings: "tnum" 1; }
+  .bz .plata { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; font-weight: 660; }
+  .bz .hero { font-size: 42px; line-height: 1.02; letter-spacing: -0.038em; font-weight: 680; }
+  .bz .eyebrow { font-size: 13px; color: ${T.suave}; }
+  /* La línea de tiempo: un hilo continuo del que cuelgan los meses */
+  .bz .eje { position: relative; padding-left: 22px; }
+  .bz .eje::before { content: ""; position: absolute; left: 4px; top: 14px; bottom: 14px;
+        width: 2px; background: ${T.eje}; border-radius: 2px; }
+  .bz .nodo { position: relative; }
+  .bz .nodo::before { content: ""; position: absolute; left: -22px; top: 20px; width: 10px; height: 10px;
+        border-radius: 50%; background: ${T.card}; border: 2px solid ${T.eje}; }
+  .bz .nodo.rojo::before { border-color: ${T.rojo}; background: ${T.rojo}; }
+  .bz .nodo.ahora::before { border-color: ${T.tinta}; background: ${T.tinta};
+        box-shadow: 0 0 0 4px ${T.papel}; }
+  .bz .traza { height: 3px; border-radius: 3px; background: ${T.eje}; }
+  @media (prefers-reduced-motion: reduce) { .bz * { animation: none !important; transition: none !important; } }
   .bz button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; padding: 0; }
   .bz input, .bz select, .bz textarea {
         font-family: inherit; font-size: 16px; color: ${T.tinta}; background: ${T.card};
         border: 1px solid ${T.linea}; border-radius: 10px; padding: 11px 12px; width: 100%; outline: none; }
-  .bz input:focus, .bz select:focus { border-color: ${T.tinta}; }
+  .bz input:focus, .bz select:focus { border-color: ${T.tinta}; outline: none;
+        box-shadow: 0 0 0 3px rgba(14,43,37,.09); }
+  .bz button:focus-visible { outline: 2px solid ${T.tinta}; outline-offset: 2px; border-radius: 8px; }
   .bz .chip { border: 1px solid ${T.linea}; background: ${T.card}; border-radius: 999px;
+        transition: background .12s ease, border-color .12s ease;
         padding: 8px 13px; font-size: 14px; white-space: nowrap; }
   .bz .chip.on { background: ${T.tinta}; color: #fff; border-color: ${T.tinta}; }
   .bz .chip.sm { padding: 6px 11px; font-size: 13px; }
   .bz .lbl { font-size: 12.5px; color: ${T.suave}; margin-bottom: 6px; display: block; }
-  .bz .card { background: ${T.card}; border: 1px solid ${T.linea}; border-radius: 14px; }
+  .bz .card { background: ${T.card}; border: 1px solid ${T.linea}; border-radius: 15px; }
+  /* El héroe no es una tarjeta más: no tiene borde y flota apenas */
+  .bz .cima { background: ${T.card}; border-radius: 19px; box-shadow: 0 1px 2px rgba(14,43,37,.05),
+        0 8px 24px -12px rgba(14,43,37,.16); }
+  /* Los avisos van embebidos, no en tarjeta con borde */
+  .bz .aviso { border-radius: 13px; padding: 13px 15px; font-size: 13px; line-height: 1.55; }
   .bz .scroll::-webkit-scrollbar { display: none; }
   .bz .scroll { -ms-overflow-style: none; scrollbar-width: none; }
-  .bz .btn { padding: 15px; border-radius: 12px; font-size: 16px; font-weight: 600; width: 100%;
+  .bz .btn { padding: 15px; border-radius: 13px; font-size: 16px; font-weight: 620; width: 100%;
+        transition: opacity .12s ease;
         background: ${T.tinta}; color: #fff; }
   .bz .btn.ghost { background: ${T.card}; color: ${T.tinta}; border: 1px solid ${T.linea}; }
   .bz .btn.peligro { background: ${T.rojo}; color: #fff; }
@@ -772,7 +798,9 @@ function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(18,49,43,.45)", zIndex: 90,
                   display: "flex", alignItems: "flex-end" }}>
       <div className="bz" style={{ width: "100%", maxWidth: 470, margin: "0 auto",
-            background: T.papel, borderRadius: "18px 18px 0 0", padding: 20, maxHeight: "92vh", overflowY: "auto" }}>
+            background: T.papel, borderRadius: "22px 22px 0 0", padding: 22,
+            maxHeight: "92vh", overflowY: "auto",
+            boxShadow: "0 -8px 40px -12px rgba(14,43,37,.3)" }}>
         <div style={{ fontSize: 12, color: T.suave, marginBottom: 4 }}>
           {pendientes.length > 1 ? `Tarjeta ${i + 1} de ${pendientes.length}` : "Actualizá tu tarjeta"}
         </div>
@@ -1225,11 +1253,15 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           const open = abierta === f.mk;
           const max = Math.max(...filas.map((x) => Math.max(x.ingresos, x.egresos)), 1);
           return (
-            <div key={f.mk} className="card" style={{ marginBottom: 9, overflow: "hidden" }}>
+            <div key={f.mk}
+              className={"card nodo" + (!cerrado && f.saldo < 0 ? " rojo" : "") + (f.mk === mesAct ? " ahora" : "")}
+              style={{ marginBottom: 9, overflow: "hidden",
+                       borderColor: !cerrado && f.saldo < 0 ? "#E8C4BB" : T.linea,
+                       opacity: cerrado ? 0.82 : 1 }}>
               <button onClick={() => setAbierta(open ? null : f.mk)} style={{ width: "100%", textAlign: "left", padding: 14 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>
+                    <div style={{ fontSize: 15, fontWeight: 620 }}>
                       {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
@@ -1249,15 +1281,25 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     )}
                   </div>
                 </div>
-                {(f.ingresos > 0 || f.egresos > 0) && (
-                  <div style={{ display: "grid", gap: 4, marginTop: 9 }}>
-                    {[[f.ingresos, T.verde], [f.egresos, T.rojo]].map(([v, c], i) => (
-                      <div key={i} style={{ height: 6, background: T.papel, borderRadius: 3, overflow: "hidden" }}>
-                        <div className="grow" style={{ width: `${(v / max) * 100}%`, height: "100%", background: c }} />
+                {!cerrado && (f.ingresos > 0 || f.egresos > 0) && (() => {
+                  // Trayectoria: qué tan alto queda el saldo de este mes respecto del mejor
+                  const tope = Math.max(...filas.map((x) => Math.abs(x.saldo)), 1);
+                  const pos = f.saldo >= 0;
+                  const ancho = Math.min(100, (Math.abs(f.saldo) / tope) * 100);
+                  return (
+                    <div style={{ marginTop: 11 }}>
+                      <div style={{ height: 3, background: T.papel, borderRadius: 3, overflow: "hidden" }}>
+                        <div className="traza" style={{ width: `${ancho}%`,
+                              background: pos ? T.verde : T.rojo, opacity: pos ? 0.55 : 0.85 }} />
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6,
+                                    fontSize: 11.5, color: T.tenue }}>
+                        <span>entra <span className="num">{corta(f.ingresos)}</span></span>
+                        <span>sale <span className="num">{corta(f.egresos)}</span></span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </button>
 
               {open && (
@@ -1461,49 +1503,53 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
   };
   return (
     <div style={{ padding: 16, paddingBottom: 30 }}>
-      <div className="card" style={{ padding: 17 }}>
+      <div className="cima" style={{ padding: "19px 19px 17px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: T.suave }}>
-            {pendiente > 0 ? "Te queda libre" : "Plata disponible hoy"}
+          <span className="eyebrow">
+            {pendiente > 0 ? "Te queda libre este mes" : "Tenés disponible"}
           </span>
-          <button onClick={() => setEditSaldo(!editSaldo)} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
-            {editSaldo ? "Listo" : "Cambiar"}
+          <button onClick={() => setEditSaldo(!editSaldo)}
+            style={{ fontSize: 13, color: T.ambar, fontWeight: 620 }}>
+            {editSaldo ? "Listo" : "Ajustar saldo"}
           </button>
         </div>
+
         {editSaldo ? (
           <input
             className="num" inputMode="decimal" value={cfg.saldoHoy}
             onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
-            style={{ marginTop: 9, fontSize: 28, fontWeight: 640, textAlign: "right" }}
+            style={{ marginTop: 11, fontSize: 30, fontWeight: 660, textAlign: "right" }}
           />
         ) : (
-          <div className="num" style={{ fontSize: 34, fontWeight: 640, marginTop: 3,
+          <div className="plata hero" style={{ marginTop: 7,
                 color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.tinta }}>
             {plata(cfg.saldoHoy - pendiente)}
           </div>
         )}
-        {pendiente > 0 ? (
-          <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.linea}` }}>
-            {[["En la cuenta", cfg.saldoHoy, T.suave],
-              ...(gastoPend > 0 ? [["Te falta pagar este mes", -gastoPend, T.rojo]] : []),
-              ...(ahorroMes > 0 ? [["Vas a pasar a dólares", -ahorroMes, T.ambar]] : [])]
+
+        {/* Un veredicto en castellano, no solo un número */}
+        <div style={{ fontSize: 13.5, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
+          {(() => {
+            const libre = cfg.saldoHoy - pendiente;
+            if (pendiente <= 0) return "No te queda nada por pagar este mes.";
+            if (libre < 0) return `No te alcanza: te faltan ${plata(-libre)} para cubrir lo que queda del mes.`;
+            if (libre < pendiente * 0.15) return "Te alcanza justo. Cuidá lo que gastes hasta fin de mes.";
+            return "Te alcanza para cubrir todo lo que falta del mes.";
+          })()}
+        </div>
+
+        {pendiente > 0 && !editSaldo && (
+          <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${T.linea}` }}>
+            {[["En la cuenta", cfg.saldoHoy, T.tinta],
+              ...(gastoPend > 0 ? [["Falta pagar", -gastoPend, T.rojo]] : []),
+              ...(ahorroMes > 0 ? [["Pasás a dólares", -ahorroMes, T.ambar]] : [])]
               .map(([n, v, c]) => (
-                <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
+                <div key={n} style={{ display: "flex", justifyContent: "space-between",
+                                      fontSize: 13.5, marginTop: 5 }}>
                   <span style={{ color: T.suave }}>{n}</span>
-                  <span className="num" style={{ color: c }}>{plata(v)}</span>
+                  <span className="num" style={{ color: c, fontWeight: 560 }}>{plata(v)}</span>
                 </div>
               ))}
-            {cfg.saldoHoy - pendiente < 0 && (
-              <div style={{ marginTop: 11, padding: "10px 12px", background: T.rojoBg,
-                            borderRadius: 10, fontSize: 12.5, color: T.rojo, lineHeight: 1.55 }}>
-                Lo que tenés pendiente supera lo que hay en la cuenta. Te faltan{" "}
-                <b className="num">{plata(pendiente - cfg.saldoHoy)}</b>.
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
-            No te queda nada pendiente este mes.
           </div>
         )}
       </div>
@@ -1544,9 +1590,8 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       )}
 
       {estimados.length > 0 && (
-        <button onClick={onAbrirMedios} className="card"
-          style={{ width: "100%", textAlign: "left", padding: 14, marginTop: 12,
-                   background: T.ambarBg, borderColor: "transparent" }}>
+        <button onClick={onAbrirMedios} className="aviso"
+          style={{ width: "100%", textAlign: "left", marginTop: 12, background: T.ambarBg }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>
             {estimados.length === 1 ? "Hay una fecha provisoria" : `Hay ${estimados.length} fechas provisorias`}
           </div>
@@ -1558,8 +1603,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       )}
 
       {cerradas.filter((c) => !revisadas[c.id + "|" + c.paga]).map((c) => (
-        <div key={c.id} className="card" style={{ padding: 15, marginTop: 12,
-              background: T.ambarBg, borderColor: "transparent" }}>
+        <div key={c.id} className="aviso" style={{ marginTop: 12, background: T.ambarBg }}>
           <div style={{ fontSize: 14, fontWeight: 620, marginBottom: 5 }}>
             Cerró {c.nombre}
           </div>
@@ -1629,7 +1673,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       </div>
       )}
 
-      <div style={{ marginTop: 16 }}>
+      <div className="eje" style={{ marginTop: 18 }}>
         {filas.map((f) => mesCard(f, false))}
       </div>
 
@@ -1647,7 +1691,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                 Lo que pasó en los últimos {historial.length} meses, según lo que tenés cargado.
                 No muestro saldo porque solo conozco el de hoy.
               </div>
-              {historial.slice().reverse().map((f) => mesCard(f, true))}
+              <div className="eje">{historial.slice().reverse().map((f) => mesCard(f, true))}</div>
             </>
           )}
         </div>
@@ -2525,6 +2569,7 @@ export default function App() {
         position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 470, margin: "0 auto",
         display: "grid", gridTemplateColumns: "repeat(4,1fr)", background: T.card,
         borderTop: `1px solid ${T.linea}`, zIndex: 30,
+        backdropFilter: "saturate(1.2) blur(8px)",
       }}>
         {TABS.map(([id, n]) => (
           <button
