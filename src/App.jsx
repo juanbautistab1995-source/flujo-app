@@ -43,10 +43,25 @@ const CSS = `
 
 /* ===================== MEDIOS DE PAGO ===================== */
 const MEDIOS_INI = [
-  { id: "icbc", nombre: "Visa ICBC Signature", corto: "ICBC", cierre: 23, vto: 6 },
-  { id: "hipo", nombre: "Visa Hipotecario", corto: "Hipo", cierre: 30, vto: 9 },
-  { id: "bna", nombre: "Visa Banco Nación", corto: "BNA", cierre: 30, vto: 14 },
-  { id: "master", nombre: "Mastercard ICBC", corto: "Master", cierre: 30, vto: 15 },
+  { id: "icbc", nombre: "Visa ICBC Signature", corto: "ICBC", cierre: 23, vto: 6, ciclos: [
+    { cierre: "2026-07-23", vto: "2026-08-04" },
+    { cierre: "2026-08-20", vto: "2026-09-01" },
+    { cierre: "2026-09-24", vto: "2026-10-06" },
+  ] },
+  { id: "hipo", nombre: "Visa Hipotecario", corto: "Hipo", cierre: 30, vto: 9, ciclos: [
+    { cierre: "2026-07-30", vto: "2026-08-07" },
+    { cierre: "2026-08-27", vto: "2026-09-04" },
+    { cierre: "2026-10-01", vto: "2026-10-09" },
+  ] },
+  { id: "bna", nombre: "Visa Banco Nación", corto: "BNA", cierre: 30, vto: 14, ciclos: [
+    { cierre: "2026-08-27", vto: "2026-09-09" },
+    { cierre: "2026-10-01", vto: "2026-10-14" },
+  ] },
+  { id: "master", nombre: "Mastercard ICBC", corto: "Master", cierre: 30, vto: 15, ciclos: [
+    { cierre: "2026-07-30", vto: "2026-08-12" },
+    { cierre: "2026-08-27", vto: "2026-09-09" },
+    { cierre: "2026-10-01", vto: "2026-10-15" },
+  ] },
   { id: "efectivo", nombre: "Efectivo / débito", corto: "Efvo", cierre: 0, vto: 0 },
 ];
 
@@ -54,75 +69,75 @@ const SEED = [
   {"tipo": "ingreso", "detalle": "Sueldo neto", "monto": 3100000, "medio": "efectivo", "recurrente": true, "id": "s1"},
   {"tipo": "ingreso", "detalle": "Aguinaldo", "monto": 3100000, "medio": "efectivo", "recurrente": true, "meses": [1, 7], "id": "s2"},
   {"tipo": "ingreso", "detalle": "Extra por permanencia", "monto": 300000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "id": "s3"},
-  {"tipo": "gasto", "detalle": "Préstamo prendario (auto)", "monto": 265000, "medio": "efectivo", "recurrente": true, "id": "s4"},
-  {"tipo": "gasto", "detalle": "Préstamo personal (casa)", "monto": 49000, "medio": "efectivo", "recurrente": true, "id": "s5"},
-  {"tipo": "gasto", "detalle": "Psicología", "monto": 320000, "medio": "efectivo", "recurrente": true, "id": "s6"},
-  {"tipo": "gasto", "detalle": "Gimnasio", "monto": 55000, "medio": "efectivo", "recurrente": true, "id": "s7"},
-  {"tipo": "gasto", "detalle": "Básquet", "monto": 30000, "medio": "efectivo", "recurrente": true, "id": "s8"},
-  {"tipo": "gasto", "detalle": "Almuerzos de trabajo", "monto": 100000, "medio": "efectivo", "recurrente": true, "id": "s9"},
-  {"tipo": "gasto", "detalle": "Madacom internet", "medio": "icbc", "recurrente": true, "monto": 35880, "id": "s10"},
-  {"tipo": "gasto", "detalle": "Combustible", "medio": "icbc", "recurrente": true, "monto": 25000, "id": "s11"},
-  {"tipo": "gasto", "detalle": "Gastos del día a día", "medio": "icbc", "recurrente": true, "monto": 266488, "id": "s12"},
-  {"tipo": "gasto", "detalle": "Apple + Google", "medio": "icbc", "recurrente": true, "montoUsd": 33.98, "moneda": "USD", "id": "s13"},
-  {"tipo": "gasto", "detalle": "Claro", "medio": "hipo", "recurrente": true, "monto": 65612, "id": "s14"},
-  {"tipo": "gasto", "detalle": "Edelap", "medio": "hipo", "recurrente": true, "monto": 36485, "id": "s15"},
-  {"tipo": "gasto", "detalle": "Telepase", "medio": "hipo", "recurrente": true, "monto": 9580, "id": "s16"},
-  {"tipo": "gasto", "detalle": "Spotify", "medio": "hipo", "recurrente": true, "monto": 8413, "id": "s17"},
-  {"tipo": "gasto", "detalle": "Seguro BHN", "medio": "hipo", "recurrente": true, "monto": 17234, "persona": "A confirmar", "pct": 1.0, "id": "s18"},
-  {"tipo": "gasto", "detalle": "Netflix", "medio": "hipo", "recurrente": true, "montoUsd": 13.56, "moneda": "USD", "id": "s19"},
-  {"tipo": "gasto", "detalle": "Disco", "medio": "bna", "recurrente": true, "monto": 150000, "id": "s20"},
-  {"tipo": "gasto", "detalle": "Shell", "medio": "bna", "recurrente": true, "monto": 79990, "id": "s21"},
-  {"tipo": "gasto", "detalle": "Seguro Federación Patronal", "medio": "master", "recurrente": true, "monto": 101955, "persona": "Betty", "pct": 1.0, "id": "s22"},
-  {"tipo": "gasto", "detalle": "Federación Patronal (resto)", "medio": "master", "recurrente": true, "monto": 136918, "id": "s23"},
-  {"tipo": "gasto", "detalle": "Rappi", "medio": "master", "recurrente": true, "monto": 14880, "id": "s24"},
-  {"tipo": "gasto", "detalle": "PlayStation", "medio": "master", "recurrente": true, "montoUsd": 11.99, "moneda": "USD", "id": "s25"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 37905.96, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-02", "id": "s26"},
-  {"tipo": "gasto", "detalle": "Almundo", "monto": 483870.36, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-03", "id": "s27"},
-  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 102528, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-05", "id": "s28"},
-  {"tipo": "gasto", "detalle": "Run", "monto": 25309.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s29"},
-  {"tipo": "gasto", "detalle": "Run", "monto": 6409.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s30"},
-  {"tipo": "gasto", "detalle": "Perfumsnow", "monto": 131949.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "id": "s31"},
-  {"tipo": "gasto", "detalle": "Nike La Plata", "monto": 227997.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "persona": "Betty", "pct": 0.4737, "id": "s32"},
-  {"tipo": "gasto", "detalle": "Gaona", "monto": 61492.5, "medio": "icbc", "cuotas": 9, "mesInicio": "2026-07", "id": "s33"},
-  {"tipo": "gasto", "detalle": "Perfumeriaspigmento", "monto": 223519.92, "medio": "icbc", "cuotas": 24, "mesInicio": "2026-07", "id": "s34"},
-  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 31498.98, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s35"},
-  {"tipo": "gasto", "detalle": "Kingofkings", "monto": 98994, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s36"},
-  {"tipo": "gasto", "detalle": "Confeccionesseman", "monto": 69990, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s37"},
-  {"tipo": "gasto", "detalle": "Kevingston", "monto": 123999.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s38"},
-  {"tipo": "gasto", "detalle": "Seven Electronics", "monto": 80888.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s39"},
-  {"tipo": "gasto", "detalle": "Thebrandschoi", "monto": 57325.02, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s40"},
-  {"tipo": "gasto", "detalle": "Opensports", "monto": 20000.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s41"},
-  {"tipo": "gasto", "detalle": "Iey", "monto": 35991.0, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-09", "id": "s42"},
-  {"tipo": "gasto", "detalle": "Blossomfragancias", "monto": 114000, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s43", "persona": "Federico Catenazzi", "pct": 0.5},
-  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 171932.4, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s44"},
-  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 21999, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s45"},
-  {"tipo": "gasto", "detalle": "Fiambreriaale (Compra Nueva)", "monto": 26852.5, "medio": "icbc", "cuotas": 2, "mesInicio": "2026-10", "id": "s46"},
-  {"tipo": "gasto", "detalle": "Bidcom", "monto": 759769.92, "medio": "master", "cuotas": 18, "mesInicio": "2025-06", "id": "s47"},
-  {"tipo": "gasto", "detalle": "Bidcom", "monto": 78723.72, "medio": "master", "cuotas": 18, "mesInicio": "2025-12", "id": "s48"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 204613.56, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s49"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 52397.28, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s50"},
-  {"tipo": "gasto", "detalle": "Despegar", "monto": 171326.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s51"},
-  {"tipo": "gasto", "detalle": "Www.Fravega.Com", "monto": 18749.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-03", "id": "s52"},
-  {"tipo": "gasto", "detalle": "Shop Gallery Mendoza", "monto": 70099.98, "medio": "master", "cuotas": 6, "mesInicio": "2026-07", "id": "s53"},
-  {"tipo": "gasto", "detalle": "Alfisjeans", "monto": 78900, "medio": "master", "cuotas": 3, "mesInicio": "2026-08", "id": "s54"},
-  {"tipo": "gasto", "detalle": "Visaur", "monto": 2599998.9, "medio": "bna", "cuotas": 30, "mesInicio": "2025-02", "id": "s55"},
-  {"tipo": "gasto", "detalle": "Home Sweet S.A.", "monto": 74263.92, "medio": "bna", "cuotas": 24, "mesInicio": "2025-06", "id": "s56"},
-  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 8870.94, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s57"},
-  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 44457.84, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s58"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 47758.5, "medio": "bna", "cuotas": 18, "mesInicio": "2026-03", "id": "s59"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 126984.6, "medio": "bna", "cuotas": 18, "mesInicio": "2026-05", "id": "s60"},
-  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 43144.92, "medio": "bna", "cuotas": 12, "mesInicio": "2026-05", "id": "s61"},
-  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 52423.56, "medio": "bna", "cuotas": 18, "mesInicio": "2026-07", "id": "s62"},
-  {"tipo": "gasto", "detalle": "Busplus", "monto": 25200, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s63"},
-  {"tipo": "gasto", "detalle": "Busplus", "monto": 28980, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s64"},
-  {"tipo": "gasto", "detalle": "Gadnic", "monto": 47187.9, "medio": "hipo", "cuotas": 15, "mesInicio": "2025-10", "id": "s65"},
-  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 49128.66, "medio": "hipo", "cuotas": 6, "mesInicio": "2026-05", "id": "s66"},
-  {"tipo": "gasto", "detalle": "Viaje: nafta, Ubers, Patagonia, comidas", "monto": 450385, "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s67"},
-  {"tipo": "gasto", "detalle": "Viaje: Airbnb Bariloche", "montoUsd": 105, "moneda": "USD", "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s68"},
-  {"tipo": "gasto", "detalle": "Bariloche: 23 consumos en 1 pago", "monto": 1079779, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s69"},
-  {"tipo": "gasto", "detalle": "Aerolíneas Maestro EZE", "monto": 68970, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s70"},
-  {"tipo": "gasto", "detalle": "Catedral Alta Patagonia (pases Bariloche)", "monto": 334000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 6, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s71"},
-  {"tipo": "gasto", "detalle": "Villa La Angostura: alojamiento, pases, escuela y equipos", "monto": 1980000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 11, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s72"}
+  {"tipo": "gasto", "detalle": "Préstamo prendario (auto)", "monto": 265000, "medio": "efectivo", "recurrente": true, "id": "s4", "categoria": "Préstamos"},
+  {"tipo": "gasto", "detalle": "Préstamo personal (casa)", "monto": 49000, "medio": "efectivo", "recurrente": true, "id": "s5", "categoria": "Préstamos"},
+  {"tipo": "gasto", "detalle": "Psicología", "monto": 320000, "medio": "efectivo", "recurrente": true, "id": "s6", "categoria": "Salud"},
+  {"tipo": "gasto", "detalle": "Gimnasio", "monto": 55000, "medio": "efectivo", "recurrente": true, "id": "s7", "categoria": "Deporte"},
+  {"tipo": "gasto", "detalle": "Básquet", "monto": 30000, "medio": "efectivo", "recurrente": true, "id": "s8", "categoria": "Deporte"},
+  {"tipo": "gasto", "detalle": "Almuerzos de trabajo", "monto": 100000, "medio": "efectivo", "recurrente": true, "id": "s9", "categoria": "Alimentación"},
+  {"tipo": "gasto", "detalle": "Madacom internet", "medio": "icbc", "recurrente": true, "monto": 35880, "id": "s10", "categoria": "Vivienda y servicios"},
+  {"tipo": "gasto", "detalle": "Combustible", "medio": "icbc", "recurrente": true, "monto": 25000, "id": "s11", "categoria": "Transporte y nafta"},
+  {"tipo": "gasto", "detalle": "Gastos del día a día", "medio": "icbc", "recurrente": true, "monto": 266488, "id": "s12", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Apple + Google", "medio": "icbc", "recurrente": true, "montoUsd": 33.98, "moneda": "USD", "id": "s13", "categoria": "Suscripciones"},
+  {"tipo": "gasto", "detalle": "Claro", "medio": "hipo", "recurrente": true, "monto": 65612, "id": "s14", "categoria": "Vivienda y servicios"},
+  {"tipo": "gasto", "detalle": "Edelap", "medio": "hipo", "recurrente": true, "monto": 36485, "id": "s15", "categoria": "Vivienda y servicios"},
+  {"tipo": "gasto", "detalle": "Telepase", "medio": "hipo", "recurrente": true, "monto": 9580, "id": "s16", "categoria": "Transporte y nafta"},
+  {"tipo": "gasto", "detalle": "Spotify", "medio": "hipo", "recurrente": true, "monto": 8413, "id": "s17", "categoria": "Suscripciones"},
+  {"tipo": "gasto", "detalle": "Seguro BHN", "medio": "hipo", "recurrente": true, "monto": 17234, "persona": "A confirmar", "pct": 1.0, "id": "s18", "categoria": "Seguros"},
+  {"tipo": "gasto", "detalle": "Netflix", "medio": "hipo", "recurrente": true, "montoUsd": 13.56, "moneda": "USD", "id": "s19", "categoria": "Suscripciones"},
+  {"tipo": "gasto", "detalle": "Disco", "medio": "bna", "recurrente": true, "monto": 150000, "id": "s20", "categoria": "Alimentación"},
+  {"tipo": "gasto", "detalle": "Shell", "medio": "bna", "recurrente": true, "monto": 79990, "id": "s21", "categoria": "Transporte y nafta"},
+  {"tipo": "gasto", "detalle": "Seguro Federación Patronal", "medio": "master", "recurrente": true, "monto": 101955, "persona": "Betty", "pct": 1.0, "id": "s22", "categoria": "Seguros"},
+  {"tipo": "gasto", "detalle": "Federación Patronal (resto)", "medio": "master", "recurrente": true, "monto": 136918, "id": "s23", "categoria": "Seguros"},
+  {"tipo": "gasto", "detalle": "Rappi", "medio": "master", "recurrente": true, "monto": 14880, "id": "s24", "categoria": "Alimentación"},
+  {"tipo": "gasto", "detalle": "PlayStation", "medio": "master", "recurrente": true, "montoUsd": 11.99, "moneda": "USD", "id": "s25", "categoria": "Suscripciones"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 37905.96, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-02", "id": "s26", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Almundo", "monto": 483870.36, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-03", "id": "s27", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 102528, "medio": "icbc", "cuotas": 12, "mesInicio": "2026-05", "id": "s28", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Run", "monto": 25309.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s29", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Run", "monto": 6409.98, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-06", "id": "s30", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Perfumsnow", "monto": 131949.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "id": "s31", "categoria": "Cuidado personal"},
+  {"tipo": "gasto", "detalle": "Nike La Plata", "monto": 227997.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-07", "persona": "Betty", "pct": 0.4737, "id": "s32", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Gaona", "monto": 61492.5, "medio": "icbc", "cuotas": 9, "mesInicio": "2026-07", "id": "s33", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Perfumeriaspigmento", "monto": 223519.92, "medio": "icbc", "cuotas": 24, "mesInicio": "2026-07", "id": "s34", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 31498.98, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s35", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Kingofkings", "monto": 98994, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-08", "id": "s36", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Confeccionesseman", "monto": 69990, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s37", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Kevingston", "monto": 123999.96, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-08", "id": "s38", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Seven Electronics", "monto": 80888.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s39", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Thebrandschoi", "monto": 57325.02, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s40", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Opensports", "monto": 20000.04, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s41", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Iey", "monto": 35991.0, "medio": "icbc", "cuotas": 6, "mesInicio": "2026-09", "id": "s42", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Blossomfragancias", "monto": 114000, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-09", "id": "s43", "persona": "Federico Catenazzi", "pct": 0.5, "categoria": "Cuidado personal"},
+  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 171932.4, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s44", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Vertical Skisnow (Compra Nueva)", "monto": 21999, "medio": "icbc", "cuotas": 3, "mesInicio": "2026-10", "excepcional": true, "id": "s45", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Fiambreriaale (Compra Nueva)", "monto": 26852.5, "medio": "icbc", "cuotas": 2, "mesInicio": "2026-10", "id": "s46", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Bidcom", "monto": 759769.92, "medio": "master", "cuotas": 18, "mesInicio": "2025-06", "id": "s47", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Bidcom", "monto": 78723.72, "medio": "master", "cuotas": 18, "mesInicio": "2025-12", "id": "s48", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 204613.56, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s49", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 52397.28, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s50", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Despegar", "monto": 171326.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-02", "id": "s51", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Www.Fravega.Com", "monto": 18749.16, "medio": "master", "cuotas": 12, "mesInicio": "2026-03", "id": "s52", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Shop Gallery Mendoza", "monto": 70099.98, "medio": "master", "cuotas": 6, "mesInicio": "2026-07", "id": "s53", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Alfisjeans", "monto": 78900, "medio": "master", "cuotas": 3, "mesInicio": "2026-08", "id": "s54", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Visaur", "monto": 2599998.9, "medio": "bna", "cuotas": 30, "mesInicio": "2025-02", "id": "s55", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Home Sweet S.A.", "monto": 74263.92, "medio": "bna", "cuotas": 24, "mesInicio": "2025-06", "id": "s56", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 8870.94, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s57", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Consumiblesds", "monto": 44457.84, "medio": "bna", "cuotas": 18, "mesInicio": "2026-02", "id": "s58", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 47758.5, "medio": "bna", "cuotas": 18, "mesInicio": "2026-03", "id": "s59", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 126984.6, "medio": "bna", "cuotas": 18, "mesInicio": "2026-05", "id": "s60", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Simplicity La Plata", "monto": 43144.92, "medio": "bna", "cuotas": 12, "mesInicio": "2026-05", "id": "s61", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Perfumeria Pigmento", "monto": 52423.56, "medio": "bna", "cuotas": 18, "mesInicio": "2026-07", "id": "s62", "categoria": "Otros"},
+  {"tipo": "gasto", "detalle": "Busplus", "monto": 25200, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s63", "categoria": "Transporte y nafta"},
+  {"tipo": "gasto", "detalle": "Busplus", "monto": 28980, "medio": "bna", "cuotas": 3, "mesInicio": "2026-09", "id": "s64", "categoria": "Transporte y nafta"},
+  {"tipo": "gasto", "detalle": "Gadnic", "monto": 47187.9, "medio": "hipo", "cuotas": 15, "mesInicio": "2025-10", "id": "s65", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Mercadolibre", "monto": 49128.66, "medio": "hipo", "cuotas": 6, "mesInicio": "2026-05", "id": "s66", "categoria": "Hogar y compras"},
+  {"tipo": "gasto", "detalle": "Viaje: nafta, Ubers, Patagonia, comidas", "monto": 450385, "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s67", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Viaje: Airbnb Bariloche", "montoUsd": 105, "moneda": "USD", "medio": "icbc", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "excepcional": true, "id": "s68", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Bariloche: 23 consumos en 1 pago", "monto": 1079779, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s69", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Aerolíneas Maestro EZE", "monto": 68970, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 1, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s70", "categoria": "Viajes"},
+  {"tipo": "gasto", "detalle": "Catedral Alta Patagonia (pases Bariloche)", "monto": 334000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 6, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s71", "categoria": "Indumentaria"},
+  {"tipo": "gasto", "detalle": "Villa La Angostura: alojamiento, pases, escuela y equipos", "monto": 1980000, "medio": "efectivo", "mesInicio": "2026-10", "cuotas": 11, "persona": "Sol", "pct": 0.5, "pagadoPor": "otro", "excepcional": true, "id": "s72", "categoria": "Viajes"}
 ];
 
 /* ===================== FECHAS ===================== */
@@ -144,6 +159,19 @@ const corta = (n) => {
   if (a >= 1000) return s + "$" + Math.round(a / 1000) + "k";
   return plata(n);
 };
+
+const BANCOS = [
+  "Galicia", "Santander", "BBVA", "Nación", "Provincia", "Macro", "ICBC", "HSBC",
+  "Credicoop", "Patagonia", "Supervielle", "Ciudad", "Hipotecario", "Comafi", "Itaú",
+  "Brubank", "Uala", "Naranja X", "Mercado Pago", "Personal Pay", "Otro",
+];
+const MARCAS = ["Visa", "Mastercard", "Amex", "Cabal"];
+
+const CATEGORIAS = [
+  "Alimentación", "Gastronomía y salidas", "Transporte y nafta", "Vivienda y servicios",
+  "Salud", "Indumentaria", "Suscripciones", "Deporte", "Cuidado personal",
+  "Hogar y compras", "Viajes", "Préstamos", "Seguros", "Educación", "Otros",
+];
 
 /* ===================== COTIZACIONES ===================== */
 const FUENTES = [
@@ -190,14 +218,80 @@ function useCotizacion(fuente, activo) {
 
 /* ===================== MOTOR ===================== */
 // Devuelve el mes en que se PAGA una compra hecha en `fecha` con `medio`.
+// Los bancos no cierran un dia fijo del mes: arman el calendario a mano, casi siempre
+// respetando el dia de la semana. Por eso usamos los ciclos REALES que carga el usuario
+// desde su resumen, y solo estimamos mas alla del ultimo conocido.
+function ciclosDe(m) {
+  return (m.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
+}
+
+// Estima el siguiente ciclo respetando el dia de la semana del ultimo real.
+function siguienteCiclo(ult) {
+  const av = (iso) => {
+    const d = new Date(iso + "T12:00:00");
+    const mesOrig = d.getMonth();
+    d.setDate(d.getDate() + 28);              // 4 semanas: mismo dia de semana
+    if (d.getMonth() === mesOrig) d.setDate(d.getDate() + 7);  // si no cambio de mes, 5 semanas
+    return d.toISOString().slice(0, 10);
+  };
+  return { cierre: av(ult.cierre), vto: av(ult.vto), estimado: true };
+}
+
+// Primer ciclo tentativo cuando la tarjeta no tiene ninguno cargado
+function cicloTentativo(m, desdeISO) {
+  const d = new Date(desdeISO + "T12:00:00");
+  const c = new Date(d.getFullYear(), d.getMonth(), Math.min(m.cierre || 25, 28), 12);
+  if (c < d) c.setMonth(c.getMonth() + 1);
+  const v = new Date(c);
+  if ((m.vto || 10) <= (m.cierre || 25)) v.setMonth(v.getMonth() + 1);
+  v.setDate(Math.min(m.vto || 10, 28));
+  return { cierre: c.toISOString().slice(0, 10), vto: v.toISOString().slice(0, 10), estimado: true };
+}
+
+function cicloParaFecha(m, fechaISO) {
+  const cs = ciclosDe(m);
+  if (!cs.length) return null;
+  for (const c of cs) if (fechaISO <= c.cierre) return c;
+  let ult = cs[cs.length - 1];
+  for (let i = 0; i < 48; i++) {              // estiramos hasta 4 años
+    ult = siguienteCiclo(ult);
+    if (fechaISO <= ult.cierre) return ult;
+  }
+  return ult;
+}
+
 function mesDePago(fecha, medioId, medios) {
   const m = medios.find((x) => x.id === medioId);
   const d = new Date(fecha + "T12:00:00");
   if (!m || m.id === "efectivo") return d.toISOString().slice(0, 7);
+
+  const c = cicloParaFecha(m, fecha);
+  if (c) return c.vto.slice(0, 7);
+
+  // Sin ciclos cargados: caemos al dia fijo del mes
+  const ultimo = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  const cierreReal = Math.min(m.cierre || 30, ultimo);
   let n = d.getFullYear() * 12 + d.getMonth();
-  if (d.getDate() > m.cierre) n += 1; // entró después del cierre
-  n += 1; // el resumen se paga al mes siguiente del cierre
+  if (d.getDate() > cierreReal) n += 1;
+  if ((m.vto || 10) <= (m.cierre || 30)) n += 1;
   return mesDeIdx(n);
+}
+
+// Tarjetas cuyo ultimo ciclo real ya cerro: hay que pedirle al usuario el proximo.
+function tarjetasSinActualizar(medios, hoy) {
+  return medios.filter((m) => {
+    if (m.id === "efectivo") return false;
+    const cs = ciclosDe(m);
+    if (!cs.length) return true;                       // recién creada
+    return cs[cs.length - 1].cierre < hoy;             // el último que conocemos ya cerró
+  });
+}
+
+// Ciclos guardados como estimación, que conviene confirmar contra el resumen
+function ciclosEstimados(medios) {
+  const out = [];
+  medios.forEach((m) => (m.ciclos || []).forEach((c) => { if (c.estimado) out.push({ m, c }); }));
+  return out;
 }
 
 // Cuánto pesa un movimiento en un mes dado (0 si no aplica).
@@ -492,6 +586,248 @@ function Cuenta({ perfil, onCerrar, onSalir, estado }) {
   );
 }
 
+/* ===================== MIS TARJETAS ===================== */
+function Medios({ medios, movs, onGuardar, onCerrar }) {
+  const [edit, setEdit] = useState(null);
+
+  const vacio = { id: "", nombre: "", banco: "Galicia", marca: "Visa", corto: "", cierre: 25, vto: 10 };
+  const guardar = () => {
+    const e = edit;
+    if (!e.nombre.trim()) return;
+    const id = e.id || "t" + Date.now();
+    const m = {
+      id, nombre: e.nombre.trim(),
+      corto: (e.corto || e.nombre).trim().slice(0, 8),
+      banco: e.banco, marca: e.marca,
+      cierre: Math.min(31, Math.max(1, +e.cierre || 25)),
+      vto: Math.min(28, Math.max(1, +e.vto || 10)),
+    };
+    onGuardar(medios.some((x) => x.id === id) ? medios.map((x) => (x.id === id ? m : x)) : [...medios, m]);
+    setEdit(null);
+  };
+  const borrar = (m) => {
+    const usados = movs.filter((x) => x.medio === m.id).length;
+    if (usados && !confirm(
+      `${m.nombre} tiene ${usados} movimientos. Si la borrás, esos movimientos quedan sin medio de pago. ¿Seguro?`)) return;
+    if (!usados && !confirm(`¿Borrar ${m.nombre}?`)) return;
+    onGuardar(medios.filter((x) => x.id !== m.id));
+    setEdit(null);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 70, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 15.5, fontWeight: 620 }}>Mis medios de pago</span>
+        <button onClick={onCerrar} style={{ fontSize: 15, fontWeight: 620 }}>Listo</button>
+      </div>
+
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        {medios.map((m) => {
+          const usados = movs.filter((x) => x.medio === m.id).length;
+          return (
+            <button key={m.id} className="card"
+              onClick={() => setEdit({ ...vacio, ...m })}
+              style={{ width: "100%", textAlign: "left", padding: "13px 15px", marginBottom: 9 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <span style={{ fontSize: 14.5, fontWeight: 600 }}>{m.nombre}</span>
+                <span style={{ fontSize: 12, color: T.tenue }}>{usados} mov.</span>
+              </div>
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 3 }}>
+                {(() => {
+                  if (m.id === "efectivo") return "No tiene ciclo de cierre";
+                  const cs = (m.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
+                  if (!cs.length) return "Sin fechas cargadas";
+                  const u = cs[cs.length - 1];
+                  return `Último cierre ${u.cierre.split("-").reverse().slice(0, 2).join("/")} · ` +
+                         `vence ${u.vto.split("-").reverse().slice(0, 2).join("/")}` +
+                         (u.estimado ? "  · estimado" : "");
+                })()}
+              </div>
+              {(m.ciclos || []).some((c) => c.estimado) && (
+                <div style={{ fontSize: 11.5, color: T.ambar, marginTop: 5 }}>
+                  Tiene fechas provisorias sin confirmar
+                </div>
+              )}
+            </button>
+          );
+        })}
+
+        <button className="btn" style={{ marginTop: 8 }} onClick={() => setEdit({ ...vacio })}>
+          Agregar una tarjeta
+        </button>
+      </div>
+
+      {edit && (
+        <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 80, overflowY: "auto" }}>
+          <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                        padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button onClick={() => setEdit(null)} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+            <span style={{ fontSize: 15.5, fontWeight: 620 }}>{edit.id ? "Editar" : "Nueva tarjeta"}</span>
+            <button onClick={guardar} style={{ fontSize: 15, fontWeight: 620,
+                    color: edit.nombre.trim() ? T.tinta : T.tenue }}>Guardar</button>
+          </div>
+          <div style={{ padding: 16, paddingBottom: 40 }}>
+            {edit.id === "efectivo" ? (
+              <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6 }}>
+                El efectivo y el débito no tienen ciclo de cierre: lo que gastás sale el mismo mes.
+                Solo podés cambiarle el nombre.
+              </div>
+            ) : null}
+
+            <label className="lbl" style={{ marginTop: 6 }}>Banco</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {BANCOS.map((b) => (
+                <button key={b} className={"chip sm" + (edit.banco === b ? " on" : "")}
+                  onClick={() => setEdit({ ...edit, banco: b,
+                    nombre: edit.nombre || `${edit.marca} ${b}`, corto: edit.corto || b })}>{b}</button>
+              ))}
+            </div>
+
+            <label className="lbl" style={{ marginTop: 16 }}>Marca</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {MARCAS.map((b) => (
+                <button key={b} className={"chip sm" + (edit.marca === b ? " on" : "")}
+                  onClick={() => setEdit({ ...edit, marca: b })}>{b}</button>
+              ))}
+            </div>
+
+            <label className="lbl" style={{ marginTop: 16 }}>Cómo la querés llamar</label>
+            <input value={edit.nombre} onChange={(e) => setEdit({ ...edit, nombre: e.target.value })}
+              placeholder="Visa Galicia" />
+
+            <label className="lbl" style={{ marginTop: 14 }}>Nombre corto (para los filtros)</label>
+            <input value={edit.corto} onChange={(e) => setEdit({ ...edit, corto: e.target.value })}
+              placeholder="Galicia" />
+
+            {edit.id !== "efectivo" && (
+              <>
+                <label className="lbl" style={{ marginTop: 16 }}>Día de cierre del resumen</label>
+                <input className="num" inputMode="numeric" value={edit.cierre}
+                  onChange={(e) => setEdit({ ...edit, cierre: e.target.value.replace(/\D/g, "") })}
+                  style={{ textAlign: "right" }} />
+
+                <label className="lbl" style={{ marginTop: 14 }}>Día de vencimiento</label>
+                <input className="num" inputMode="numeric" value={edit.vto}
+                  onChange={(e) => setEdit({ ...edit, vto: e.target.value.replace(/\D/g, "") })}
+                  style={{ textAlign: "right" }} />
+
+                <div style={{ marginTop: 12, padding: "11px 13px", background: T.ambarBg,
+                              borderRadius: 11, fontSize: 12.5, lineHeight: 1.6 }}>
+                  Una compra hecha hasta el <b>{edit.cierre}</b> la pagás el <b>{edit.vto}</b> del mes siguiente.
+                  Si comprás después del {edit.cierre}, se va un mes más. Estos días te los da tu banco,
+                  fijate en el resumen.
+                </div>
+              </>
+            )}
+
+            {edit.id && edit.id !== "efectivo" && (
+              <button className="btn peligro" style={{ marginTop: 24 }}
+                onClick={() => borrar(edit)}>Borrar esta tarjeta</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ===================== ACTUALIZAR CICLOS ===================== */
+// Ventana que aparece cuando el ultimo cierre cargado ya paso.
+function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
+  const [i, setI] = useState(0);
+  const m = pendientes[i];
+  const cs = (m.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
+  const ult = cs[cs.length - 1];
+  const sug = ult ? siguienteCiclo(ult) : cicloTentativo(m, hoyISO());
+  const [cierre, setCierre] = useState(sug.cierre);
+  const [vto, setVto] = useState(sug.vto);
+
+  const guardar = (estimado) => {
+    if (!cierre || !vto || vto < cierre) return;
+    const nuevos = medios.map((x) =>
+      x.id === m.id
+        ? { ...x, ciclos: [...(x.ciclos || []), estimado ? { cierre, vto, estimado: true } : { cierre, vto }] }
+        : x);
+    onGuardar(nuevos);
+    if (i + 1 < pendientes.length) {
+      const sig = pendientes[i + 1];
+      const c2 = (sig.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
+      const s2 = c2.length ? siguienteCiclo(c2[c2.length - 1]) : { cierre: hoyISO(), vto: hoyISO() };
+      setCierre(s2.cierre); setVto(s2.vto); setI(i + 1);
+    }
+  };
+
+  const dia = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso + "T12:00:00");
+    return ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"][d.getDay()];
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(18,49,43,.45)", zIndex: 90,
+                  display: "flex", alignItems: "flex-end" }}>
+      <div className="bz" style={{ width: "100%", maxWidth: 470, margin: "0 auto",
+            background: T.papel, borderRadius: "18px 18px 0 0", padding: 20, maxHeight: "92vh", overflowY: "auto" }}>
+        <div style={{ fontSize: 12, color: T.suave, marginBottom: 4 }}>
+          {pendientes.length > 1 ? `Tarjeta ${i + 1} de ${pendientes.length}` : "Actualizá tu tarjeta"}
+        </div>
+        <div style={{ fontSize: 19, fontWeight: 660, marginBottom: 8 }}>Cerró {m.nombre}</div>
+        <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6, marginBottom: 18 }}>
+          Los bancos no cierran un día fijo: mueven la fecha todos los meses.
+          Abrí tu último resumen y copiá <b>Próximo cierre</b> y <b>Próximo vencimiento</b>.
+          Sin eso, las compras nuevas pueden caer en el mes equivocado.
+        </div>
+
+        {ult && (
+          <div style={{ padding: "11px 13px", background: T.card, borderRadius: 11,
+                        fontSize: 12.5, color: T.suave, marginBottom: 16, lineHeight: 1.6 }}>
+            El último que cargaste cerró el <b>{ult.cierre.split("-").reverse().join("/")}</b> y
+            venció el <b>{ult.vto.split("-").reverse().join("/")}</b>.
+          </div>
+        )}
+
+        <label className="lbl">Próximo cierre</label>
+        <input type="date" value={cierre} onChange={(e) => setCierre(e.target.value)} />
+        {cierre && <div style={{ fontSize: 12, color: T.tenue, marginTop: 5 }}>Cae {dia(cierre)}</div>}
+
+        <label className="lbl" style={{ marginTop: 15 }}>Próximo vencimiento</label>
+        <input type="date" value={vto} onChange={(e) => setVto(e.target.value)} />
+        {vto && <div style={{ fontSize: 12, color: T.tenue, marginTop: 5 }}>Cae {dia(vto)}</div>}
+
+        {vto && cierre && vto < cierre && (
+          <div style={{ marginTop: 12, padding: "10px 12px", background: T.rojoBg, borderRadius: 10,
+                        fontSize: 12.5, color: T.rojo }}>
+            El vencimiento tiene que ser posterior al cierre.
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 14, lineHeight: 1.5 }}>
+          Vienen precargados con una estimación a partir de tu último ciclo, respetando el día
+          de la semana. Si tu resumen dice otra cosa, corregilo.
+        </div>
+
+        <button className="btn" style={{ marginTop: 18, opacity: vto >= cierre ? 1 : 0.45 }}
+          onClick={() => guardar(false)}>
+          {i + 1 < pendientes.length ? "Confirmo y sigo" : "Confirmo estas fechas"}
+        </button>
+        <button className="btn ghost" style={{ marginTop: 10, fontSize: 14.5, fontWeight: 500 }}
+          onClick={() => guardar(true)}>
+          No sé las fechas, usá la estimación
+        </button>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 8, lineHeight: 1.5, textAlign: "center" }}>
+          Si elegís la estimación, la app sigue funcionando y te queda marcada como provisoria
+          hasta que la confirmes con el resumen en la mano.
+        </div>
+        <button onClick={onPostergar}
+          style={{ marginTop: 14, width: "100%", fontSize: 13, color: T.suave }}>
+          Ahora no
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
 function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null }) {
   const esNuevo = !inicial?.id;
@@ -504,6 +840,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     medio: "icbc",
     fecha: hoyISO(),
     tcCompra: "",
+    categoria: "",
+    cuotasRestantes: "",
     montoArs: "",
     ladoAhorro: "usd",
     cuotas: 1,
@@ -574,6 +912,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
       mv.fecha = f.fecha;
     }
     if (f.persona) { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
+    if (f.tipo === "gasto" && f.categoria) mv.categoria = f.categoria;
+    if (f.recurrente && +f.cuotasRestantes > 0)
+      mv.hasta = sumaMes(mesDeHoy(), +f.cuotasRestantes - 1);
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
     if (f.tipo === "ahorro") {
       mv.montoUsd = Math.round(usdFinal * 100) / 100;
@@ -761,6 +1102,23 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         ) : (
           <>
+            <label className="lbl" style={{ marginTop: 16 }}>¿Cuántas cuotas le quedan? (vacío = no termina)</label>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+              {[6, 12, 24, 36].map((n) => (
+                <button key={n} className={"chip" + (+f.cuotasRestantes === n ? " on" : "")}
+                  onClick={() => set("cuotasRestantes", n)}>{n}</button>
+              ))}
+              <input className="num" inputMode="numeric" value={f.cuotasRestantes}
+                onChange={(e) => set("cuotasRestantes", e.target.value.replace(/\D/g, ""))}
+                placeholder="—" style={{ width: 74, textAlign: "center", padding: "8px 6px" }} />
+            </div>
+            {+f.cuotasRestantes > 0 && (
+              <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+                Última en <b>{etiqMesLargo(sumaMes(mesDeHoy(), +f.cuotasRestantes - 1))}</b>.
+                Sirve para préstamos: así la app sabe cuándo dejás de pagarlo.
+              </div>
+            )}
+
             <label className="lbl" style={{ marginTop: 16 }}>Solo en estos meses (vacío = todos)</label>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               {MESN.map((n, i) => (
@@ -773,6 +1131,18 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                     set("meses", [...s].sort((a, b) => a - b));
                   }}
                 >{n}</button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {f.tipo === "gasto" && (
+          <>
+            <label className="lbl" style={{ marginTop: 18 }}>Categoría</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {CATEGORIAS.map((c) => (
+                <button key={c} className={"chip sm" + (f.categoria === c ? " on" : "")}
+                  onClick={() => set("categoria", f.categoria === c ? "" : c)}>{c}</button>
               ))}
             </div>
           </>
@@ -829,12 +1199,16 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
 /* ===================== PANTALLA: HOY ===================== */
 const HORIZONTES = [1, 2, 3, 6, 12, 18, 24];
 
-function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo }) {
+function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
+               historial = [], cerradas = [], revisadas = {}, onRevisar,
+               estimados = [], onAbrirMedios }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [valor, setValor] = useState("");
   const [verSaldados, setVerSaldados] = useState(null);
+  const [agrupar, setAgrupar] = useState("medio");
+  const [verHistorial, setVerHistorial] = useState(false);
   const fin = filas[filas.length - 1];
   const mesAct = mesDeHoy();
   const mesEnCurso = filas[0] && filas[0].mk === mesAct ? filas[0] : null;
@@ -842,145 +1216,8 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
   const pendiente = mesEnCurso ? mesEnCurso.egresos - mesEnCurso.ingresos : 0;
   const gastoPend = pendiente - ahorroMes;
 
-  return (
-    <div style={{ padding: 16, paddingBottom: 30 }}>
-      <div className="card" style={{ padding: 17 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: T.suave }}>
-            {pendiente > 0 ? "Te queda libre" : "Plata disponible hoy"}
-          </span>
-          <button onClick={() => setEditSaldo(!editSaldo)} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
-            {editSaldo ? "Listo" : "Cambiar"}
-          </button>
-        </div>
-        {editSaldo ? (
-          <input
-            className="num" inputMode="decimal" value={cfg.saldoHoy}
-            onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
-            style={{ marginTop: 9, fontSize: 28, fontWeight: 640, textAlign: "right" }}
-          />
-        ) : (
-          <div className="num" style={{ fontSize: 34, fontWeight: 640, marginTop: 3,
-                color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.tinta }}>
-            {plata(cfg.saldoHoy - pendiente)}
-          </div>
-        )}
-        {pendiente > 0 ? (
-          <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.linea}` }}>
-            {[["En la cuenta", cfg.saldoHoy, T.suave],
-              ...(gastoPend > 0 ? [["Te falta pagar este mes", -gastoPend, T.rojo]] : []),
-              ...(ahorroMes > 0 ? [["Vas a pasar a dólares", -ahorroMes, T.ambar]] : [])]
-              .map(([n, v, c]) => (
-                <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
-                  <span style={{ color: T.suave }}>{n}</span>
-                  <span className="num" style={{ color: c }}>{plata(v)}</span>
-                </div>
-              ))}
-            {cfg.saldoHoy - pendiente < 0 && (
-              <div style={{ marginTop: 11, padding: "10px 12px", background: T.rojoBg,
-                            borderRadius: 10, fontSize: 12.5, color: T.rojo, lineHeight: 1.55 }}>
-                Lo que tenés pendiente supera lo que hay en la cuenta. Te faltan{" "}
-                <b className="num">{plata(pendiente - cfg.saldoHoy)}</b>.
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
-            No te queda nada pendiente este mes.
-          </div>
-        )}
-      </div>
+  const mesCard = (f, cerrado) => {
 
-      {(cfg.reservasUsd > 0 || filas.some((x) => x.usdComprados > 0)) && (
-        <div className="card" style={{ padding: 15, marginTop: 12 }}>
-          <div style={{ fontSize: 13, color: T.suave, marginBottom: 8 }}>
-            Patrimonio al cierre de {etiqMesLargo(fin.mk)}
-          </div>
-          {[["Caja en pesos", plata(fin.saldo)],
-            ["Reservas", "U$S " + Math.round(fin.reservasUsd).toLocaleString("es-AR")],
-            ["Total valuado a " + plata(cfg.tc), plata(fin.patrimonio)]].map(([n, v], i) => (
-            <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0",
-                                  borderTop: i === 2 ? `1px solid ${T.linea}` : "none",
-                                  marginTop: i === 2 ? 6 : 0, paddingTop: i === 2 ? 9 : 4 }}>
-              <span style={{ fontSize: 13.5, color: i === 2 ? T.tinta : T.suave,
-                             fontWeight: i === 2 ? 620 : 400 }}>{n}</span>
-              <span className="num" style={{ fontSize: i === 2 ? 15 : 13.5, fontWeight: i === 2 ? 640 : 400 }}>{v}</span>
-            </div>
-          ))}
-          {cfg.tcAuto && (
-            <button
-              onClick={onRefrescar}
-              style={{ marginTop: 11, width: "100%", display: "flex", justifyContent: "space-between",
-                       alignItems: "center", fontSize: 12, color: T.suave, paddingTop: 10,
-                       borderTop: `1px solid ${T.linea}` }}
-            >
-              <span>
-                {estadoCoti === "buscando" ? "Buscando cotización…"
-                 : estadoCoti === "error" && !coti ? "No pude traer la cotización"
-                 : coti ? `Dólar ${coti.fuente} · compra ${plata(coti.compra)} · venta ${plata(coti.venta)}`
-                 : "Cotización en vivo"}
-              </span>
-              <span style={{ color: T.ambar, fontWeight: 600 }}>Actualizar</span>
-            </button>
-          )}
-        </div>
-      )}
-
-      {!movs.length && (
-        <div className="card" style={{ padding: 18, marginTop: 16, background: T.ambarBg, borderColor: "transparent" }}>
-          <div style={{ fontSize: 15, fontWeight: 620, marginBottom: 6 }}>Empecemos</div>
-          <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6 }}>
-            Todavía no cargaste nada. Tocá el <b>+</b> de abajo a la derecha y cargá primero tu sueldo,
-            marcándolo como ingreso que se repite todos los meses. Después sumá tus gastos fijos y
-            lo que tengas en cuotas.
-          </div>
-        </div>
-      )}
-
-      <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
-        <button onClick={onAbrirAjustes} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>Ajustes</button>
-      </div>
-
-      <div style={{ fontSize: 12, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
-        Arranca en {etiqMesLargo(cfg.desdeMes)}. Del mes en curso solo cuenta lo que no marcaste como pagado.
-      </div>
-
-      <div className="scroll" style={{ display: "flex", gap: 7, overflowX: "auto", marginTop: 11, paddingBottom: 3 }}>
-        {HORIZONTES.map((h) => (
-          <button
-            key={h}
-            className={"chip" + (cfg.horizonte === h ? " on" : "")}
-            onClick={() => setCfg({ ...cfg, horizonte: h })}
-          >
-            {h === 1 ? "1 mes" : `${h} meses`}
-          </button>
-        ))}
-      </div>
-
-      {(cfg.horizonte > 1 || Math.round(fin.saldo) !== Math.round(cfg.saldoHoy - pendiente)) && (
-      <div className="card" style={{ padding: 15, marginTop: 13,
-                                     background: fin.saldo < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
-        <div style={{ fontSize: 13, color: T.suave }}>
-          Saldo estimado al cierre de {etiqMesLargo(fin.mk)}
-        </div>
-        <div className="num" style={{ fontSize: 27, fontWeight: 640, marginTop: 2,
-                                      color: fin.saldo < 0 ? T.rojo : T.tinta }}>
-          {plata(fin.saldo)}
-        </div>
-        {(() => {
-          const peor = filas.reduce((a, b) => (b.saldo < a.saldo ? b : a));
-          return peor.saldo < fin.saldo ? (
-            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-              El punto más bajo es {etiqMesLargo(peor.mk)} con <span className="num">{plata(peor.saldo)}</span>.
-            </div>
-          ) : null;
-        })()}
-      </div>
-      )}
-
-      <div style={{ marginTop: 16 }}>
-        {filas.map((f) => {
           const open = abierta === f.mk;
           const max = Math.max(...filas.map((x) => Math.max(x.ingresos, x.egresos)), 1);
           return (
@@ -989,19 +1226,23 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 600 }}>
-                      {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : ""}
+                      {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                      {f.mk === mesAct ? "este mes, en curso" : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
+                      {f.mk === mesAct ? "este mes, en curso"
+                        : cerrado ? "ya pasó"
+                        : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div className="num" style={{ fontSize: 16.5, fontWeight: 640, color: f.resultado < 0 ? T.rojo : T.verde }}>
                       {f.resultado > 0 ? "+" : ""}{corta(f.resultado)}
                     </div>
-                    <div className="num" style={{ fontSize: 12, color: f.saldo < 0 ? T.rojo : T.tenue, marginTop: 2 }}>
-                      queda {corta(f.saldo)}
-                    </div>
+                    {!cerrado && (
+                      <div className="num" style={{ fontSize: 12, color: f.saldo < 0 ? T.rojo : T.tenue, marginTop: 2 }}>
+                        queda {corta(f.saldo)}
+                      </div>
+                    )}
                   </div>
                 </div>
                 {(f.ingresos > 0 || f.egresos > 0) && (
@@ -1099,21 +1340,24 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                 {!saldado && (
                                   <button className="chip sm"
                                     onClick={() => {
-                                      if (it.ahorro) {
-                                        onAjustar(f.mk, mv.id, 0, { usd: it.usd || 0, pesos: monto || 0 });
-                                      } else {
-                                        onAjustar(f.mk, mv.id, 0);
-                                      }
+                                      // Marcar como hecho mueve la caja: un gasto la baja, un ingreso la sube.
+                                      onAjustar(f.mk, mv.id, 0, {
+                                        usd: it.ahorro ? (it.usd || 0) : 0,
+                                        pesos: ingreso ? -(monto || 0) : (monto || 0),
+                                      });
                                       setEditItem(null);
                                     }}>
                                     {it.ahorro ? "Ya la hice" : ingreso ? "Ya lo cobré" : "Ya lo pagué"}
                                   </button>
                                 )}
-                                {it.ahorro && !saldado && (
+                                {!saldado && (
                                   <div style={{ width: "100%", fontSize: 12, color: T.suave,
                                                 marginTop: 6, lineHeight: 1.5 }}>
-                                    Al marcarla, descuento {plata(monto)} de tu caja y sumo
-                                    U$S {Math.round(it.usd)} a tus reservas.
+                                    {it.ahorro
+                                      ? `Al marcarla descuento ${plata(monto)} de tu caja y sumo U$S ${Math.round(it.usd)} a tus reservas.`
+                                      : ingreso
+                                      ? `Al marcarlo sumo ${plata(monto)} a tu caja.`
+                                      : `Al marcarlo descuento ${plata(monto)} de tu caja.`}
                                   </div>
                                 )}
                                 {ajustado && (
@@ -1137,18 +1381,38 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       if (arr.length) grupos.push({ titulo, sub, arr, color,
                         total: arr.reduce((a, b) => a + b.monto, 0) });
                     };
-                    meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
-                    medios.filter((m) => m.id !== "efectivo").forEach((m) =>
-                      meter(m.nombre, "vence el " + m.vto,
-                            pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === m.id)));
-                    meter("Efectivo y débito", "",
-                          pend.filter((i) => !i.ingreso && !i.deuda && !i.ahorro && i.mv.medio === "efectivo"));
-                    meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar);
-                    [...new Set(pend.filter((i) => i.deuda).map((i) => i.mv.persona))].forEach((per) =>
-                      meter("Le transferís a " + per, "", pend.filter((i) => i.deuda && i.mv.persona === per)));
+                    if (agrupar === "categoria") {
+                      meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
+                      const gastos = pend.filter((i) => !i.ingreso);
+                      const cats = [...new Set(gastos.map((i) => i.mv.categoria || "Sin categoría"))]
+                        .sort((a, b) =>
+                          gastos.filter((i) => (i.mv.categoria || "Sin categoría") === b).reduce((x, y) => x + y.monto, 0) -
+                          gastos.filter((i) => (i.mv.categoria || "Sin categoría") === a).reduce((x, y) => x + y.monto, 0));
+                      cats.forEach((c) => meter(c, "", gastos.filter((i) => (i.mv.categoria || "Sin categoría") === c)));
+                    } else {
+                      meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
+                      medios.filter((m) => m.id !== "efectivo").forEach((m) =>
+                        meter(m.nombre, "vence el " + m.vto,
+                              pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === m.id)));
+                      meter("Efectivo y débito", "",
+                            pend.filter((i) => !i.ingreso && !i.deuda && !i.ahorro && i.mv.medio === "efectivo"));
+                      meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar);
+                      [...new Set(pend.filter((i) => i.deuda).map((i) => i.mv.persona))].forEach((per) =>
+                        meter("Le transferís a " + per, "", pend.filter((i) => i.deuda && i.mv.persona === per)));
+                    }
 
                     return (
                       <>
+                        {pend.length > 0 && (
+                          <div style={{ borderTop: `1px solid ${T.linea}`, padding: "10px 15px",
+                                        display: "flex", gap: 7, alignItems: "center" }}>
+                            <span style={{ fontSize: 11.5, color: T.tenue }}>Ver por</span>
+                            {[["medio", "medio de pago"], ["categoria", "categoría"]].map(([v, n]) => (
+                              <button key={v} className={"chip sm" + (agrupar === v ? " on" : "")}
+                                onClick={() => setAgrupar(v)}>{n}</button>
+                            ))}
+                          </div>
+                        )}
                         {grupos.map((g) => (
                           <div key={g.titulo} style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
                             <div style={{ display: "flex", justifyContent: "space-between",
@@ -1190,8 +1454,200 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
               )}
             </div>
           );
-        })}
+  };
+  return (
+    <div style={{ padding: 16, paddingBottom: 30 }}>
+      <div className="card" style={{ padding: 17 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={{ fontSize: 13, color: T.suave }}>
+            {pendiente > 0 ? "Te queda libre" : "Plata disponible hoy"}
+          </span>
+          <button onClick={() => setEditSaldo(!editSaldo)} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+            {editSaldo ? "Listo" : "Cambiar"}
+          </button>
+        </div>
+        {editSaldo ? (
+          <input
+            className="num" inputMode="decimal" value={cfg.saldoHoy}
+            onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
+            style={{ marginTop: 9, fontSize: 28, fontWeight: 640, textAlign: "right" }}
+          />
+        ) : (
+          <div className="num" style={{ fontSize: 34, fontWeight: 640, marginTop: 3,
+                color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.tinta }}>
+            {plata(cfg.saldoHoy - pendiente)}
+          </div>
+        )}
+        {pendiente > 0 ? (
+          <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.linea}` }}>
+            {[["En la cuenta", cfg.saldoHoy, T.suave],
+              ...(gastoPend > 0 ? [["Te falta pagar este mes", -gastoPend, T.rojo]] : []),
+              ...(ahorroMes > 0 ? [["Vas a pasar a dólares", -ahorroMes, T.ambar]] : [])]
+              .map(([n, v, c]) => (
+                <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
+                  <span style={{ color: T.suave }}>{n}</span>
+                  <span className="num" style={{ color: c }}>{plata(v)}</span>
+                </div>
+              ))}
+            {cfg.saldoHoy - pendiente < 0 && (
+              <div style={{ marginTop: 11, padding: "10px 12px", background: T.rojoBg,
+                            borderRadius: 10, fontSize: 12.5, color: T.rojo, lineHeight: 1.55 }}>
+                Lo que tenés pendiente supera lo que hay en la cuenta. Te faltan{" "}
+                <b className="num">{plata(pendiente - cfg.saldoHoy)}</b>.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
+            No te queda nada pendiente este mes.
+          </div>
+        )}
       </div>
+
+      {(cfg.reservasUsd > 0 || filas.some((x) => x.usdComprados > 0)) && (
+        <div className="card" style={{ padding: 15, marginTop: 12 }}>
+          <div style={{ fontSize: 13, color: T.suave, marginBottom: 8 }}>
+            Patrimonio al cierre de {etiqMesLargo(fin.mk)}
+          </div>
+          {[["Caja en pesos", plata(fin.saldo)],
+            ["Reservas", "U$S " + Math.round(fin.reservasUsd).toLocaleString("es-AR")],
+            ["Total valuado a " + plata(cfg.tc), plata(fin.patrimonio)]].map(([n, v], i) => (
+            <div key={n} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0",
+                                  borderTop: i === 2 ? `1px solid ${T.linea}` : "none",
+                                  marginTop: i === 2 ? 6 : 0, paddingTop: i === 2 ? 9 : 4 }}>
+              <span style={{ fontSize: 13.5, color: i === 2 ? T.tinta : T.suave,
+                             fontWeight: i === 2 ? 620 : 400 }}>{n}</span>
+              <span className="num" style={{ fontSize: i === 2 ? 15 : 13.5, fontWeight: i === 2 ? 640 : 400 }}>{v}</span>
+            </div>
+          ))}
+          {cfg.tcAuto && (
+            <button
+              onClick={onRefrescar}
+              style={{ marginTop: 11, width: "100%", display: "flex", justifyContent: "space-between",
+                       alignItems: "center", fontSize: 12, color: T.suave, paddingTop: 10,
+                       borderTop: `1px solid ${T.linea}` }}
+            >
+              <span>
+                {estadoCoti === "buscando" ? "Buscando cotización…"
+                 : estadoCoti === "error" && !coti ? "No pude traer la cotización"
+                 : coti ? `Dólar ${coti.fuente} · compra ${plata(coti.compra)} · venta ${plata(coti.venta)}`
+                 : "Cotización en vivo"}
+              </span>
+              <span style={{ color: T.ambar, fontWeight: 600 }}>Actualizar</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {estimados.length > 0 && (
+        <button onClick={onAbrirMedios} className="card"
+          style={{ width: "100%", textAlign: "left", padding: 14, marginTop: 12,
+                   background: T.ambarBg, borderColor: "transparent" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>
+            {estimados.length === 1 ? "Hay una fecha provisoria" : `Hay ${estimados.length} fechas provisorias`}
+          </div>
+          <div style={{ fontSize: 12.5, color: T.suave, lineHeight: 1.55 }}>
+            {estimados.map((e) => e.m.nombre).filter((v, i, a) => a.indexOf(v) === i).join(", ")}.
+            Cuando tengas el resumen a mano, confirmalas para que las cuotas caigan en el mes correcto.
+          </div>
+        </button>
+      )}
+
+      {cerradas.filter((c) => !revisadas[c.id + "|" + c.paga]).map((c) => (
+        <div key={c.id} className="card" style={{ padding: 15, marginTop: 12,
+              background: T.ambarBg, borderColor: "transparent" }}>
+          <div style={{ fontSize: 14, fontWeight: 620, marginBottom: 5 }}>
+            Cerró {c.nombre}
+          </div>
+          <div style={{ fontSize: 13, color: T.suave, lineHeight: 1.6 }}>
+            El resumen que vas a pagar el {c.vto} de {etiqMesLargo(c.paga)} ya quedó definido.
+            Es buen momento para abrir ese mes y poner los montos reales.
+          </div>
+          <button
+            onClick={() => onRevisar(c.id + "|" + c.paga)}
+            style={{ marginTop: 11, fontSize: 13, color: T.ambar, fontWeight: 600 }}
+          >
+            Listo, ya lo revisé
+          </button>
+        </div>
+      ))}
+
+      {!movs.length && (
+        <div className="card" style={{ padding: 18, marginTop: 16, background: T.ambarBg, borderColor: "transparent" }}>
+          <div style={{ fontSize: 15, fontWeight: 620, marginBottom: 6 }}>Empecemos</div>
+          <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6 }}>
+            Todavía no cargaste nada. Tocá el <b>+</b> de abajo a la derecha y cargá primero tu sueldo,
+            marcándolo como ingreso que se repite todos los meses. Después sumá tus gastos fijos y
+            lo que tengas en cuotas.
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
+        <button onClick={onAbrirAjustes} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>Ajustes</button>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+        Arranca en {etiqMesLargo(cfg.desdeMes)}. Al marcar algo como pagado o cobrado, se ajusta tu caja.
+      </div>
+
+      <div className="scroll" style={{ display: "flex", gap: 7, overflowX: "auto", marginTop: 11, paddingBottom: 3 }}>
+        {HORIZONTES.map((h) => (
+          <button
+            key={h}
+            className={"chip" + (cfg.horizonte === h ? " on" : "")}
+            onClick={() => setCfg({ ...cfg, horizonte: h })}
+          >
+            {h === 1 ? "1 mes" : `${h} meses`}
+          </button>
+        ))}
+      </div>
+
+      {(cfg.horizonte > 1 || Math.round(fin.saldo) !== Math.round(cfg.saldoHoy - pendiente)) && (
+      <div className="card" style={{ padding: 15, marginTop: 13,
+                                     background: fin.saldo < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
+        <div style={{ fontSize: 13, color: T.suave }}>
+          Saldo estimado al cierre de {etiqMesLargo(fin.mk)}
+        </div>
+        <div className="num" style={{ fontSize: 27, fontWeight: 640, marginTop: 2,
+                                      color: fin.saldo < 0 ? T.rojo : T.tinta }}>
+          {plata(fin.saldo)}
+        </div>
+        {(() => {
+          const peor = filas.reduce((a, b) => (b.saldo < a.saldo ? b : a));
+          return peor.saldo < fin.saldo ? (
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+              El punto más bajo es {etiqMesLargo(peor.mk)} con <span className="num">{plata(peor.saldo)}</span>.
+            </div>
+          ) : null;
+        })()}
+      </div>
+      )}
+
+      <div style={{ marginTop: 16 }}>
+        {filas.map((f) => mesCard(f, false))}
+      </div>
+
+      {historial.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <button
+            onClick={() => setVerHistorial(!verHistorial)}
+            style={{ width: "100%", padding: "13px 0", fontSize: 13.5, color: T.ambar, fontWeight: 600 }}
+          >
+            {verHistorial ? "Ocultar los meses cerrados" : "Ver los meses que ya cerraron"}
+          </button>
+          {verHistorial && (
+            <>
+              <div style={{ fontSize: 12, color: T.suave, lineHeight: 1.5, marginBottom: 11 }}>
+                Lo que pasó en los últimos {historial.length} meses, según lo que tenés cargado.
+                No muestro saldo porque solo conozco el de hoy.
+              </div>
+              {historial.slice().reverse().map((f) => mesCard(f, true))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1222,10 +1678,14 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
 
   const desc = (m) => {
     const p = [];
-    if (m.recurrente) p.push(m.meses?.length ? `solo ${m.meses.map((i) => MESN[i - 1]).join(", ")}` : "todos los meses");
+    if (m.recurrente) {
+      p.push(m.meses?.length ? `solo ${m.meses.map((i) => MESN[i - 1]).join(", ")}` : "todos los meses");
+      if (m.hasta) p.push(`hasta ${etiqMes(m.hasta)}`);
+    }
     else if ((m.cuotas || 1) > 1) p.push(`${m.cuotas} cuotas desde ${etiqMes(m.mesInicio)}`);
     else p.push(etiqMes(m.mesInicio));
     if (m.persona) p.push(`${m.persona} ${Math.round(m.pct * 100)}%`);
+    if (m.categoria) p.push(m.categoria);
     return p.join(" · ");
   };
 
@@ -1542,7 +2002,7 @@ function Personas({ filas }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onCerrar }) {
   const [texto, setTexto] = useState("");
   const [modo, setModo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -1660,7 +2120,12 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
           </div>
         </div>
 
-        <div style={{ marginTop: 28, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Respaldo</div>
+        <button className="btn ghost" style={{ marginBottom: 20, fontSize: 14.5, fontWeight: 500 }}
+          onClick={onAbrirMedios}>
+          Mis medios de pago ({medios.length})
+        </button>
+
+        <div style={{ marginTop: 8, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Respaldo</div>
         <div style={{ fontSize: 12, color: T.suave, marginBottom: 12, lineHeight: 1.5 }}>
           Tus datos viven solo en este navegador. Si no abrís la app por más de una semana, iOS puede borrarlos.
           Exportá cada tanto y guardate el texto en Notas.
@@ -1743,8 +2208,8 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
-const SEED_VERSION = 5;
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {}, aplicados: {} };
+const SEED_VERSION = 6;
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -1757,7 +2222,8 @@ export default function App() {
   const [cargando, setCargando] = useState(true);
   const [editando, setEditando] = useState(null);
   const [verAjustes, setVerAjustes] = useState(false);
-  const medios = MEDIOS_INI;
+  const [verMedios, setVerMedios] = useState(false);
+  const medios = (cfg.medios && cfg.medios.length) ? cfg.medios : MEDIOS_INI;
 
   // Sesion
   useEffect(() => {
@@ -1916,6 +2382,11 @@ export default function App() {
     setCfgRaw(c); setMovs(n); persistir(c, n);
     setEditando(null);
   };
+  const guardarMedios = (lista) => {
+    // Nunca dejamos la app sin medios de pago
+    const l = lista.length ? lista : MEDIOS_INI;
+    setCfg({ ...cfg, medios: l });
+  };
   const reiniciar = () => {
     const mk = mesDeHoy();
     const c = { ...CFG_INI, saldoHoy: cfg.saldoHoy, tc: cfg.tc, horizonte: cfg.horizonte,
@@ -1967,6 +2438,17 @@ export default function App() {
     () => proyectar({ ...cfgTC, desdeMes: desde }, movs, medios, cfg.horizonte, null),
     [cfgTC, movs, medios, desde, cfg.horizonte]
   );
+
+  // Meses ya cerrados: se calculan igual, pero sin saldo porque solo conocemos el de hoy.
+  const historial = useMemo(() => {
+    const n = 6;
+    return proyectar({ ...cfgTC, saldoHoy: 0, desdeMes: sumaMes(desde, -n) }, movs, medios, n, null);
+  }, [cfgTC, movs, medios, desde]);
+
+  // Tarjetas cuyo ultimo ciclo real ya cerro: hay que pedir el proximo.
+  const sinActualizar = useMemo(() => tarjetasSinActualizar(medios, hoyISO()), [medios]);
+  const estimados = useMemo(() => ciclosEstimados(medios), [medios]);
+  const [postergado, setPostergado] = useState(false);
   const personas = useMemo(() => [...new Set(movs.filter((m) => m.persona).map((m) => m.persona))], [movs]);
 
   if (sesion === undefined || (sesion && cargando))
@@ -2015,6 +2497,10 @@ export default function App() {
           cfg={{ ...cfgTC, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
           onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
+          historial={historial} cerradas={[]} estimados={estimados}
+          onAbrirMedios={() => setVerMedios(true)}
+          revisadas={cfg.revisadas || {}}
+          onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
@@ -2058,6 +2544,15 @@ export default function App() {
           onGuardar={guardarMov} onBorrar={(id) => borrarVarios([id])} onCerrar={() => setEditando(null)}
         />
       )}
+      {sinActualizar.length > 0 && !postergado && (
+        <ActualizarCiclos
+          pendientes={sinActualizar} medios={medios}
+          onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
+        />
+      )}
+      {verMedios && (
+        <Medios medios={medios} movs={movs} onGuardar={guardarMedios} onCerrar={() => setVerMedios(false)} />
+      )}
       {verCuenta && (
         <Cuenta
           perfil={perfil} estado={estado} onCerrar={() => setVerCuenta(false)}
@@ -2068,6 +2563,7 @@ export default function App() {
         <Ajustes
           cfg={cfg} setCfg={setCfg} medios={medios} movs={movs}
           onBorrarVarios={borrarVarios} onReiniciar={reiniciar} onImportar={importar}
+          onAbrirMedios={() => { setVerAjustes(false); setVerMedios(true); }}
           onCerrar={() => setVerAjustes(false)}
         />
       )}
