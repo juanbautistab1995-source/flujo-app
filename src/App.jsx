@@ -1231,6 +1231,115 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
 /* ===================== PANTALLA: HOY ===================== */
 const HORIZONTES = [1, 2, 3, 6, 12, 18, 24];
 
+
+/* ===================== LA CURVA DEL SALDO ===================== */
+// Lo unico que el Excel mostraba bien y la app no: la forma de los proximos meses.
+function Curva({ filas, onTocar }) {
+  if (filas.length < 2) return null;
+  const W = 320, H = 116, pl = 6, pr = 6, pt = 14, pb = 22;
+  const vals = filas.map((f) => f.saldo);
+  const hi = Math.max(...vals, 0), lo = Math.min(...vals, 0);
+  const rango = hi - lo || 1;
+  const x = (i) => pl + (i * (W - pl - pr)) / (filas.length - 1);
+  const y = (v) => pt + ((hi - v) / rango) * (H - pt - pb);
+  const y0 = y(0);
+  const linea = filas.map((f, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.saldo).toFixed(1)}`).join(" ");
+  const area = `${linea} L${x(filas.length - 1).toFixed(1)},${y0.toFixed(1)} L${x(0).toFixed(1)},${y0.toFixed(1)} Z`;
+  const hayRojo = vals.some((v) => v < 0);
+
+  return (
+    <div style={{ marginTop: 13 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}
+           role="img" aria-label="Cómo evoluciona tu saldo mes a mes">
+        <defs>
+          <linearGradient id="gv" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={T.verde} stopOpacity="0.22" />
+            <stop offset="100%" stopColor={T.verde} stopOpacity="0.02" />
+          </linearGradient>
+          <clipPath id="arriba"><rect x="0" y="0" width={W} height={y0} /></clipPath>
+          <clipPath id="abajo"><rect x="0" y={y0} width={W} height={H - y0} /></clipPath>
+        </defs>
+
+        <path d={area} fill="url(#gv)" clipPath="url(#arriba)" />
+        {hayRojo && <path d={area} fill={T.rojo} fillOpacity="0.13" clipPath="url(#abajo)" />}
+
+        {/* la línea del cero: cruzarla es la noticia */}
+        <line x1={pl} y1={y0} x2={W - pr} y2={y0} stroke={hayRojo ? T.rojo : T.eje}
+              strokeWidth="1" strokeDasharray={hayRojo ? "none" : "3 3"} opacity={hayRojo ? 0.5 : 1} />
+
+        <path d={linea} fill="none" stroke={T.verde} strokeWidth="2.2"
+              strokeLinejoin="round" strokeLinecap="round" clipPath="url(#arriba)" />
+        {hayRojo && <path d={linea} fill="none" stroke={T.rojo} strokeWidth="2.2"
+              strokeLinejoin="round" strokeLinecap="round" clipPath="url(#abajo)" />}
+
+        {filas.map((f, i) => (
+          <g key={f.mk} onClick={() => onTocar && onTocar(f.mk)} style={{ cursor: "pointer" }}>
+            <circle cx={x(i)} cy={y(f.saldo)} r="3.4" fill={T.card}
+                    stroke={f.saldo < 0 ? T.rojo : T.verde} strokeWidth="2" />
+            <rect x={x(i) - 14} y="0" width="28" height={H} fill="transparent" />
+            {(i === 0 || i === filas.length - 1 || f.saldo === Math.min(...vals)) && (
+              <text x={Math.min(W - 26, Math.max(16, x(i)))} y={H - 6} fontSize="9.5"
+                    fill={T.tenue} textAnchor="middle">{etiqMes(f.mk)}</text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+
+/* ===================== PRÓXIMOS VENCIMIENTOS ===================== */
+function Vencimientos({ medios }) {
+  const hoy = hoyISO();
+  const prox = medios
+    .filter((m) => m.id !== "efectivo")
+    .map((m) => {
+      const cs = (m.ciclos || []).slice().sort((a, b) => (a.vto < b.vto ? -1 : 1));
+      let c = cs.find((x) => x.vto >= hoy);
+      if (!c && cs.length) { let u = cs[cs.length - 1]; for (let i = 0; i < 24 && u.vto < hoy; i++) u = siguienteCiclo(u); c = u; }
+      return c ? { m, c } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.c.vto < b.c.vto ? -1 : 1));
+  if (!prox.length) return null;
+
+  const dias = (iso) => Math.round((new Date(iso + "T12:00:00") - new Date(hoy + "T12:00:00")) / 86400000);
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Próximos vencimientos</div>
+      <div className="card" style={{ overflow: "hidden" }}>
+        {prox.map(({ m, c }, i) => {
+          const d = dias(c.vto);
+          const urgente = d <= 7;
+          return (
+            <div key={m.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "12px 15px", borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 560 }}>{m.nombre}</div>
+                <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
+                  cerró el {c.cierre.split("-").reverse().slice(0, 2).join("/")}
+                  {c.estimado ? " · fecha estimada" : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="num" style={{ fontSize: 14, fontWeight: 600,
+                      color: urgente ? T.rojo : T.tinta }}>
+                  {c.vto.split("-").reverse().slice(0, 2).join("/")}
+                </div>
+                <div style={{ fontSize: 11.5, color: urgente ? T.rojo : T.tenue, marginTop: 2 }}>
+                  {d === 0 ? "vence hoy" : d === 1 ? "mañana" : `en ${d} días`}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios }) {
@@ -1652,33 +1761,38 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         ))}
       </div>
 
-      {(cfg.horizonte > 1 || Math.round(fin.saldo) !== Math.round(cfg.saldoHoy - pendiente)) && (
-      <div className="card" style={{ padding: 15, marginTop: 13,
-                                     background: fin.saldo < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
-        <div style={{ fontSize: 13, color: T.suave }}>
-          Saldo estimado al cierre de {etiqMesLargo(fin.mk)}
+      {cfg.horizonte > 1 && (
+        <div className="card" style={{ padding: "15px 13px 9px", marginTop: 13 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                        padding: "0 3px" }}>
+            <span style={{ fontSize: 13, color: T.suave }}>
+              Al cierre de {etiqMesLargo(fin.mk)}
+            </span>
+            <span className="plata num" style={{ fontSize: 21,
+                  color: fin.saldo < 0 ? T.rojo : T.tinta }}>{plata(fin.saldo)}</span>
+          </div>
+          <Curva filas={filas} onTocar={(mk) => setAbierta(abierta === mk ? null : mk)} />
+          <div style={{ fontSize: 12, color: T.suave, padding: "0 3px 6px", lineHeight: 1.5 }}>
+            {(() => {
+              const peor = filas.reduce((a, b) => (b.saldo < a.saldo ? b : a));
+              if (peor.saldo < 0) return `Te vas abajo de cero en ${etiqMesLargo(peor.mk)}. Tocá el mes para ver por qué.`;
+              const primero = filas[0].saldo;
+              if (fin.saldo > primero * 1.25) return "Venís mejorando: cada mes te queda más.";
+              if (fin.saldo < primero * 0.75) return `Vas para abajo. Lo más ajustado es ${etiqMesLargo(peor.mk)}.`;
+              return "Te mantenés parejo en todo el período.";
+            })()}
+          </div>
         </div>
-        <div className="num" style={{ fontSize: 27, fontWeight: 640, marginTop: 2,
-                                      color: fin.saldo < 0 ? T.rojo : T.tinta }}>
-          {plata(fin.saldo)}
-        </div>
-        {(() => {
-          const peor = filas.reduce((a, b) => (b.saldo < a.saldo ? b : a));
-          return peor.saldo < fin.saldo ? (
-            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-              El punto más bajo es {etiqMesLargo(peor.mk)} con <span className="num">{plata(peor.saldo)}</span>.
-            </div>
-          ) : null;
-        })()}
-      </div>
       )}
 
       <div className="eje" style={{ marginTop: 18 }}>
         {filas.map((f) => mesCard(f, false))}
       </div>
 
+      <Vencimientos medios={medios} />
+
       {historial.length > 0 && (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 18 }}>
           <button
             onClick={() => setVerHistorial(!verHistorial)}
             style={{ width: "100%", padding: "13px 0", fontSize: 13.5, color: T.ambar, fontWeight: 600 }}
