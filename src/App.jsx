@@ -249,7 +249,7 @@ function cicloTentativo(m, desdeISO) {
 }
 
 function cicloParaFecha(m, fechaISO) {
-  const cs = ciclosDe(m);
+  const cs = ciclosDe(m).filter((c) => c && c.cierre && c.vto);
   if (!cs.length) return null;
   for (const c of cs) if (fechaISO <= c.cierre) return c;
   let ult = cs[cs.length - 1];
@@ -261,8 +261,9 @@ function cicloParaFecha(m, fechaISO) {
 }
 
 function mesDePago(fecha, medioId, medios) {
-  const m = medios.find((x) => x.id === medioId);
-  const d = new Date(fecha + "T12:00:00");
+  const m = (medios || []).find((x) => x.id === medioId);
+  const d = new Date((fecha || "") + "T12:00:00");
+  if (isNaN(d.getTime())) return mesDeHoy();
   if (!m || m.id === "efectivo") return d.toISOString().slice(0, 7);
 
   const c = cicloParaFecha(m, fecha);
@@ -296,9 +297,10 @@ function ciclosEstimados(medios) {
 
 // Cuánto pesa un movimiento en un mes dado (0 si no aplica).
 function montoEnMes(mv, mk, tc) {
-  const base = mv.tipo === "ahorro" ? (mv.montoUsd || 0) * (mv.tcCompra || tc)
-             : mv.moneda === "USD" ? (mv.montoUsd || 0) * tc
-             : mv.monto || 0;
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : parseFloat(v) || 0);
+  const base = mv.tipo === "ahorro" ? num(mv.montoUsd) * (num(mv.tcCompra) || tc)
+             : mv.moneda === "USD" ? num(mv.montoUsd) * tc
+             : num(mv.monto);
   if (!base) return 0;
   if (mv.recurrente) {
     if (mv.meses && mv.meses.length && !mv.meses.includes(+mk.slice(5, 7))) return 0;
@@ -306,14 +308,16 @@ function montoEnMes(mv, mk, tc) {
     if (mv.hasta && idxMes(mk) > idxMes(mv.hasta)) return 0;
     return base;
   }
-  const n = mv.cuotas || 1;
+  // Sin mes de inicio no se puede ubicar: lo ignoramos en vez de romper la app.
+  if (!mv.mesInicio || !/^\d{4}-\d{2}$/.test(mv.mesInicio)) return 0;
+  const n = Math.max(1, mv.cuotas || 1);
   const k = distMes(mv.mesInicio, mk);
   // `monto` es el TOTAL de la compra; el motor lo reparte en las cuotas.
   return k >= 0 && k < n ? base / n : 0;
 }
 
 function nroCuota(mv, mk) {
-  if (mv.recurrente) return null;
+  if (mv.recurrente || !mv.mesInicio) return null;
   return distMes(mv.mesInicio, mk) + 1;
 }
 
