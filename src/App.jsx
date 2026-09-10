@@ -37,6 +37,12 @@ const CSS = `
   .bz .nodo.ahora::before { border-color: ${T.tinta}; background: ${T.tinta};
         box-shadow: 0 0 0 4px ${T.papel}; }
   .bz .traza { height: 3px; border-radius: 3px; background: ${T.eje}; }
+  .bz .sube { animation: sube .45s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes sube { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+  .bz .ritmo { height: 7px; border-radius: 99px; background: rgba(234,240,236,.16); overflow: hidden; }
+  .bz .ritmo > i { display: block; height: 100%; border-radius: 99px;
+        animation: crece .6s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes crece { from { transform: scaleX(0); transform-origin: left; } to { transform: none; } }
   @media (prefers-reduced-motion: reduce) { .bz * { animation: none !important; transition: none !important; } }
   .bz button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; padding: 0; }
   .bz input, .bz select, .bz textarea {
@@ -53,7 +59,10 @@ const CSS = `
   .bz .lbl { font-size: 12.5px; color: ${T.suave}; margin-bottom: 6px; display: block; }
   .bz .card { background: ${T.card}; border: 1px solid ${T.linea}; border-radius: 15px; }
   /* El héroe no es una tarjeta más: no tiene borde y flota apenas */
-  .bz .cima { background: ${T.card}; border-radius: 19px; box-shadow: 0 1px 2px rgba(14,43,37,.05),
+  /* El héroe es la única superficie oscura: crea el punto de tensión de la pantalla */
+  .bz .cima { background: ${T.tinta}; color: #EAF0EC; border-radius: 21px;
+        box-shadow: 0 10px 30px -14px rgba(14,43,37,.55); }
+  .bz .cimaClara { background: ${T.card}; border-radius: 19px; box-shadow: 0 1px 2px rgba(14,43,37,.05),
         0 8px 24px -12px rgba(14,43,37,.16); }
   /* Los avisos van embebidos, no en tarjeta con borde */
   .bz .aviso { border-radius: 13px; padding: 13px 15px; font-size: 13px; line-height: 1.55; }
@@ -903,7 +912,8 @@ function Rapido({ medios, onGuardar, onDetallado, onCerrar }) {
     if (n <= 0) return;
     onGuardar({
       id: "m" + Date.now(), tipo: "gasto", detalle: detalle.trim() || "Gasto",
-      monto: n, moneda: "ARS", medio, cuotas, mesInicio: mesDePago(hoyISO(), medio, medios),
+      monto: n, moneda: "ARS", medio, cuotas, fecha: hoyISO(),
+      mesInicio: mesDePago(hoyISO(), medio, medios),
       categoria: adivinarCategoria(detalle), recurrente: false, pagadoPor: "yo",
     });
     onCerrar();
@@ -1738,16 +1748,24 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
             </div>
           );
   };
+  const saludo = (() => {
+    const h = new Date().getHours();
+    return h < 6 ? "Buenas noches" : h < 13 ? "Buen día" : h < 20 ? "Buenas tardes" : "Buenas noches";
+  })();
+
   return (
     <div style={{ padding: 16, paddingBottom: 30 }}>
-      <div className="cima" style={{ padding: "19px 19px 17px" }}>
+      <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 13 }}>
+        {saludo}{cfg.nombre ? `, ${cfg.nombre.split(" ")[0]}` : ""}
+      </div>
+      <div className="cima sube" style={{ padding: "20px 20px 18px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span className="eyebrow">
+          <span style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>
             {pendiente > 0 ? "Te queda libre este mes" : "Tenés disponible"}
           </span>
           <button onClick={() => setEditSaldo(!editSaldo)}
-            style={{ fontSize: 13, color: T.ambar, fontWeight: 620 }}>
-            {editSaldo ? "Listo" : "Ajustar saldo"}
+            style={{ fontSize: 13, color: "rgba(234,240,236,.62)", fontWeight: 560 }}>
+            {editSaldo ? "Listo" : "Ajustar"}
           </button>
         </div>
 
@@ -1755,50 +1773,74 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           <input
             className="num" inputMode="decimal" value={cfg.saldoHoy}
             onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
-            style={{ marginTop: 11, fontSize: 30, fontWeight: 660, textAlign: "right" }}
+            style={{ marginTop: 11, fontSize: 29, fontWeight: 660, textAlign: "right",
+                     background: "rgba(255,255,255,.09)", border: "none", color: "#EAF0EC" }}
           />
         ) : (
-          <div className="plata hero" style={{ marginTop: 7,
-                color: cfg.saldoHoy - pendiente < 0 ? T.rojo : T.tinta }}>
+          <div className="plata hero" style={{ marginTop: 6,
+                color: cfg.saldoHoy - pendiente < 0 ? "#F0A896" : "#FFFFFF" }}>
             {plata(cfg.saldoHoy - pendiente)}
           </div>
         )}
 
-        {/* Plata por día: el número con el que uno realmente decide */}
         {(() => {
           const libre = cfg.saldoHoy - pendiente;
-          const hoy = new Date();
+          const hoy = new Date(), hISO = hoyISO();
           const dc = cfg.diaCobro || 28;
           const prox = new Date(hoy.getFullYear(), hoy.getMonth(), dc, 12);
           if (prox <= hoy) prox.setMonth(prox.getMonth() + 1);
           const faltan = Math.max(1, Math.round((prox - hoy) / 86400000));
-          const porDia = Math.floor(libre / faltan);
+          const porDia = Math.max(0, Math.floor(libre / faltan));
+
+          // Lo que ya gastaste hoy: el gancho para abrir la app todos los días
+          const gastadoHoy = movs
+            .filter((m) => m.fecha === hISO && m.tipo === "gasto" && !m.recurrente)
+            .reduce((a, m) => a + (+m.monto || 0) / Math.max(1, m.cuotas || 1), 0);
+          const usado = porDia > 0 ? Math.min(100, (gastadoHoy / porDia) * 100) : 0;
+          const pasado = porDia > 0 && gastadoHoy > porDia;
 
           if (libre < 0) return (
-            <div style={{ fontSize: 13.5, color: T.rojo, marginTop: 9, lineHeight: 1.5, fontWeight: 560 }}>
+            <div style={{ fontSize: 13.5, color: "#F0A896", marginTop: 10, lineHeight: 1.5 }}>
               Te faltan {plata(-libre)} para cubrir lo que queda del mes.
             </div>
           );
+
           return (
-            <div style={{ marginTop: 11, display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
-              <span className="plata num" style={{ fontSize: 19, color: T.verde }}>{plata(porDia)}</span>
-              <span style={{ fontSize: 13.5, color: T.suave }}>
-                por día durante {faltan} {faltan === 1 ? "día" : "días"}, hasta que cobres
-              </span>
+            <div style={{ marginTop: 15 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                            marginBottom: 7 }}>
+                <span style={{ fontSize: 13, color: "rgba(234,240,236,.72)" }}>
+                  Hoy gastaste <b className="num" style={{ color: "#fff" }}>{plata(gastadoHoy)}</b>
+                </span>
+                <span className="num" style={{ fontSize: 12.5, color: "rgba(234,240,236,.55)" }}>
+                  de {plata(porDia)}
+                </span>
+              </div>
+              <div className="ritmo">
+                <i style={{ width: `${Math.max(2, usado)}%`,
+                     background: pasado ? "#E88B72" : "#7FD6A8" }} />
+              </div>
+              <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)", marginTop: 8, lineHeight: 1.5 }}>
+                {pasado
+                  ? `Te pasaste ${plata(gastadoHoy - porDia)} de tu día. Compensalo mañana.`
+                  : gastadoHoy > 0
+                    ? `Te quedan ${plata(porDia - gastadoHoy)} para hoy · faltan ${faltan} días para cobrar`
+                    : `${plata(porDia)} por día durante ${faltan} días, hasta que cobres`}
+              </div>
             </div>
           );
         })()}
 
         {pendiente > 0 && !editSaldo && (
-          <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${T.linea}` }}>
-            {[["En la cuenta", cfg.saldoHoy, T.tinta],
-              ...(gastoPend > 0 ? [["Falta pagar", -gastoPend, T.rojo]] : []),
-              ...(ahorroMes > 0 ? [["Pasás a dólares", -ahorroMes, T.ambar]] : [])]
-              .map(([n, v, c]) => (
+          <div style={{ marginTop: 15, paddingTop: 13,
+                        borderTop: "1px solid rgba(234,240,236,.14)" }}>
+            {[["En la cuenta", cfg.saldoHoy], ...(gastoPend > 0 ? [["Falta pagar", -gastoPend]] : []),
+              ...(ahorroMes > 0 ? [["Pasás a dólares", -ahorroMes]] : [])]
+              .map(([n, v]) => (
                 <div key={n} style={{ display: "flex", justifyContent: "space-between",
-                                      fontSize: 13.5, marginTop: 5 }}>
-                  <span style={{ color: T.suave }}>{n}</span>
-                  <span className="num" style={{ color: c, fontWeight: 560 }}>{plata(v)}</span>
+                                      fontSize: 13, marginTop: 5 }}>
+                  <span style={{ color: "rgba(234,240,236,.62)" }}>{n}</span>
+                  <span className="num" style={{ color: "#EAF0EC" }}>{plata(v)}</span>
                 </div>
               ))}
           </div>
@@ -2513,7 +2555,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
