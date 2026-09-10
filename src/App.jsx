@@ -335,13 +335,48 @@ function rTotal(t) {
   return m2 ? rnum(m2[1]) : null;
 }
 
+// La TNA de financiación y el pago mínimo están en el resumen: son la base del comparador.
+// Cuidado: los resúmenes traen la tasa en pesos Y la de dólares, y hay que quedarse con la de pesos.
+function rFinanciero(t) {
+  const lineas = t.split("\n");
+  const enDolares = (l) => /U\$S|USD|d[oó]lar/i.test(l);
+
+  // Juntamos todas las TNA que NO estén en un contexto de dólares y nos quedamos con la mayor:
+  // en Argentina la tasa en pesos siempre supera holgadamente a la de dólares.
+  const tasas = [];
+  lineas.forEach((l) => {
+    [...l.matchAll(/TNA\s*(?:Fija)?\s*:?\s*\$?\s*([\d.]+,\d+)/gi)].forEach((m) => {
+      const antes = l.slice(0, m.index);
+      const desp = l.slice(m.index, m.index + 40);
+      if (!enDolares(desp) && !/U\$S\s*$/.test(antes)) tasas.push(rnum(m[1]));
+    });
+  });
+  const tna = tasas.length ? Math.max(...tasas.filter((x) => x > 0 && x < 400)) : null;
+
+  const buscar = (re) => {
+    for (const l of lineas) {
+      const m = l.match(re);
+      if (m) return rnum(m[1]);
+    }
+    return null;
+  };
+  return {
+    tna: tna || null,
+    tem: tna ? Math.round((Math.pow(1 + tna / 100 / 12, 1) - 1) * 100 * 1000) / 1000 : null,
+    pagoMinimo: buscar(/PAGO\s*M[IÍ]NIMO[^\d]{0,20}([\d.]+,\d{2})/i)
+              || buscar(/PAGO MINIMO\s+([\d.]+,\d{2})/i),
+    saldo: buscar(/LA SUMA DE\s*\$?\s*([\d.]+,\d{2})/i)
+         || buscar(/SALDO\s*ACTUAL[^\d]{0,20}([\d.]+,\d{2})/i),
+  };
+}
+
 function leerResumen(texto) {
   const em = rEmisor(texto);
   const movs = rMovs(texto, em.molde);
   const dec = rTotal(texto);
   const suma = movs.reduce((a, m) => a + m.monto, 0);
   return {
-    ...em, ciclos: rCiclos(texto), movs,
+    ...em, ciclos: rCiclos(texto), movs, fin: rFinanciero(texto),
     control: { declarado: dec, sumado: Math.round(suma * 100) / 100,
                dif: dec ? Math.round((suma - dec) * 100) / 100 : null },
   };
@@ -349,6 +384,129 @@ function leerResumen(texto) {
 
 
 
+
+/* ===================== COTIZACIONES EN VIVO ===================== */
+// Dos APIs públicas gratuitas, sin clave:
+//  · ArgentinaDatos (MIT) → tasas de plazo fijo de cada banco, reportadas al BCRA
+//  · data912 → precios de acciones, CEDEARs y bonos del mercado argentino
+const API_TASAS = "https://api.argentinadatos.com/v1/finanzas/tasas/plazoFijo";
+const API_MERCADO = {
+  accion: "https://data912.com/live/arg_stocks",
+  cedear: "https://data912.com/live/arg_cedears",
+  bono:   "https://data912.com/live/arg_bonds",
+};
+
+// Cache en el navegador: las cotizaciones no cambian tanto como para pedirlas a cada rato
+function cacheLeer(clave, minutos) {
+  try {
+    const raw = localStorage.getItem("coti:" + clave);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (Date.now() - d.t >= minutos * 60000) return null;
+    return d.v;
+  } catch (e) { return null; }
+}
+function cacheGuardar(clave, v) {
+  try { localStorage.setItem("coti:" + clave, JSON.stringify({ t: Date.now(), v })); } catch (e) { /* lleno */ }
+}
+
+async function traerTasas() {
+  const cache = cacheLeer("tasas", 720);          // 12 h: las tasas se mueven poco
+  if (cache) return cache;
+  const r = await fetch(API_TASAS);
+  if (!r.ok) throw new Error("tasas");
+  const d = await r.json();
+  const lista = (Array.isArray(d) ? d : [])
+    .filter((x) => x && x.entidad && (x.tnaClientes || x.tnaNoClientes))
+    .map((x) => ({
+      entidad: x.entidad,
+      // La API devuelve la TNA en tanto por uno (0,32) o en porcentaje (32) según la fuente
+      tna: normTna(x.tnaClientes || x.tnaNoClientes),
+    }))
+    .filter((x) => x.tna > 0 && x.tna < 300)
+    .sort((a, b) => b.tna - a.tna);
+  cacheGuardar("tasas", lista);
+  return lista;
+}
+const normTna = (v) => { const n = +v || 0; return n > 0 && n < 3 ? n * 100 : n; };
+
+async function traerPrecios(tipo) {
+  const url = API_MERCADO[tipo];
+  if (!url) return {};
+  const cache = cacheLeer("mkt:" + tipo, 30);     // 30 min
+  if (cache) return cache;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("mercado");
+  const d = await r.json();
+  const mapa = {};
+  (Array.isArray(d) ? d : []).forEach((x) => {
+    const t = (x.symbol || x.ticker || "").toUpperCase();
+    const p = +x.c || +x.close || +x.px_ask || +x.last || 0;
+    if (t && p > 0) mapa[t] = p;
+  });
+  cacheGuardar("mkt:" + tipo, mapa);
+  return mapa;
+}
+
+/* ===================== INVERSIONES ===================== */
+const TIPOS_INV = [
+  { id: "plazofijo", nombre: "Plazo fijo",  moneda: "ARS", rinde: true },
+  { id: "remunerada", nombre: "Cuenta remunerada", moneda: "ARS", rinde: true },
+  { id: "accion",    nombre: "Acción",      moneda: "ARS" },
+  { id: "cedear",    nombre: "CEDEAR",      moneda: "ARS" },
+  { id: "bono",      nombre: "Bono",        moneda: "ARS" },
+  { id: "fci",       nombre: "Fondo común", moneda: "ARS" },
+  { id: "cripto",    nombre: "Cripto",      moneda: "USD" },
+  { id: "dolares",   nombre: "Dólares",     moneda: "USD" },
+];
+
+// Papeles que se operan en el mercado argentino, para no tipear a mano
+const PAPELES = {
+  accion: ["GGAL", "YPFD", "PAMP", "BMA", "TXAR", "ALUA", "CEPU", "EDN", "LOMA", "SUPV",
+           "TGSU2", "TGNO4", "CRES", "BBAR", "COME", "TRAN", "VALO", "MIRG", "IRSA", "BYMA",
+           "CVH", "HARG", "METR", "AGRO", "CADO"],
+  cedear: ["AAPL", "TSLA", "MSFT", "AMZN", "GOOGL", "NVDA", "META", "NFLX", "KO", "MELI",
+           "DISN", "JNJ", "PG", "WMT", "XOM", "BABA", "SPY", "QQQ", "AMD", "PYPL", "SBUX",
+           "V", "MA", "JPM", "BRKB", "PFE", "INTC", "GOLD", "VIST"],
+  bono:   ["AL30", "AL35", "AL41", "GD30", "GD35", "GD38", "GD41", "GD46", "AE38",
+           "TX26", "TX28", "TZX26", "TZX27", "BPOA7", "BPOB7", "BPOC7", "TO26", "PBA25"],
+  cripto: ["BTC", "ETH", "USDT", "USDC", "DAI", "SOL", "BNB", "ADA", "DOGE", "XRP"],
+};
+
+// Interés simple devengado: el plazo fijo argentino no capitaliza dentro del plazo
+function valorInversion(iv, tc) {
+  const cant = +iv.cantidad || 0;
+  if (iv.tipo === "plazofijo" || iv.tipo === "remunerada") {
+    const capital = cant;
+    const desde = iv.fecha ? new Date(iv.fecha + "T12:00:00") : null;
+    const dias = desde ? Math.max(0, Math.floor((Date.now() - desde) / 86400000)) : 0;
+    const tope = iv.tipo === "plazofijo" && iv.vence
+      ? Math.max(0, Math.floor((new Date(iv.vence + "T12:00:00") - desde) / 86400000))
+      : dias;
+    const d = Math.min(dias, tope || dias);
+    return capital * (1 + ((+iv.tna || 0) / 100) * (d / 365));
+  }
+  const precio = +iv.precioActual || +iv.precioCompra || 0;
+  const v = cant * precio;
+  return iv.moneda === "USD" ? v * tc : v;
+}
+
+function resumenInversiones(lista, tc) {
+  const l = lista || [];
+  const total = l.reduce((a, x) => a + valorInversion(x, tc), 0);
+  const porTipo = {};
+  l.forEach((x) => {
+    const t = (TIPOS_INV.find((y) => y.id === x.tipo) || {}).nombre || "Otros";
+    porTipo[t] = (porTipo[t] || 0) + valorInversion(x, tc);
+  });
+  const invertido = l.reduce((a, x) => {
+    const base = (+x.cantidad || 0) * (+x.precioCompra || 0);
+    return a + (x.tipo === "plazofijo" || x.tipo === "remunerada"
+      ? (+x.cantidad || 0)
+      : (x.moneda === "USD" ? base * tc : base));
+  }, 0);
+  return { total, porTipo, invertido, resultado: total - invertido };
+}
 
 const BANCOS = [
   "Galicia", "Santander", "BBVA", "Nación", "Provincia", "Macro", "ICBC", "HSBC",
@@ -1336,7 +1494,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
       };
     });
     // Si el resumen trae fechas de ciclo, las guardamos: se acaba tener que cargarlas a mano
-    onImportar(nuevos, res.ciclos, medio);
+    onImportar(nuevos, res.ciclos, medio, res.fin);
     onCerrar();
   };
 
@@ -1472,6 +1630,445 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ===================== PANTALLA INVERTIDO ===================== */
+function Invertido({ cfg, setCfg, tc }) {
+  const lista = cfg.inversiones || [];
+  const [edit, setEdit] = useState(null);
+  const [estado, setEstado] = useState("");
+  const [tasas, setTasas] = useState(null);
+  const r = resumenInversiones(lista, tc);
+
+  // Trae los precios de mercado y actualiza solo lo que tenga ticker
+  const actualizarPrecios = async () => {
+    const conTicker = lista.filter((x) => x.ticker && API_MERCADO[x.tipo]);
+    if (!conTicker.length) { setEstado("No tenés papeles con ticker para actualizar"); return; }
+    setEstado("Buscando precios…");
+    try {
+      const tipos = [...new Set(conTicker.map((x) => x.tipo))];
+      const mapas = {};
+      for (const t of tipos) mapas[t] = await traerPrecios(t);
+      let n = 0;
+      const nueva = lista.map((x) => {
+        const p = x.ticker && mapas[x.tipo] ? mapas[x.tipo][x.ticker.toUpperCase()] : null;
+        if (!p) return x;
+        n++;
+        return { ...x, precioActual: p, precioFecha: hoyISO() };
+      });
+      setCfg({ ...cfg, inversiones: nueva });
+      setEstado(n ? `Actualicé ${n} ${n === 1 ? "papel" : "papeles"}` : "No encontré esos tickers");
+    } catch (e) {
+      setEstado("No pude conectarme. Probá más tarde o cargá el precio a mano.");
+    }
+  };
+
+  const cargarTasas = async () => {
+    if (tasas) return;
+    try { setTasas(await traerTasas()); } catch (e) { setTasas([]); }
+  };
+
+  const vacio = { tipo: "plazofijo", nombre: "", ticker: "", cantidad: "", precioCompra: "",
+                  precioActual: "", moneda: "ARS", tna: "", fecha: hoyISO(), vence: "" };
+  const guardar = () => {
+    const e = edit;
+    const tipo = TIPOS_INV.find((t) => t.id === e.tipo) || {};
+    const iv = { ...e, id: e.id || "iv" + Date.now(),
+                 nombre: (e.ticker || e.nombre || tipo.nombre || "").trim(),
+                 moneda: e.moneda || tipo.moneda || "ARS" };
+    setCfg({ ...cfg, inversiones: lista.some((x) => x.id === iv.id)
+      ? lista.map((x) => (x.id === iv.id ? iv : x)) : [...lista, iv] });
+    setEdit(null);
+  };
+  const borrar = (id) => {
+    if (!confirm("¿Borrar esta inversión?")) return;
+    setCfg({ ...cfg, inversiones: lista.filter((x) => x.id !== id) });
+    setEdit(null);
+  };
+
+  const esRenta = edit && (edit.tipo === "plazofijo" || edit.tipo === "remunerada");
+  const papeles = edit ? (PAPELES[edit.tipo] || []) : [];
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 30 }}>
+      <div className="cima sube" style={{ padding: "19px 19px 17px" }}>
+        <div style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>Tenés invertido</div>
+        <div className="plata hero" style={{ marginTop: 6, color: "#FFFFFF" }}>{plata(r.total)}</div>
+        {r.invertido > 0 && (
+          <div style={{ fontSize: 13, marginTop: 9,
+                        color: r.resultado >= 0 ? "#7FD6A8" : "#F0A896" }}>
+            {r.resultado >= 0 ? "Ganaste " : "Perdiste "}
+            <b className="num">{plata(Math.abs(r.resultado))}</b>
+            <span style={{ color: "rgba(234,240,236,.55)" }}>
+              {" "}sobre {plata(r.invertido)} puestos
+            </span>
+          </div>
+        )}
+      </div>
+
+      {!lista.length && (
+        <div className="aviso" style={{ background: T.ambarBg, marginTop: 14 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 620, marginBottom: 5 }}>Sumá lo que tenés guardado</div>
+          Plazos fijos, dólares, acciones, CEDEARs, bonos o cripto. No se conecta con ningún
+          broker: cargás vos cuánto tenés y a qué precio. Sirve para ver tu patrimonio completo,
+          no solo lo que debés.
+        </div>
+      )}
+
+      {lista.map((iv) => {
+        const v = valorInversion(iv, tc);
+        const tipo = (TIPOS_INV.find((t) => t.id === iv.tipo) || {}).nombre;
+        const puesto = iv.tipo === "plazofijo" || iv.tipo === "remunerada"
+          ? +iv.cantidad || 0
+          : (+iv.cantidad || 0) * (+iv.precioCompra || 0) * (iv.moneda === "USD" ? tc : 1);
+        const dif = v - puesto;
+        return (
+          <button key={iv.id} className="card" onClick={() => setEdit({ ...vacio, ...iv })}
+            style={{ width: "100%", textAlign: "left", padding: "13px 15px", marginTop: 9 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <span style={{ fontSize: 14.5, fontWeight: 600 }}>{iv.nombre || tipo}</span>
+              <span className="num plata" style={{ fontSize: 15 }}>{plata(v)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+              <span style={{ fontSize: 12, color: T.suave }}>
+                {tipo}
+                {iv.cantidad && !esRentaTipo(iv.tipo) ? ` · ${iv.cantidad} ${iv.moneda === "USD" ? "u." : "nom."}` : ""}
+                {iv.tna ? ` · ${iv.tna}% TNA` : ""}
+                {iv.vence ? ` · vence ${iv.vence.split("-").reverse().slice(0, 2).join("/")}` : ""}
+              </span>
+              {puesto > 0 && Math.abs(dif) > 1 && (
+                <span className="num" style={{ fontSize: 12, color: dif >= 0 ? T.verde : T.rojo }}>
+                  {dif >= 0 ? "+" : ""}{corta(dif)}
+                </span>
+              )}
+            </div>
+          </button>
+        );
+      })}
+
+      <button className="btn" style={{ marginTop: 14 }} onClick={() => setEdit({ ...vacio })}>
+        Agregar una inversión
+      </button>
+
+      {lista.some((x) => x.ticker) && (
+        <>
+          <button className="btn ghost" style={{ marginTop: 10, fontSize: 14.5, fontWeight: 500 }}
+            onClick={actualizarPrecios}>
+            Actualizar precios del mercado
+          </button>
+          {estado && (
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 8, textAlign: "center" }}>
+              {estado}
+            </div>
+          )}
+        </>
+      )}
+
+      <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 14, lineHeight: 1.6 }}>
+        Los precios vienen de data912 y las tasas de ArgentinaDatos, las dos gratuitas y sin clave.
+        Pueden estar demoradas respecto del mercado. Esto no es asesoramiento financiero:
+        es un registro de lo que tenés.
+      </div>
+
+      {edit && (
+        <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 80, overflowY: "auto" }}>
+          <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                        padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button onClick={() => setEdit(null)} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+            <span style={{ fontSize: 15, fontWeight: 620 }}>{edit.id ? "Editar" : "Nueva inversión"}</span>
+            <button onClick={guardar} style={{ fontSize: 15, fontWeight: 620 }}>Guardar</button>
+          </div>
+          <div style={{ padding: 16, paddingBottom: 40 }}>
+            <label className="lbl">¿Qué es?</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {TIPOS_INV.map((t) => (
+                <button key={t.id} className={"chip sm" + (edit.tipo === t.id ? " on" : "")}
+                  onClick={() => setEdit({ ...edit, tipo: t.id, moneda: t.moneda, ticker: "" })}>
+                  {t.nombre}
+                </button>
+              ))}
+            </div>
+
+            {papeles.length > 0 && (
+              <>
+                <label className="lbl" style={{ marginTop: 16 }}>¿Cuál?</label>
+                <div className="scroll" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {papeles.map((p) => (
+                    <button key={p} className={"chip sm" + (edit.ticker === p ? " on" : "")}
+                      onClick={() => setEdit({ ...edit, ticker: p })}>{p}</button>
+                  ))}
+                </div>
+                <input value={edit.ticker} onChange={(e) => setEdit({ ...edit, ticker: e.target.value.toUpperCase() })}
+                  placeholder="O escribilo vos" style={{ marginTop: 9 }} />
+              </>
+            )}
+
+            {esRenta ? (
+              <>
+                <label className="lbl" style={{ marginTop: 16 }}>Nombre (opcional)</label>
+                <input value={edit.nombre} onChange={(e) => setEdit({ ...edit, nombre: e.target.value })}
+                  placeholder={edit.tipo === "plazofijo" ? "Plazo fijo Galicia" : "Cuenta remunerada"} />
+
+                <label className="lbl" style={{ marginTop: 14 }}>¿Cuánto pusiste?</label>
+                <input className="num" inputMode="decimal" value={edit.cantidad}
+                  onChange={(e) => setEdit({ ...edit, cantidad: e.target.value.replace(/[^\d]/g, "") })}
+                  style={{ textAlign: "right" }} />
+
+                <label className="lbl" style={{ marginTop: 14 }}>TNA (%)</label>
+                <input className="num" inputMode="decimal" value={edit.tna}
+                  onChange={(e) => setEdit({ ...edit, tna: e.target.value.replace(/[^\d.,]/g, "") })}
+                  placeholder="Ej: 32" style={{ textAlign: "right" }} />
+
+                {!tasas && (
+                  <button onClick={cargarTasas}
+                    style={{ marginTop: 9, fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+                    Traer las tasas de los bancos
+                  </button>
+                )}
+                {tasas && tasas.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 12, color: T.suave, marginTop: 11, marginBottom: 6 }}>
+                      Tasas de hoy, según lo que cada banco le reporta al BCRA. Tocá una para usarla.
+                    </div>
+                    <div style={{ maxHeight: 190, overflowY: "auto",
+                                  border: `1px solid ${T.linea}`, borderRadius: 12 }}>
+                      {tasas.slice(0, 25).map((t, i) => (
+                        <button key={t.entidad}
+                          onClick={() => setEdit({ ...edit, tna: String(t.tna), nombre: edit.nombre || t.entidad })}
+                          style={{ width: "100%", display: "flex", justifyContent: "space-between",
+                                   padding: "10px 13px", textAlign: "left",
+                                   background: String(t.tna) === String(edit.tna) ? T.verdeBg : "transparent",
+                                   borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+                          <span style={{ fontSize: 13, minWidth: 0, overflow: "hidden",
+                                         textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.entidad}</span>
+                          <span className="num" style={{ fontSize: 13, fontWeight: 600, marginLeft: 10 }}>
+                            {t.tna.toLocaleString("es-AR", { maximumFractionDigits: 2 })}%
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {tasas && !tasas.length && (
+                  <div style={{ fontSize: 12.5, color: T.suave, marginTop: 9 }}>
+                    No pude traer las tasas ahora. Cargala a mano.
+                  </div>
+                )}
+
+                <label className="lbl" style={{ marginTop: 14 }}>¿Desde cuándo?</label>
+                <input type="date" value={edit.fecha} onChange={(e) => setEdit({ ...edit, fecha: e.target.value })} />
+
+                {edit.tipo === "plazofijo" && (
+                  <>
+                    <label className="lbl" style={{ marginTop: 14 }}>¿Cuándo vence?</label>
+                    <input type="date" value={edit.vence} onChange={(e) => setEdit({ ...edit, vence: e.target.value })} />
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {!papeles.length && (
+                  <>
+                    <label className="lbl" style={{ marginTop: 16 }}>Nombre</label>
+                    <input value={edit.nombre} onChange={(e) => setEdit({ ...edit, nombre: e.target.value })} />
+                  </>
+                )}
+                <label className="lbl" style={{ marginTop: 16 }}>
+                  {edit.tipo === "dolares" ? "¿Cuántos dólares?" : "¿Cuántos tenés?"}
+                </label>
+                <input className="num" inputMode="decimal" value={edit.cantidad}
+                  onChange={(e) => setEdit({ ...edit, cantidad: e.target.value.replace(/[^\d.,]/g, "") })}
+                  style={{ textAlign: "right" }} />
+
+                <label className="lbl" style={{ marginTop: 14 }}>
+                  Precio al que compraste {edit.moneda === "USD" ? "(USD)" : "($)"}
+                </label>
+                <input className="num" inputMode="decimal" value={edit.precioCompra}
+                  onChange={(e) => setEdit({ ...edit, precioCompra: e.target.value.replace(/[^\d.,]/g, "") })}
+                  style={{ textAlign: "right" }} />
+
+                <label className="lbl" style={{ marginTop: 14 }}>
+                  Precio de hoy {edit.moneda === "USD" ? "(USD)" : "($)"}
+                </label>
+                <input className="num" inputMode="decimal" value={edit.precioActual}
+                  onChange={(e) => setEdit({ ...edit, precioActual: e.target.value.replace(/[^\d.,]/g, "") })}
+                  placeholder="Si lo dejás vacío, uso el de compra" style={{ textAlign: "right" }} />
+
+                <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+                  {["ARS", "USD"].map((m) => (
+                    <button key={m} className={"chip sm" + (edit.moneda === m ? " on" : "")}
+                      onClick={() => setEdit({ ...edit, moneda: m })}>
+                      {m === "ARS" ? "En pesos" : "En dólares"}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {edit.cantidad > 0 && (
+              <div className="card" style={{ padding: 13, marginTop: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+                  <span style={{ color: T.suave }}>Vale hoy</span>
+                  <span className="num plata">{plata(valorInversion({ ...edit }, tc))}</span>
+                </div>
+              </div>
+            )}
+
+            {edit.id && (
+              <button className="btn peligro" style={{ marginTop: 22 }}
+                onClick={() => borrar(edit.id)}>Borrar</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+const esRentaTipo = (t) => t === "plazofijo" || t === "remunerada";
+
+/* ===================== ¿PAGO TODO O EL MÍNIMO? ===================== */
+function Financiar({ medios, cfg, onCerrar }) {
+  const conDatos = medios.filter((m) => m.id !== "efectivo" && m.tna);
+  const [sel, setSel] = useState(conDatos[0] ? conDatos[0].id : "");
+  const m = medios.find((x) => x.id === sel);
+
+  // La mejor tasa que el usuario ya tiene cargada; si no hay, un valor conservador
+  const inv = (cfg.inversiones || []).filter((x) => x.tna);
+  const mejor = inv.length ? Math.max(...inv.map((x) => +x.tna || 0)) : 0;
+  const [tasaInv, setTasaInv] = useState(String(mejor || 30));
+  const [mercado, setMercado] = useState(null);
+  const traerMejor = async () => {
+    try {
+      const t = await traerTasas();
+      if (t.length) { setMercado(t[0]); setTasaInv(String(t[0].tna)); }
+      else setMercado({ entidad: "", tna: 0 });
+    } catch (e) { setMercado({ entidad: "", tna: 0 }); }
+  };
+
+  const saldo = m ? +m.saldo || 0 : 0;
+  const minimo = m ? +m.pagoMinimo || 0 : 0;
+  const financiable = Math.max(0, saldo - minimo);
+  const tnaCard = m ? +m.tna || 0 : 0;
+
+  // Costo real de financiar: interés + IVA 21% sobre ese interés
+  const temCard = tnaCard / 12 / 100;
+  const costoMes = financiable * temCard * 1.21;
+  const temInv = (+tasaInv || 0) / 12 / 100;
+  const ganaMes = financiable * temInv;
+  const neto = costoMes - ganaMes;
+
+  if (!conDatos.length) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 82, overflowY: "auto" }}>
+        <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                      padding: "14px 16px", display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 15, fontWeight: 620 }}>¿Pago todo o el mínimo?</span>
+          <button onClick={onCerrar} style={{ fontSize: 15, fontWeight: 620 }}>Listo</button>
+        </div>
+        <div style={{ padding: 16 }}>
+          <div className="aviso" style={{ background: T.ambarBg }}>
+            Para calcular esto necesito la tasa de financiación y el pago mínimo de tu tarjeta.
+            Los dos vienen en el PDF del resumen: importalo desde el botón + y los levanto solos.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 82, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>¿Pago todo o el mínimo?</span>
+        <button onClick={onCerrar} style={{ fontSize: 15, fontWeight: 620 }}>Listo</button>
+      </div>
+
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+          {conDatos.map((x) => (
+            <button key={x.id} className={"chip sm" + (sel === x.id ? " on" : "")}
+              onClick={() => setSel(x.id)}>{x.corto || x.nombre}</button>
+          ))}
+        </div>
+
+        <div className="cima" style={{ padding: "19px 19px 17px" }}>
+          <div style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>
+            {neto > 0 ? "Financiar te cuesta por mes" : "Te conviene financiar, por mes"}
+          </div>
+          <div className="plata hero" style={{ marginTop: 6, fontSize: 36,
+                color: neto > 0 ? "#F0A896" : "#7FD6A8" }}>
+            {plata(Math.abs(neto))}
+          </div>
+          <div style={{ fontSize: 13.5, color: "rgba(234,240,236,.72)", marginTop: 10, lineHeight: 1.55 }}>
+            {neto > 0
+              ? `Pagá el resumen entero. Estirarlo te sale ${plata(Math.abs(neto))} más por mes de lo que ganás teniendo la plata invertida.`
+              : `Con tu tasa de inversión conviene pagar el mínimo, pero es una diferencia chica: si te olvidás de pagar, se te da vuelta.`}
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 15, marginTop: 14 }}>
+          {[["Saldo del resumen", plata(saldo)],
+            ["Pago mínimo", plata(minimo)],
+            ["Quedaría financiado", plata(financiable)],
+            ["Tasa de la tarjeta", tnaCard.toLocaleString("es-AR") + "% TNA"],
+          ].map(([a, b]) => (
+            <div key={a} style={{ display: "flex", justifyContent: "space-between",
+                                  fontSize: 13.5, marginTop: 6 }}>
+              <span style={{ color: T.suave }}>{a}</span>
+              <span className="num">{b}</span>
+            </div>
+          ))}
+        </div>
+
+        <label className="lbl" style={{ marginTop: 18 }}>¿A qué tasa podés poner la plata? (TNA)</label>
+        <input className="num" inputMode="decimal" value={tasaInv}
+          onChange={(e) => setTasaInv(e.target.value.replace(/[^\d.,]/g, ""))}
+          style={{ textAlign: "right" }} />
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+          {mercado && mercado.tna > 0
+            ? `Puse ${mercado.tna.toLocaleString("es-AR", { maximumFractionDigits: 2 })}%, la mejor del mercado hoy (${mercado.entidad}).`
+            : mejor > 0
+              ? `Puse ${mejor}%, la mejor tasa que tenés cargada en Invertido.`
+              : "Poné la tasa de tu cuenta remunerada o plazo fijo."}
+        </div>
+        {!mercado && (
+          <button onClick={traerMejor}
+            style={{ marginTop: 9, fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+            Usar la mejor tasa de plazo fijo de hoy
+          </button>
+        )}
+        {mercado && !mercado.tna && (
+          <div style={{ fontSize: 12.5, color: T.suave, marginTop: 8 }}>
+            No pude traer las tasas ahora.
+          </div>
+        )}
+
+        <div className="card" style={{ padding: 15, marginTop: 16 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 9 }}>Cómo sale la cuenta</div>
+          {[["Interés de la tarjeta, un mes", costoMes / 1.21],
+            ["IVA sobre ese interés (21%)", costoMes - costoMes / 1.21],
+            ["Lo que rendiría tu plata", -ganaMes]].map(([a, v]) => (
+            <div key={a} style={{ display: "flex", justifyContent: "space-between",
+                                  fontSize: 13, marginTop: 5 }}>
+              <span style={{ color: T.suave }}>{a}</span>
+              <span className="num" style={{ color: v < 0 ? T.verde : T.tinta }}>{plata(v)}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14,
+                        marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.linea}`, fontWeight: 620 }}>
+            <span>Diferencia</span>
+            <span className="num" style={{ color: neto > 0 ? T.rojo : T.verde }}>{plata(neto)}</span>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 16, lineHeight: 1.6 }}>
+          Cuenta simplificada de un mes, sin punitorios ni comisiones, y suponiendo que no
+          gastás nada nuevo con esa tarjeta. Financiar dos meses seguidos suele salir bastante
+          peor que el doble. No es asesoramiento financiero.
+        </div>
       </div>
     </div>
   );
@@ -1962,7 +2559,8 @@ function Vencimientos({ medios }) {
 
 function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
-               estimados = [], onAbrirMedios }) {
+               estimados = [], onAbrirMedios,
+               invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
@@ -2313,6 +2911,38 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           );
         })()}
 
+        {invertido.total > 0 && (
+          <button onClick={onVerInvertido}
+            style={{ width: "100%", textAlign: "left", marginTop: 15, paddingTop: 13,
+                     borderTop: "1px solid rgba(234,240,236,.14)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <span style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)" }}>Patrimonio total</span>
+              <span className="num plata" style={{ fontSize: 17, color: "#EAF0EC" }}>
+                {plata(cfg.saldoHoy + invertido.total)}
+              </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: "rgba(234,240,236,.5)", marginTop: 4, lineHeight: 1.5 }}>
+              {plata(cfg.saldoHoy)} en efectivo · {plata(invertido.total)} invertido
+            </div>
+            <div style={{ display: "flex", gap: 3, marginTop: 8, height: 5,
+                          borderRadius: 99, overflow: "hidden" }}>
+              {(() => {
+                const tot = cfg.saldoHoy + invertido.total || 1;
+                const cols = ["#7FD6A8", "#9FC7E8", "#E8C98B", "#C9A8E0", "#E8A89B"];
+                const partes = [["Efectivo", cfg.saldoHoy],
+                                ...Object.entries(invertido.porTipo)].filter(([, v]) => v > 0);
+                return partes.map(([n, v], i) => (
+                  <span key={n} title={n} style={{ width: `${(v / tot) * 100}%`,
+                        background: cols[i % cols.length], borderRadius: 99 }} />
+                ));
+              })()}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(234,240,236,.45)", marginTop: 6 }}>
+              {["Efectivo", ...Object.keys(invertido.porTipo)].slice(0, 4).join(" · ")}
+            </div>
+          </button>
+        )}
+
         {pendiente > 0 && !editSaldo && (
           <div style={{ marginTop: 15, paddingTop: 13,
                         borderTop: "1px solid rgba(234,240,236,.14)" }}>
@@ -2456,6 +3086,23 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       </div>
 
       <Vencimientos medios={medios} />
+
+      {medios.some((m) => m.id !== "efectivo") && (
+        <button onClick={onFinanciar} className="card"
+          style={{ width: "100%", textAlign: "left", padding: "14px 15px", marginTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>
+              <span style={{ display: "block", fontSize: 14, fontWeight: 620 }}>
+                ¿Pago todo o el mínimo?
+              </span>
+              <span style={{ display: "block", fontSize: 12, color: T.suave, marginTop: 3 }}>
+                Con la tasa de tu tarjeta y la de tu plata
+              </span>
+            </span>
+            <span style={{ fontSize: 18, color: T.tenue }}>›</span>
+          </div>
+        </button>
+      )}
 
       {historial.length > 0 && (
         <div style={{ marginTop: 18 }}>
@@ -3052,9 +3699,9 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 }
 
 /* ===================== SHELL ===================== */
-const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
+const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invertido"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -3070,6 +3717,7 @@ export default function App() {
   const [verMedios, setVerMedios] = useState(false);
   const [verRapido, setVerRapido] = useState(false);
   const [verImportar, setVerImportar] = useState(false);
+  const [verFinanciar, setVerFinanciar] = useState(false);
   // Si la cuenta nunca definió medios, dependemos de si trae la semilla o arrancó vacía
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios
                : (movs.length ? MEDIOS_INI : MEDIOS_NUEVO);
@@ -3360,6 +4008,9 @@ export default function App() {
           onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
           historial={historial} cerradas={[]} estimados={estimados}
+          invertido={resumenInversiones(cfg.inversiones, cfgTC.tc)}
+          onVerInvertido={() => setTab("inv")}
+          onFinanciar={() => setVerFinanciar(true)}
           onAbrirMedios={() => setVerMedios(true)}
           revisadas={cfg.revisadas || {}}
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
@@ -3367,6 +4018,7 @@ export default function App() {
       )}
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
       {tab === "sim" && <Simular cfg={{ ...cfgTC, desdeMes: desde }} movs={movs} medios={medios} />}
+      {tab === "inv" && <Invertido cfg={cfg} setCfg={setCfg} tc={cfgTC.tc} />}
       {tab === "rep" && <Personas filas={filas} />}
 
       <button
@@ -3390,7 +4042,7 @@ export default function App() {
             key={id} onClick={() => setTab(id)}
             style={{
               padding: "14px 4px 22px", fontSize: 12.5,
-              fontWeight: tab === id ? 640 : 450,
+              fontWeight: tab === id ? 640 : 450, fontSize: 12.5,
               color: tab === id ? T.tinta : T.tenue,
               borderTop: `2px solid ${tab === id ? T.tinta : "transparent"}`, marginTop: -1,
             }}
@@ -3413,20 +4065,26 @@ export default function App() {
           onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
         />
       )}
+      {verFinanciar && (
+        <Financiar medios={medios} cfg={cfg} onCerrar={() => setVerFinanciar(false)} />
+      )}
       {verImportar && (
         <ImportarResumen
           medios={medios} movs={movs}
-          onImportar={(nuevos, ciclos, medioId) => {
+          onImportar={(nuevos, ciclos, medioId, fin) => {
             setMovs([...movs, ...nuevos]);
             // El resumen trae las fechas del próximo ciclo: las guardamos como confirmadas
-            if (ciclos && ciclos.proxCierre && ciclos.proxVto && medioId) {
+            if (medioId && ((ciclos && ciclos.proxCierre) || fin)) {
               const lista = medios.map((m) => {
                 if (m.id !== medioId) return m;
                 const cs = (m.ciclos || []).slice();
                 [[ciclos.cierre, ciclos.vto], [ciclos.proxCierre, ciclos.proxVto]].forEach(([c, v]) => {
                   if (c && v && !cs.some((x) => x.cierre === c)) cs.push({ cierre: c, vto: v });
                 });
-                return { ...m, ciclos: cs };
+                return { ...m, ciclos: cs,
+                  tna: (fin && fin.tna) || m.tna, tem: (fin && fin.tem) || m.tem,
+                  pagoMinimo: (fin && fin.pagoMinimo) || m.pagoMinimo,
+                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo };
               });
               guardarMedios(lista);
             }
