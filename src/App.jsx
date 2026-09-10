@@ -1936,7 +1936,10 @@ function Vencimientos({ medios }) {
               <div>
                 <div style={{ fontSize: 14, fontWeight: 560 }}>{m.nombre}</div>
                 <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                  cerró el {c.cierre.split("-").reverse().slice(0, 2).join("/")}
+                  {/* El ciclo puede estar todavía abierto: no digamos que cerró si no cerró */}
+                  {c.cierre <= hoy ? "cerró el " : "cierra el "}
+                  {c.cierre.split("-").reverse().slice(0, 2).join("/")}
+                  {c.cierre > hoy ? " · todavía podés sumar compras" : ""}
                   {c.estimado ? " · fecha estimada" : ""}
                 </div>
               </div>
