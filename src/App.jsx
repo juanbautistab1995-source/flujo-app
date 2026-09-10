@@ -193,6 +193,31 @@ const BANCOS = [
 ];
 const MARCAS = ["Visa", "Mastercard", "Amex", "Cabal"];
 
+// Adivinar la categoría por el texto ahorra un campo entero en la carga
+const PISTAS = {
+  comida: ["super", "disco", "coto", "carrefour", "jumbo", "dia", "chino", "verdu", "carnice", "panade"],
+  delivery: ["rappi", "pedidos", "pedidosya", "uber eats", "delivery", "mcdonald", "burger", "pizza"],
+  transporte: ["uber", "cabify", "didi", "sube", "taxi", "remis", "telepase", "peaje", "estaciona"],
+  combustible: ["shell", "ypf", "axion", "puma", "nafta", "combustible", "gnc"],
+  salidas: ["bar", "cerveza", "boliche", "resto", "cine", "teatro", "birra", "salida", "finde"],
+  servicios: ["edelap", "edenor", "edesur", "camuzzi", "metrogas", "absa", "agua", "luz", "gas", "aysa"],
+  suscripciones: ["netflix", "spotify", "disney", "hbo", "max", "apple", "google", "youtube", "prime", "claro", "personal", "movistar", "internet"],
+  salud: ["farmacia", "osde", "swiss", "medic", "dentista", "kinesio"],
+  ropa: ["nike", "adidas", "zara", "ropa", "zapatilla", "remera", "campera"],
+  hogar: ["easy", "sodimac", "ferrete", "mueble", "deco", "limpieza"],
+  educacion: ["curso", "facultad", "libro", "capacita", "ingles"],
+  regalos: ["regalo", "cumple", "navidad", "aguinaldo"],
+  viajes: ["vuelo", "aerolineas", "latam", "hotel", "airbnb", "pasaje", "viaje"],
+  prestamos: ["prestamo", "cuota del", "prendario", "hipotecar"],
+};
+function adivinarCategoria(texto) {
+  const t = (texto || "").toLowerCase();
+  if (!t.trim()) return "otros";
+  for (const [cat, pistas] of Object.entries(PISTAS))
+    if (pistas.some((p) => t.includes(p))) return cat;
+  return "otros";
+}
+
 const CATEGORIAS = [
   "Alimentación", "Gastronomía y salidas", "Transporte y nafta", "Vivienda y servicios",
   "Salud", "Indumentaria", "Suscripciones", "Deporte", "Cuidado personal",
@@ -854,6 +879,109 @@ function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
         <button onClick={onPostergar}
           style={{ marginTop: 14, width: "100%", fontSize: 13, color: T.suave }}>
           Ahora no
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== CARGA RÁPIDA ===================== */
+// Un gasto en tres toques: monto, con qué lo pagaste, listo.
+function Rapido({ medios, onGuardar, onDetallado, onCerrar }) {
+  const [monto, setMonto] = useState("");
+  const [detalle, setDetalle] = useState("");
+  const [medio, setMedio] = useState(medios[0]?.id || "efectivo");
+  const [cuotas, setCuotas] = useState(1);
+
+  const n = parseInt(monto || "0", 10);
+  const tecla = (t) => {
+    if (t === "b") return setMonto(monto.slice(0, -1));
+    if (t === "000") return setMonto(monto.length < 8 ? monto + "000" : monto);
+    if (monto.length < 10) setMonto((monto === "0" ? "" : monto) + t);
+  };
+  const guardar = () => {
+    if (n <= 0) return;
+    onGuardar({
+      id: "m" + Date.now(), tipo: "gasto", detalle: detalle.trim() || "Gasto",
+      monto: n, moneda: "ARS", medio, cuotas, mesInicio: mesDePago(hoyISO(), medio, medios),
+      categoria: adivinarCategoria(detalle), recurrente: false, pagadoPor: "yo",
+    });
+    onCerrar();
+  };
+  const cat = adivinarCategoria(detalle);
+  const catNom = (CATEGORIAS.find((c) => c.id === cat) || {}).nombre;
+  const mesPago = mesDePago(hoyISO(), medio, medios);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
+                  display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between",
+                    alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 14.5, fontWeight: 620 }}>Nuevo gasto</span>
+        <button onClick={onDetallado} style={{ fontSize: 13.5, color: T.ambar, fontWeight: 600 }}>
+          Más opciones
+        </button>
+      </div>
+
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center",
+                    padding: "0 20px", minHeight: 0 }}>
+        <div className="plata" style={{ fontSize: 46, textAlign: "center", letterSpacing: "-0.04em",
+              color: n > 0 ? T.tinta : T.tenue, fontVariantNumeric: "tabular-nums" }}>
+          {n > 0 ? plata(n) : "$0"}
+        </div>
+        {cuotas > 1 && n > 0 && (
+          <div style={{ textAlign: "center", fontSize: 13, color: T.suave, marginTop: 6 }}>
+            {cuotas} cuotas de <b className="num">{plata(Math.round(n / cuotas))}</b>
+          </div>
+        )}
+
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)}
+          placeholder="¿En qué? (opcional)"
+          style={{ marginTop: 18, textAlign: "center", fontSize: 16, background: "transparent",
+                   border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
+        {catNom && detalle.trim() && (
+          <div style={{ textAlign: "center", fontSize: 12, color: T.tenue, marginTop: 7 }}>
+            lo guardo en {catNom}
+          </div>
+        )}
+
+        <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto",
+              marginTop: 18, paddingBottom: 3 }}>
+          {medios.map((m) => (
+            <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
+              onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+          ))}
+        </div>
+
+        {medio !== "efectivo" && (
+          <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto",
+                marginTop: 9, paddingBottom: 3 }}>
+            {[1, 3, 6, 9, 12, 18].map((c) => (
+              <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
+                onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 13, textAlign: "center" }}>
+          {medio === "efectivo" ? "Sale de tu caja ahora"
+            : `Lo pagás en ${etiqMesLargo(mesPago)}`}
+        </div>
+      </div>
+
+      <div style={{ padding: "10px 12px 16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
+            <button key={t} onClick={() => tecla(t)}
+              style={{ padding: "17px 0", fontSize: t === "b" ? 19 : 22, fontWeight: 500,
+                       background: T.card, borderRadius: 13, border: `1px solid ${T.linea}` }}>
+              {t === "b" ? "⌫" : t}
+            </button>
+          ))}
+        </div>
+        <button className="btn" style={{ marginTop: 10, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
+          Guardar
         </button>
       </div>
     </div>
@@ -1636,16 +1764,30 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           </div>
         )}
 
-        {/* Un veredicto en castellano, no solo un número */}
-        <div style={{ fontSize: 13.5, color: T.suave, marginTop: 9, lineHeight: 1.5 }}>
-          {(() => {
-            const libre = cfg.saldoHoy - pendiente;
-            if (pendiente <= 0) return "No te queda nada por pagar este mes.";
-            if (libre < 0) return `No te alcanza: te faltan ${plata(-libre)} para cubrir lo que queda del mes.`;
-            if (libre < pendiente * 0.15) return "Te alcanza justo. Cuidá lo que gastes hasta fin de mes.";
-            return "Te alcanza para cubrir todo lo que falta del mes.";
-          })()}
-        </div>
+        {/* Plata por día: el número con el que uno realmente decide */}
+        {(() => {
+          const libre = cfg.saldoHoy - pendiente;
+          const hoy = new Date();
+          const dc = cfg.diaCobro || 28;
+          const prox = new Date(hoy.getFullYear(), hoy.getMonth(), dc, 12);
+          if (prox <= hoy) prox.setMonth(prox.getMonth() + 1);
+          const faltan = Math.max(1, Math.round((prox - hoy) / 86400000));
+          const porDia = Math.floor(libre / faltan);
+
+          if (libre < 0) return (
+            <div style={{ fontSize: 13.5, color: T.rojo, marginTop: 9, lineHeight: 1.5, fontWeight: 560 }}>
+              Te faltan {plata(-libre)} para cubrir lo que queda del mes.
+            </div>
+          );
+          return (
+            <div style={{ marginTop: 11, display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+              <span className="plata num" style={{ fontSize: 19, color: T.verde }}>{plata(porDia)}</span>
+              <span style={{ fontSize: 13.5, color: T.suave }}>
+                por día durante {faltan} {faltan === 1 ? "día" : "días"}, hasta que cobres
+              </span>
+            </div>
+          );
+        })()}
 
         {pendiente > 0 && !editSaldo && (
           <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${T.linea}` }}>
@@ -2371,7 +2513,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 /* ===================== SHELL ===================== */
 const TABS = [["hoy", "Hoy"], ["movs", "Movimientos"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -2385,6 +2527,7 @@ export default function App() {
   const [editando, setEditando] = useState(null);
   const [verAjustes, setVerAjustes] = useState(false);
   const [verMedios, setVerMedios] = useState(false);
+  const [verRapido, setVerRapido] = useState(false);
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios : MEDIOS_INI;
 
   // Sesion
@@ -2670,7 +2813,7 @@ export default function App() {
       {tab === "rep" && <Personas filas={filas} />}
 
       <button
-        onClick={() => setEditando({})}
+        onClick={() => setVerRapido(true)}
         style={{
           position: "fixed", right: 18, bottom: 84, width: 54, height: 54, borderRadius: 27,
           background: T.tinta, color: "#fff", fontSize: 28, fontWeight: 300, zIndex: 20,
@@ -2712,6 +2855,12 @@ export default function App() {
           pendientes={sinActualizar} medios={medios}
           onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
         />
+      )}
+      {verRapido && (
+        <Rapido medios={medios}
+          onGuardar={(m) => setMovs([...movs, m])}
+          onDetallado={() => { setVerRapido(false); setEditando({}); }}
+          onCerrar={() => setVerRapido(false)} />
       )}
       {verMedios && (
         <Medios medios={medios} movs={movs} onGuardar={guardarMedios} onCerrar={() => setVerMedios(false)} />
