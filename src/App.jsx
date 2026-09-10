@@ -476,20 +476,30 @@ const PAPELES = {
 
 // Interés simple devengado: el plazo fijo argentino no capitaliza dentro del plazo
 function valorInversion(iv, tc) {
-  const cant = +iv.cantidad || 0;
+  if (!iv) return 0;
+  const c = +iv.cantidad;
+  const cant = isFinite(c) && c > 0 ? c : 0;
   if (iv.tipo === "plazofijo" || iv.tipo === "remunerada") {
     const capital = cant;
-    const desde = iv.fecha ? new Date(iv.fecha + "T12:00:00") : null;
+    const fechaOk = (f) => {
+      if (!f) return null;
+      const d = new Date(f + "T12:00:00");
+      return isNaN(d.getTime()) ? null : d;
+    };
+    const desde = fechaOk(iv.fecha);
     const dias = desde ? Math.max(0, Math.floor((Date.now() - desde) / 86400000)) : 0;
-    const tope = iv.tipo === "plazofijo" && iv.vence
-      ? Math.max(0, Math.floor((new Date(iv.vence + "T12:00:00") - desde) / 86400000))
+    const vto = fechaOk(iv.vence);
+    const tope = iv.tipo === "plazofijo" && vto && desde
+      ? Math.max(0, Math.floor((vto - desde) / 86400000))
       : dias;
-    const d = Math.min(dias, tope || dias);
-    return capital * (1 + ((+iv.tna || 0) / 100) * (d / 365));
+    const d = Math.min(dias, isFinite(tope) && tope > 0 ? tope : dias);
+    const tna = isFinite(+iv.tna) ? +iv.tna : 0;
+    const v = capital * (1 + (tna / 100) * ((isFinite(d) ? d : 0) / 365));
+    return isFinite(v) ? v : 0;
   }
   const precio = +iv.precioActual || +iv.precioCompra || 0;
-  const v = cant * precio;
-  return iv.moneda === "USD" ? v * tc : v;
+  const v = cant * precio * (iv.moneda === "USD" ? (+tc || 0) : 1);
+  return isFinite(v) ? v : 0;
 }
 
 function resumenInversiones(lista, tc) {
@@ -739,7 +749,12 @@ function ciclosEstimados(medios) {
 
 // Cuánto pesa un movimiento en un mes dado (0 si no aplica).
 function montoEnMes(mv, mk, tc) {
-  const num = (v) => (typeof v === "number" && isFinite(v) ? v : parseFloat(v) || 0);
+  // Un importe negativo no tiene sentido en este modelo y contaminaba los totales:
+  // lo tratamos como cero en vez de dejar que reste.
+  const num = (v) => {
+    const n = typeof v === "number" && isFinite(v) ? v : parseFloat(v);
+    return isFinite(n) && n > 0 ? n : 0;
+  };
   const base = mv.tipo === "ahorro" ? num(mv.montoUsd) * (num(mv.tcCompra) || tc)
              : mv.moneda === "USD" ? num(mv.montoUsd) * tc
              : num(mv.monto);
@@ -812,7 +827,9 @@ function proyectar(cfg, movs, medios, meses, extra) {
       }
       if (mv.pagadoPor === "otro") {
         // Lo puso otra persona con su plata: a vos te sale solo tu parte, y se la transferís.
-        const mio = m * (mv.pct != null ? mv.pct : 1);
+        // El porcentaje tiene que vivir entre 0 y 1: fuera de ahí generaba deudas negativas
+        const pct = mv.pct != null && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 1;
+        const mio = m * pct;
         porMedio.efectivo = (porMedio.efectivo || 0) + mio;
         items.push({ mv, monto: mio, cuota: nroCuota(mv, mk), deuda: true });
         if (mv.persona) deudas.push({ persona: mv.persona, monto: mio, detalle: mv.detalle });
@@ -821,7 +838,10 @@ function proyectar(cfg, movs, medios, meses, extra) {
       }
       porMedio[mv.medio] = (porMedio[mv.medio] || 0) + m;
       items.push({ mv, monto: m, cuota: nroCuota(mv, mk) });
-      if (mv.persona && mv.pct) reint.push({ persona: mv.persona, monto: m * mv.pct, detalle: mv.detalle });
+      if (mv.persona && mv.pct) {
+        const p = isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+        if (p > 0) reint.push({ persona: mv.persona, monto: m * p, detalle: mv.detalle });
+      }
       if (mv.excepcional) excepcional += m;
     });
 
