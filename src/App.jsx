@@ -457,8 +457,9 @@ const TIPOS_INV = [
   { id: "bono",      nombre: "Bono",        moneda: "ARS" },
   { id: "fci",       nombre: "Fondo común", moneda: "ARS" },
   { id: "cripto",    nombre: "Cripto",      moneda: "USD" },
-  { id: "dolares",   nombre: "Dólares",     moneda: "USD" },
 ];
+// Los dólares NO son un tipo más: viven en cfg.reservasUsd, alimentados por las compras
+// marcadas como ahorro. Si estuvieran también acá, el patrimonio los contaría dos veces.
 
 // Papeles que se operan en el mercado argentino, para no tipear a mano
 const PAPELES = {
@@ -1638,10 +1639,16 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
 /* ===================== PANTALLA INVERTIDO ===================== */
 function Invertido({ cfg, setCfg, tc }) {
   const lista = cfg.inversiones || [];
+  const usd = +cfg.reservasUsd || 0;
+  const valorUsd = usd * tc;
+  const [editUsd, setEditUsd] = useState(false);
+  const [borrUsd, setBorrUsd] = useState("");
   const [edit, setEdit] = useState(null);
   const [estado, setEstado] = useState("");
   const [tasas, setTasas] = useState(null);
-  const r = resumenInversiones(lista, tc);
+  const base = resumenInversiones(lista, tc);
+  const r = { ...base, total: base.total + valorUsd,
+              porTipo: valorUsd > 0 ? { Dólares: valorUsd, ...base.porTipo } : base.porTipo };
 
   // Trae los precios de mercado y actualiza solo lo que tenga ticker
   const actualizarPrecios = async () => {
@@ -1709,12 +1716,66 @@ function Invertido({ cfg, setCfg, tc }) {
         )}
       </div>
 
-      {!lista.length && (
+      <div className="card" style={{ padding: "13px 15px", marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={{ fontSize: 14.5, fontWeight: 600 }}>Dólares</span>
+          <span className="num plata" style={{ fontSize: 15 }}>{plata(valorUsd)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                      marginTop: 3 }}>
+          <span style={{ fontSize: 12, color: T.suave }}>
+            USD {usd.toLocaleString("es-AR")} · a {plata(tc)} cada uno
+          </span>
+          <button onClick={() => { setBorrUsd(String(usd)); setEditUsd(!editUsd); }}
+            style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600 }}>
+            {editUsd ? "Cancelar" : "Declarar los que tengo"}
+          </button>
+        </div>
+
+        {editUsd && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.linea}` }}>
+            <div style={{ fontSize: 12.5, color: T.suave, lineHeight: 1.55, marginBottom: 10 }}>
+              Poné el <b>total</b> de dólares que tenés hoy. Esto no toca tus pesos: es para
+              cargar los que ya tenías antes de usar la app. Si querés comprar dólares ahora,
+              hacelo desde el <b>+</b> como ahorro, así te descuenta los pesos.
+            </div>
+            <input className="num" inputMode="decimal" value={borrUsd}
+              onChange={(e) => setBorrUsd(e.target.value.replace(/[^\d.,]/g, ""))}
+              style={{ textAlign: "right" }} placeholder="Ej: 3000" />
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 7 }}>
+              Serían {plata((parseFloat(String(borrUsd).replace(",", ".")) || 0) * tc)} a la
+              cotización de hoy.
+            </div>
+            <button className="btn" style={{ marginTop: 12 }}
+              onClick={() => {
+                const n = parseFloat(String(borrUsd).replace(",", ".")) || 0;
+                setCfg({ ...cfg, reservasUsd: Math.max(0, Math.round(n * 100) / 100) });
+                setEditUsd(false);
+              }}>
+              Guardar
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!lista.length && !usd && !editUsd && (
         <div className="aviso" style={{ background: T.ambarBg, marginTop: 14 }}>
           <div style={{ fontSize: 14.5, fontWeight: 620, marginBottom: 5 }}>Sumá lo que tenés guardado</div>
-          Plazos fijos, dólares, acciones, CEDEARs, bonos o cripto. No se conecta con ningún
-          broker: cargás vos cuánto tenés y a qué precio. Sirve para ver tu patrimonio completo,
-          no solo lo que debés.
+          Plazos fijos, acciones, CEDEARs, bonos, cripto o fondos. No se conecta con ningún
+          broker: cargás vos cuánto tenés y a qué precio.
+          <div style={{ marginTop: 9, fontWeight: 600 }}>
+            Importante: esto NO va incluido en tu efectivo.
+          </div>
+          Si tenés $500.000 en la cuenta y además $300.000 en un plazo fijo, poné $500.000 como
+          efectivo y el plazo fijo acá. Si lo sumás en los dos lados, la app cree que tenés
+          $800.000 disponibles y te va a mentir.
+        </div>
+      )}
+
+      {(lista.length > 0 || usd > 0) && (
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 12, lineHeight: 1.55 }}>
+          Nada de esto cuenta como efectivo disponible: son cosas que tenés guardadas, no plata
+          en la cuenta.
         </div>
       )}
 
@@ -2850,12 +2911,20 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         </div>
 
         {editSaldo ? (
+          <>
+          <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.7)", marginTop: 10,
+                        lineHeight: 1.55 }}>
+            Poné solo la plata que tenés <b>disponible ahora</b>: cuenta bancaria, billetera
+            virtual y efectivo. No sumes lo que está en plazo fijo, dólares o acciones, eso va
+            en Invierto.
+          </div>
           <input
             className="num" inputMode="decimal" value={cfg.saldoHoy}
             onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
             style={{ marginTop: 11, fontSize: 29, fontWeight: 660, textAlign: "right",
                      background: "rgba(255,255,255,.09)", border: "none", color: "#EAF0EC" }}
           />
+          </>
         ) : (
           <div className="plata hero" style={{ marginTop: 6,
                 color: cfg.saldoHoy - pendiente < 0 ? "#F0A896" : "#FFFFFF" }}>
@@ -3699,7 +3768,15 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
 }
 
 /* ===================== SHELL ===================== */
-const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invertido"], ["sim", "Simular"], ["rep", "Personas"]];
+// Icono + etiqueta chica: con 5 pestañas el texto solo ya no entra en un teléfono
+const ICONOS = {
+  hoy:  "M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10",
+  movs: "M4 7h16M4 12h16M4 17h10",
+  inv:  "M4 17.5 9.5 12l3.5 3.5L20 8M20 8h-4.5M20 8v4.5",
+  sim:  "M5 8h14M5 16h14M9 5.5v5M15 13.5v5",
+  rep:  "M8.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 19.5c0-3 2.5-4.5 5.5-4.5s5.5 1.5 5.5 4.5M16.5 15c2.5.3 4 1.8 4 4.5M15.5 10.5a2.6 2.6 0 0 0 0-5",
+};
+const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
@@ -4008,7 +4085,12 @@ export default function App() {
           onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
           historial={historial} cerradas={[]} estimados={estimados}
-          invertido={resumenInversiones(cfg.inversiones, cfgTC.tc)}
+          invertido={(() => {
+            const b = resumenInversiones(cfg.inversiones, cfgTC.tc);
+            const usd = (+cfg.reservasUsd || 0) * cfgTC.tc;
+            return { ...b, total: b.total + usd,
+                     porTipo: usd > 0 ? { Dólares: usd, ...b.porTipo } : b.porTipo };
+          })()}
           onVerInvertido={() => setTab("inv")}
           onFinanciar={() => setVerFinanciar(true)}
           onAbrirMedios={() => setVerMedios(true)}
@@ -4033,21 +4115,28 @@ export default function App() {
 
       <nav style={{
         position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 470, margin: "0 auto",
-        display: "grid", gridTemplateColumns: "repeat(4,1fr)", background: T.card,
+        display: "grid", gridTemplateColumns: `repeat(${TABS.length},1fr)`, background: T.card,
         borderTop: `1px solid ${T.linea}`, zIndex: 30,
         backdropFilter: "saturate(1.2) blur(8px)",
+        paddingBottom: "env(safe-area-inset-bottom, 6px)",
       }}>
-        {TABS.map(([id, n]) => (
-          <button
-            key={id} onClick={() => setTab(id)}
-            style={{
-              padding: "14px 4px 22px", fontSize: 12.5,
-              fontWeight: tab === id ? 640 : 450, fontSize: 12.5,
-              color: tab === id ? T.tinta : T.tenue,
-              borderTop: `2px solid ${tab === id ? T.tinta : "transparent"}`, marginTop: -1,
-            }}
-          >{n}</button>
-        ))}
+        {TABS.map(([id, n]) => {
+          const on = tab === id;
+          return (
+            <button key={id} onClick={() => setTab(id)}
+              aria-label={n} aria-current={on ? "page" : undefined}
+              style={{ padding: "9px 2px 8px", display: "flex", flexDirection: "column",
+                       alignItems: "center", gap: 3, color: on ? T.tinta : T.tenue }}>
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth={on ? 2.1 : 1.7}
+                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d={ICONOS[id]} />
+              </svg>
+              <span style={{ fontSize: 10, fontWeight: on ? 640 : 480, letterSpacing: "-0.01em",
+                             whiteSpace: "nowrap" }}>{n}</span>
+            </button>
+          );
+        })}
       </nav>
 
       {editando && (
