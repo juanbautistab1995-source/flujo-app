@@ -195,6 +195,155 @@ const corta = (n) => {
   return plata(n);
 };
 
+/* ===================== LECTOR DE RESÚMENES ===================== */
+// Lector de resúmenes de tarjeta argentinos.
+// Hallazgo clave: el resumen NO lo arma el banco, lo arma el procesador (Prisma/Visa
+// o Mastercard). Por eso alcanzan DOS moldes para cubrir casi todas las tarjetas.
+
+const RMESES = { ene:1, feb:2, mar:3, abr:4, may:5, jun:6, jul:7, ago:8, sep:9, set:9, oct:10, nov:11, dic:12 };
+const RMESL = { enero:1, febrero:2, marzo:3, abril:4, mayo:5, junio:6, julio:7,
+               agosto:8, septiembre:9, setiembre:9, octubre:10, noviembre:11, diciembre:12 };
+
+const rnum = (s) => {
+  if (!s) return 0;
+  const neg = /-\s*$/.test(s) || /^\s*-/.test(s);
+  const v = parseFloat(String(s).replace(/[^\d.,-]/g, "").replace(/\./g, "").replace(",", "."));
+  return isNaN(v) ? 0 : (neg ? -Math.abs(v) : v);
+};
+
+// "20 Ago 26" | "20-Ago-26" | "20 ago. 26" | "20.08.26" | "30-12-24"
+function rFecha(txt) {
+  if (!txt) return null;
+  let m = txt.match(/(\d{1,2})[\s\-.]+([A-Za-zÁ-úá-ú]{3,10})\.?[\s\-.]+(\d{2,4})/);
+  if (m) {
+    const mes = RMESES[m[2].toLowerCase().slice(0, 3)];
+    if (mes) return riso(+m[1], mes, +m[3]);
+  }
+  m = txt.match(/(\d{1,2})[.\-\/](\d{1,2})[.\-\/](\d{2,4})/);
+  if (m) return riso(+m[1], +m[2], +m[3]);
+  return null;
+}
+const riso = (d, m, y) => {
+  y = y < 100 ? 2000 + y : y;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+};
+
+function rCiclos(t) {
+  const b = (re) => { const m = t.match(re); return m ? rFecha(m[1]) : null; };
+  return {
+    cierre:    b(/CIERRE\s+ACTUAL:?\s*([^\n$]{6,20})/i) || b(/ESTADO DE CUENTA AL:?\s*([^\n$]{6,20})/i)
+             || b(/\bCIERRE\s+(\d{1,2}[\s\-][A-Za-z]{3,4}[\s\-]\d{2})/i),
+    vto:       b(/VENCIMIENTO\s+ACTUAL:?\s*([^\n$]{6,20})/i)
+             || b(/VENCIMIENTO\s+(\d{1,2}\s+[A-Za-z]{3,4}\s+\d{2})/i)
+             || b(/VENCIMIENTO\s+SALDO[^\n]*(?:\n[^\n]*){0,2}\n\s*(\d{1,2}\s+[A-Za-z]{3,4}\.?\s+\d{2})\s+\d/i),
+    proxCierre: b(/PROX(?:IMO)?\.?\s*CIERRE:?\s*([^\n$]{6,20})/i),
+    proxVto:    b(/PROX(?:IMO)?\.?\s*(?:VTO|VENCIMIENTO)\.?:?\s*([^\n$]{6,20})/i),
+  };
+}
+
+function rEmisor(t) {
+  const T = t.toUpperCase();
+  const banco = /HIPOTECARIO/.test(T) ? "Banco Hipotecario"
+    : /BANCO NACION|BANCO DE LA NACION|\bBNA\b|NACION EFECTIVO/.test(T) ? "Banco Nación"
+    : /BANCO\s*\n?\s*PROVINCIA|PROVINCIA NET|BIP M/.test(T) ? "Banco Provincia"
+    : /ICBC/.test(T) ? "ICBC" : "Desconocido";
+  const marca = /MASTERCARD|MASTCLI/.test(T) ? "Mastercard" : "Visa";
+  return { banco, marca, molde: marca === "Mastercard" ? "mastercard" : "visa" };
+}
+
+// Ruido: impuestos, pagos, totales — no son consumos del usuario
+const RRUIDO = /IMPUESTO DE SELLOS|IIBB|IVA RG|DB\.RG|DEV\.?IMP|PERCEP|SU PAGO|SALDO ANTERIOR|SALDO ACTUAL|PAGO MINIMO|Total Consumos|TOTAL TITULAR|COM\.POR MANT|MEMBRESIA|LIMITES|CUOTAS A VENCER|Cuotas a vencer|TNA|TEM|Plan V/i;
+
+function rMovs(t, molde) {
+  const out = [];
+  let mesCtx = null, anioCtx = null;
+
+  for (const raw of t.split("\n")) {
+    const l = raw.replace(/\s+$/, "");
+    if (!l.trim() || RRUIDO.test(l)) continue;
+
+    // ICBC agrupa por mes: "26 Enero 07 006463 * DESPEGAR C.08/12  3.158,83"
+    const cab = l.match(/^\s*(\d{2})\s+(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Setiembre|Octubre|Noviembre|Diciembre)\s+/i);
+    if (cab) { anioCtx = 2000 + +cab[1]; mesCtx = RMESL[cab[2].toLowerCase()]; }
+
+    // Cuotas: "C.08/12" | "Cuota 18/18" | "16/18"
+    // "C.08/12" | "Cuota 18/18" | "16/18" suelto (Mastercard) — con o sin comprobante en el medio
+    const cuo = l.match(/(?:C\.|Cuota\s+)(\d{1,2})\s*\/\s*(\d{1,2})/i)
+             || l.match(/\s(\d{1,2})\/(\d{1,2})\s+(?:\d{4,7}\s+)?[\d.,]+\s*$/);
+
+    // Importes al final de la línea
+    const imps = l.match(/-?\d[\d.]*,\d{2}-?/g);
+    if (!imps || !imps.length) continue;
+
+    let f = null;
+    if (cab) {
+      const d = l.slice(cab[0].length).match(/^\s*(\d{1,2})\s/);
+      if (d && mesCtx) f = riso(+d[1], mesCtx, anioCtx);
+    } else {
+      f = rFecha(l.slice(0, 26));
+      if (!f && mesCtx) {
+        const d = l.match(/^\s{2,}(\d{1,2})\s+\d{3,}/);
+        if (d) f = riso(+d[1], mesCtx, anioCtx);
+      }
+    }
+    if (!f) continue;
+
+    // Detalle: sin fecha, sin comprobante, sin cuotas, sin importes
+    let det = l
+      .replace(/^\s*\d{2}\s+[A-Za-zÁ-ú]+\s+/i, "")
+      .replace(/^\s*[\d\-.\/A-Za-z]{6,14}\s+/, "")
+      .replace(/^\s*\d{4,7}\s*[*K]?\s+/, "")
+      .replace(/(?:C\.|Cuota\s+)?\b\d{1,2}\s*\/\s*\d{1,2}\b/i, "")
+      .replace(/-?\d[\d.]*,\d{2}-?/g, "")
+      .replace(/\s{2,}/g, " ").trim();
+    det = det.replace(/^\**\s*/, "").replace(/\s*\*+$/, "").trim();
+    det = det.replace(/\s+\d{5}\s*$/, "").trim();          // comprobante al final (Mastercard)
+    det = det.replace(/^\d{1,2}\s+\d{4,7}\s*[*K]?\s+/, "").trim();  // "07 006463 *" (ICBC)
+    det = det.replace(/\s+\d{6,}\s*$/, "").trim();          // referencias largas
+    if (!det || det.length < 3) continue;
+
+    // Dólares: si hay dos importes y el último es chico, el consumo es en USD
+    let monto = rnum(imps[imps.length - 1]), usd = null;
+    if (imps.length >= 2 && /USD|U\$S/i.test(l)) { usd = rnum(imps[imps.length - 1]); monto = 0; }
+    else if (/USD/i.test(det) && monto < 1000) { usd = monto; monto = 0; }
+    if (monto < 0) continue;               // devoluciones y pagos
+    if (!monto && !usd) continue;
+
+    out.push({
+      fecha: f,
+      detalle: det.slice(0, 46),
+      monto: usd ? 0 : monto,
+      montoUsd: usd,
+      cuota: cuo ? +cuo[1] : 1,
+      cuotas: cuo ? +cuo[2] : 1,
+    });
+  }
+  return out;
+}
+
+// El resumen declara su propio total: lo usamos para autoverificar
+function rTotal(t) {
+  const m = [...t.matchAll(/Total Consumos[^\n]*?(\d[\d.]*,\d{2})/gi)];
+  if (m.length) return m.reduce((a, x) => a + rnum(x[1]), 0);
+  const m2 = t.match(/TOTAL TITULAR[^\n]*?(\d[\d.]*,\d{2})/i);
+  return m2 ? rnum(m2[1]) : null;
+}
+
+function leerResumen(texto) {
+  const em = rEmisor(texto);
+  const movs = rMovs(texto, em.molde);
+  const dec = rTotal(texto);
+  const suma = movs.reduce((a, m) => a + m.monto, 0);
+  return {
+    ...em, ciclos: rCiclos(texto), movs,
+    control: { declarado: dec, sumado: Math.round(suma * 100) / 100,
+               dif: dec ? Math.round((suma - dec) * 100) / 100 : null },
+  };
+}
+
+
+
+
 const BANCOS = [
   "Galicia", "Santander", "BBVA", "Nación", "Provincia", "Macro", "ICBC", "HSBC",
   "Credicoop", "Patagonia", "Supervielle", "Ciudad", "Hipotecario", "Comafi", "Itaú",
@@ -896,7 +1045,7 @@ function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
 
 /* ===================== CARGA RÁPIDA ===================== */
 // Un gasto en tres toques: monto, con qué lo pagaste, listo.
-function Rapido({ medios, onGuardar, onDetallado, onCerrar }) {
+function Rapido({ medios, onGuardar, onDetallado, onImportar, onCerrar }) {
   const [monto, setMonto] = useState("");
   const [detalle, setDetalle] = useState("");
   const [medio, setMedio] = useState(medios[0]?.id || "efectivo");
@@ -993,6 +1142,241 @@ function Rapido({ medios, onGuardar, onDetallado, onCerrar }) {
         <button className="btn" style={{ marginTop: 10, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
           Guardar
         </button>
+        {onImportar && n === 0 && (
+          <button onClick={onImportar}
+            style={{ marginTop: 11, width: "100%", fontSize: 13.5, color: T.ambar, fontWeight: 600 }}>
+            O importá el PDF de un resumen
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===================== IMPORTAR RESUMEN ===================== */
+// pdf.js se carga desde CDN cuando hace falta: no engorda la app ni pide build especial.
+async function cargarPdfJs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((ok, err) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = ok; s.onerror = () => err(new Error("No pude cargar el lector de PDF"));
+    document.head.appendChild(s);
+  });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+
+// Reconstruye las líneas respetando la posición horizontal, como hace pdftotext -layout
+async function textoDelPdf(file, pass) {
+  const pdfjs = await cargarPdfJs();
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf, password: pass || undefined }).promise;
+  let out = "";
+  for (let p = 1; p <= doc.numPages; p++) {
+    const c = await (await doc.getPage(p)).getTextContent();
+    const filas = {};
+    c.items.forEach((it) => {
+      const y = Math.round(it.transform[5]);
+      const x = Math.round(it.transform[4] / 4.7);
+      (filas[y] = filas[y] || []).push({ x, t: it.str });
+    });
+    Object.keys(filas).sort((a, b) => b - a).forEach((y) => {
+      let l = "";
+      filas[y].sort((a, b) => a.x - b.x).forEach((it) => {
+        while (l.length < it.x) l += " ";
+        l += it.t;
+      });
+      out += l + "\n";
+    });
+  }
+  return out;
+}
+
+function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
+  const [etapa, setEtapa] = useState("elegir");   // elegir | leyendo | revisar
+  const [error, setError] = useState("");
+  const [pass, setPass] = useState("");
+  const [pidePass, setPidePass] = useState(false);
+  const [arch, setArch] = useState(null);
+  const [res, setRes] = useState(null);
+  const [sel, setSel] = useState({});
+  const [medio, setMedio] = useState("");
+
+  const yaEsta = (m) => movs.some((x) =>
+    x.detalleOrig === m.detalle && Math.round(x.montoCuota || 0) === Math.round(m.monto) && x.fechaCompra === m.fecha);
+
+  const procesar = async (file, clave) => {
+    setEtapa("leyendo"); setError("");
+    try {
+      const txt = await textoDelPdf(file, clave);
+      const r = leerResumen(txt);
+      if (!r.movs.length) throw new Error("No encontré movimientos. ¿Es el resumen completo?");
+      const auto = medios.find((x) =>
+        (r.banco !== "Desconocido" && (x.nombre || "").toLowerCase().includes(r.banco.split(" ").pop().toLowerCase())) ||
+        (x.nombre || "").toLowerCase().includes((r.banco || "").toLowerCase()));
+      setMedio(auto ? auto.id : (medios.find((m) => m.id !== "efectivo") || {}).id || "");
+      const s = {};
+      r.movs.forEach((m, i) => { s[i] = !yaEsta(m); });
+      setRes(r); setSel(s); setEtapa("revisar"); setPidePass(false);
+    } catch (e) {
+      const msg = String(e && e.message);
+      if (/password|contrase/i.test(msg)) { setPidePass(true); setEtapa("elegir"); setError("El PDF tiene contraseña. Suele ser tu DNI."); }
+      else { setEtapa("elegir"); setError(msg || "No pude leer el archivo"); }
+    }
+  };
+
+  const importar = () => {
+    const mesPago = res.ciclos.vto ? res.ciclos.vto.slice(0, 7) : mesDeHoy();
+    const nuevos = res.movs.filter((_, i) => sel[i]).map((m, k) => {
+      // El resumen muestra el valor de UNA cuota; la app guarda el total y lo reparte.
+      const restantes = Math.max(1, m.cuotas - m.cuota + 1);
+      return {
+        id: "imp" + Date.now() + "_" + k,
+        tipo: "gasto",
+        detalle: m.detalle,
+        detalleOrig: m.detalle,
+        fechaCompra: m.fecha,
+        montoCuota: m.monto,
+        monto: m.montoUsd ? 0 : Math.round(m.monto * restantes),
+        montoUsd: m.montoUsd ? m.montoUsd * restantes : null,
+        moneda: m.montoUsd ? "USD" : "ARS",
+        medio, cuotas: restantes,
+        mesInicio: mesPago,
+        categoria: adivinarCategoria(m.detalle),
+        recurrente: false, pagadoPor: "yo",
+      };
+    });
+    // Si el resumen trae fechas de ciclo, las guardamos: se acaba tener que cargarlas a mano
+    onImportar(nuevos, res.ciclos, medio);
+    onCerrar();
+  };
+
+  const marcados = Object.values(sel).filter(Boolean).length;
+  const dif = res && res.control.dif;
+  const cuadra = res && dif !== null && Math.abs(dif) < 1;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 88, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>Importar resumen</span>
+        {etapa === "revisar"
+          ? <button onClick={importar} style={{ fontSize: 15, fontWeight: 620,
+                    color: marcados ? T.tinta : T.tenue }}>Importar</button>
+          : <span style={{ width: 60 }} />}
+      </div>
+
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        {etapa === "elegir" && (
+          <>
+            <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6, marginBottom: 16 }}>
+              Subí el PDF del resumen que te manda el banco. Leo los consumos, las cuotas
+              y las fechas de cierre. <b>El archivo no sale de tu teléfono.</b>
+            </div>
+            {error && (
+              <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginBottom: 14 }}>{error}</div>
+            )}
+            {pidePass && (
+              <>
+                <label className="lbl">Contraseña del PDF</label>
+                <input value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Suele ser tu DNI" />
+                <button className="btn" style={{ marginTop: 12 }}
+                  onClick={() => arch && procesar(arch, pass)}>Reintentar</button>
+              </>
+            )}
+            <label className="btn" style={{ display: "block", textAlign: "center", cursor: "pointer" }}>
+              Elegir el PDF
+              <input type="file" accept="application/pdf" style={{ display: "none" }}
+                onChange={(e) => { const f = e.target.files[0]; if (f) { setArch(f); procesar(f, pass); } }} />
+            </label>
+            <div style={{ fontSize: 12, color: T.tenue, marginTop: 14, lineHeight: 1.6 }}>
+              Funciona con resúmenes Visa y Mastercard de bancos argentinos. Tiene que ser el PDF
+              original, no una foto ni una captura.
+            </div>
+          </>
+        )}
+
+        {etapa === "leyendo" && (
+          <div style={{ textAlign: "center", padding: "60px 0", color: T.suave, fontSize: 14 }}>
+            Leyendo el resumen…
+          </div>
+        )}
+
+        {etapa === "revisar" && res && (
+          <>
+            <div className="card" style={{ padding: 15, marginBottom: 14 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 620 }}>{res.banco} · {res.marca}</div>
+              {res.ciclos.cierre && (
+                <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.6 }}>
+                  Cerró el {res.ciclos.cierre.split("-").reverse().slice(0, 2).join("/")}
+                  {res.ciclos.vto && ` y vence el ${res.ciclos.vto.split("-").reverse().slice(0, 2).join("/")}`}
+                  {res.ciclos.proxCierre && (
+                    <><br />Próximo cierre {res.ciclos.proxCierre.split("-").reverse().slice(0, 2).join("/")}
+                    {res.ciclos.proxVto && `, vence ${res.ciclos.proxVto.split("-").reverse().slice(0, 2).join("/")}`}
+                    {" — los guardo así no los cargás a mano"}</>
+                  )}
+                </div>
+              )}
+              <div className="aviso" style={{ marginTop: 11, padding: "9px 11px", fontSize: 12.5,
+                    background: cuadra ? T.verdeBg : T.ambarBg, color: cuadra ? T.verde : T.ambar }}>
+                {cuadra
+                  ? `Los ${res.movs.length} movimientos suman exactamente el total del resumen.`
+                  : `Ojo: lo que leí difiere ${plata(Math.abs(dif || 0))} del total declarado. Revisá antes de importar.`}
+              </div>
+            </div>
+
+            <label className="lbl">¿A qué tarjeta van?</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+              {medios.filter((m) => m.id !== "efectivo").map((m) => (
+                <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
+                  onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                          marginBottom: 9 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 620 }}>{marcados} de {res.movs.length}</span>
+              <button onClick={() => {
+                const todos = marcados < res.movs.length;
+                const s = {}; res.movs.forEach((_, i) => { s[i] = todos; }); setSel(s);
+              }} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+                {marcados < res.movs.length ? "Marcar todos" : "Desmarcar todos"}
+              </button>
+            </div>
+
+            <div className="card" style={{ overflow: "hidden" }}>
+              {res.movs.map((m, i) => {
+                const rep = yaEsta(m);
+                const rest = Math.max(1, m.cuotas - m.cuota + 1);
+                return (
+                  <button key={i} onClick={() => setSel({ ...sel, [i]: !sel[i] })}
+                    style={{ width: "100%", textAlign: "left", padding: "11px 14px",
+                             borderTop: i ? `1px solid ${T.linea}` : "none",
+                             display: "flex", gap: 11, alignItems: "flex-start",
+                             opacity: sel[i] ? 1 : 0.45 }}>
+                    <span style={{ marginTop: 2, fontSize: 15, color: sel[i] ? T.verde : T.tenue }}>
+                      {sel[i] ? "●" : "○"}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 13.5, fontWeight: 560 }}>{m.detalle}</span>
+                      <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
+                        {m.fecha.split("-").reverse().join("/")}
+                        {m.cuotas > 1 && ` · cuota ${m.cuota} de ${m.cuotas} · quedan ${rest}`}
+                        {rep && " · ya lo tenés cargado"}
+                      </span>
+                    </span>
+                    <span className="num" style={{ fontSize: 13.5, whiteSpace: "nowrap" }}>
+                      {m.montoUsd ? `USD ${m.montoUsd}` : plata(m.monto)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2348,7 +2732,7 @@ function Personas({ filas }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCerrar }) {
   const [texto, setTexto] = useState("");
   const [modo, setModo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -2466,9 +2850,13 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
           </div>
         </div>
 
-        <button className="btn ghost" style={{ marginBottom: 20, fontSize: 14.5, fontWeight: 500 }}
+        <button className="btn ghost" style={{ marginBottom: 10, fontSize: 14.5, fontWeight: 500 }}
           onClick={onAbrirMedios}>
           Mis medios de pago ({medios.length})
+        </button>
+        <button className="btn ghost" style={{ marginBottom: 20, fontSize: 14.5, fontWeight: 500 }}
+          onClick={onAbrirImportar}>
+          Importar el PDF de un resumen
         </button>
 
         <div style={{ marginTop: 8, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Respaldo</div>
@@ -2570,6 +2958,7 @@ export default function App() {
   const [verAjustes, setVerAjustes] = useState(false);
   const [verMedios, setVerMedios] = useState(false);
   const [verRapido, setVerRapido] = useState(false);
+  const [verImportar, setVerImportar] = useState(false);
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios : MEDIOS_INI;
 
   // Sesion
@@ -2898,10 +3287,31 @@ export default function App() {
           onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
         />
       )}
+      {verImportar && (
+        <ImportarResumen
+          medios={medios} movs={movs}
+          onImportar={(nuevos, ciclos, medioId) => {
+            setMovs([...movs, ...nuevos]);
+            // El resumen trae las fechas del próximo ciclo: las guardamos como confirmadas
+            if (ciclos && ciclos.proxCierre && ciclos.proxVto && medioId) {
+              const lista = medios.map((m) => {
+                if (m.id !== medioId) return m;
+                const cs = (m.ciclos || []).slice();
+                [[ciclos.cierre, ciclos.vto], [ciclos.proxCierre, ciclos.proxVto]].forEach(([c, v]) => {
+                  if (c && v && !cs.some((x) => x.cierre === c)) cs.push({ cierre: c, vto: v });
+                });
+                return { ...m, ciclos: cs };
+              });
+              guardarMedios(lista);
+            }
+          }}
+          onCerrar={() => setVerImportar(false)} />
+      )}
       {verRapido && (
         <Rapido medios={medios}
           onGuardar={(m) => setMovs([...movs, m])}
           onDetallado={() => { setVerRapido(false); setEditando({}); }}
+          onImportar={() => { setVerRapido(false); setVerImportar(true); }}
           onCerrar={() => setVerRapido(false)} />
       )}
       {verMedios && (
@@ -2918,6 +3328,7 @@ export default function App() {
           cfg={cfg} setCfg={setCfg} medios={medios} movs={movs}
           onBorrarVarios={borrarVarios} onReiniciar={reiniciar} onImportar={importar}
           onAbrirMedios={() => { setVerAjustes(false); setVerMedios(true); }}
+          onAbrirImportar={() => { setVerAjustes(false); setVerImportar(true); }}
           onCerrar={() => setVerAjustes(false)}
         />
       )}
