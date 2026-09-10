@@ -2155,6 +2155,130 @@ function Financiar({ medios, cfg, onCerrar }) {
   );
 }
 
+/* ===================== REPORTAR UN PROBLEMA ===================== */
+// En un beta, el reporte tiene que costar 20 segundos o nadie lo manda.
+function Reportar({ sesion, cfg, movs, medios, tab, onCerrar }) {
+  const [tipo, setTipo] = useState("");
+  const [texto, setTexto] = useState("");
+  const [estado, setEstado] = useState("");
+
+  const TIPOS = [
+    ["roto", "Algo no funciona"],
+    ["numero", "Un número está mal"],
+    ["confuso", "No entendí algo"],
+    ["idea", "Se me ocurrió algo"],
+  ];
+
+  // Contexto técnico automático: el usuario no tiene que explicarlo
+  const contexto = () => ({
+    version: APP_VERSION,
+    pantalla: tab,
+    movimientos: movs.length,
+    medios: medios.length,
+    inversiones: (cfg.inversiones || []).length,
+    horizonte: cfg.horizonte,
+    tieneSaldo: (cfg.saldoHoy || 0) !== 0,
+    navegador: typeof navigator !== "undefined" ? navigator.userAgent : "",
+    pantallaPx: typeof window !== "undefined" ? `${window.innerWidth}x${window.innerHeight}` : "",
+    cuando: new Date().toISOString(),
+  });
+
+  const enviar = async () => {
+    if (!texto.trim()) return;
+    setEstado("Enviando…");
+    const cuerpo = {
+      usuario: sesion && sesion.user ? sesion.user.id : null,
+      tipo: tipo || "roto",
+      texto: texto.trim(),
+      contexto: contexto(),
+    };
+    try {
+      const { error } = await sb.from("reportes").insert(cuerpo);
+      if (error) throw error;
+      setEstado("listo");
+    } catch (e) {
+      // Si la tabla no existe o no hay red, no perdemos el reporte
+      try {
+        await navigator.clipboard.writeText(
+          `[${cuerpo.tipo}] ${cuerpo.texto}\n\n---\n${JSON.stringify(cuerpo.contexto, null, 1)}`
+        );
+        setEstado("copiado");
+      } catch (e2) { setEstado("error"); }
+    }
+  };
+
+  if (estado === "listo" || estado === "copiado") {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 92,
+                    display: "flex", flexDirection: "column", justifyContent: "center", padding: 28 }}>
+        <div style={{ fontSize: 34, marginBottom: 14 }}>✓</div>
+        <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 10 }}>
+          {estado === "listo" ? "Gracias, me llegó" : "Copiado al portapapeles"}
+        </div>
+        <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.6 }}>
+          {estado === "listo"
+            ? "Lo voy a revisar. Si necesito más detalle te escribo."
+            : "No pude enviarlo desde acá, pero quedó copiado con todo el detalle técnico. Pegámelo por WhatsApp."}
+        </div>
+        <button className="btn" style={{ marginTop: 26 }} onClick={onCerrar}>Volver</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 92, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>Contame qué pasó</span>
+        <button onClick={enviar}
+          style={{ fontSize: 15, fontWeight: 620, color: texto.trim() ? T.tinta : T.tenue }}>
+          Enviar
+        </button>
+      </div>
+
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6, marginBottom: 16 }}>
+          Estoy probando la app con gente de confianza. Todo lo que me digas sirve,
+          por chiquito que parezca.
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          {TIPOS.map(([id, n]) => (
+            <button key={id} onClick={() => setTipo(id)}
+              style={{ padding: "13px 15px", textAlign: "left", borderRadius: 13,
+                       border: `1px solid ${tipo === id ? T.tinta : T.linea}`,
+                       background: tipo === id ? T.tinta : T.card,
+                       color: tipo === id ? "#EAF0EC" : T.tinta,
+                       fontSize: 14.5, fontWeight: tipo === id ? 620 : 500 }}>
+              {n}
+            </button>
+          ))}
+        </div>
+
+        <label className="lbl" style={{ marginTop: 18 }}>Contame con tus palabras</label>
+        <textarea value={texto} onChange={(e) => setTexto(e.target.value)}
+          rows={5} placeholder="Ej: cargué un gasto con la Visa y me lo mandó a noviembre en vez de octubre"
+          style={{ width: "100%", padding: 13, borderRadius: 12, border: `1px solid ${T.linea}`,
+                   fontSize: 15, fontFamily: "inherit", background: T.card, resize: "vertical" }} />
+
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 12, lineHeight: 1.6 }}>
+          Va lo que escribas acá, más la pantalla en la que estabas, la versión de la app y
+          cuántos movimientos tenés cargados.
+          <b> La app no manda tus gastos, tus montos ni tu saldo</b>, así que si necesitás poner
+          un número para explicarme, ponelo vos.
+        </div>
+
+        {estado === "error" && (
+          <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginTop: 14 }}>
+            No pude enviarlo ni copiarlo. Mandámelo por WhatsApp.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
 function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null }) {
   const esNuevo = !inicial?.id;
@@ -2640,7 +2764,7 @@ function Vencimientos({ medios }) {
 
 function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
-               estimados = [], onAbrirMedios,
+               estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
@@ -3115,12 +3239,47 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       ))}
 
       {!movs.length && (
-        <div className="card" style={{ padding: 18, marginTop: 16, background: T.ambarBg, borderColor: "transparent" }}>
-          <div style={{ fontSize: 15, fontWeight: 620, marginBottom: 6 }}>Empecemos</div>
-          <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6 }}>
-            Todavía no cargaste nada. Tocá el <b>+</b> de abajo a la derecha y cargá primero tu sueldo,
-            marcándolo como ingreso que se repite todos los meses. Después sumá tus gastos fijos y
-            lo que tengas en cuotas.
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 19, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 6 }}>
+            Arranquemos por lo rápido
+          </div>
+          <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6, marginBottom: 14 }}>
+            En dos minutos vas a ver cuánta plata te queda de verdad, mes a mes.
+          </div>
+
+          {[["1", "Subí el PDF de un resumen",
+             "Cargo todos tus gastos, las cuotas y las fechas de tu tarjeta de una",
+             onAbrirImportar, true],
+            ["2", "Poné cuánta plata tenés hoy",
+             "Lo que hay en la cuenta y en el bolsillo, nada más",
+             () => setEditSaldo(true), false],
+            ["3", "Cargá tu sueldo",
+             "Con el + de abajo, como ingreso que se repite todos los meses",
+             null, false],
+          ].map(([n, tit, sub, accion, destacado]) => (
+            <button key={n} onClick={accion || undefined}
+              className="card"
+              style={{ width: "100%", textAlign: "left", padding: "14px 15px", marginBottom: 9,
+                       display: "flex", gap: 13, alignItems: "flex-start",
+                       borderColor: destacado ? T.tinta : T.linea,
+                       cursor: accion ? "pointer" : "default" }}>
+              <span style={{ width: 24, height: 24, borderRadius: 99, flexShrink: 0,
+                             background: destacado ? T.tinta : T.papel,
+                             color: destacado ? "#EAF0EC" : T.suave,
+                             display: "flex", alignItems: "center", justifyContent: "center",
+                             fontSize: 12.5, fontWeight: 660, marginTop: 1 }}>{n}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 14.5, fontWeight: 620 }}>{tit}</span>
+                <span style={{ display: "block", fontSize: 12.5, color: T.suave,
+                               marginTop: 3, lineHeight: 1.5 }}>{sub}</span>
+              </span>
+              {accion && <span style={{ fontSize: 18, color: T.tenue, marginTop: 2 }}>›</span>}
+            </button>
+          ))}
+
+          <div style={{ fontSize: 12, color: T.tenue, marginTop: 12, lineHeight: 1.6,
+                        textAlign: "center" }}>
+            El resumen se lee en tu teléfono y no se sube a ningún lado.
           </div>
         </div>
       )}
@@ -3566,7 +3725,7 @@ function Personas({ filas }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onReportar, onCerrar }) {
   const [texto, setTexto] = useState("");
   const [modo, setModo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -3693,6 +3852,12 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
           Importar el PDF de un resumen
         </button>
 
+        <button className="btn ghost" style={{ marginBottom: 20, fontSize: 14.5, fontWeight: 500,
+              borderColor: T.ambar, color: T.ambar }}
+          onClick={onReportar}>
+          Reportar un problema o una idea
+        </button>
+
         <div style={{ marginTop: 8, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Respaldo</div>
         <div style={{ fontSize: 12, color: T.suave, marginBottom: 12, lineHeight: 1.5 }}>
           Tus datos viven solo en este navegador. Si no abrís la app por más de una semana, iOS puede borrarlos.
@@ -3798,6 +3963,7 @@ const ICONOS = {
 };
 const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
+const APP_VERSION = "beta 1.0";
 const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
@@ -3815,6 +3981,7 @@ export default function App() {
   const [verRapido, setVerRapido] = useState(false);
   const [verImportar, setVerImportar] = useState(false);
   const [verFinanciar, setVerFinanciar] = useState(false);
+  const [verReporte, setVerReporte] = useState(false);
   // Si la cuenta nunca definió medios, dependemos de si trae la semilla o arrancó vacía
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios
                : (movs.length ? MEDIOS_INI : MEDIOS_NUEVO);
@@ -4112,6 +4279,7 @@ export default function App() {
                      porTipo: usd > 0 ? { Dólares: usd, ...b.porTipo } : b.porTipo };
           })()}
           onVerInvertido={() => setTab("inv")}
+          onAbrirImportar={() => setVerImportar(true)}
           onFinanciar={() => setVerFinanciar(true)}
           onAbrirMedios={() => setVerMedios(true)}
           revisadas={cfg.revisadas || {}}
@@ -4174,6 +4342,10 @@ export default function App() {
           onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
         />
       )}
+      {verReporte && (
+        <Reportar sesion={sesion} cfg={cfg} movs={movs} medios={medios} tab={tab}
+          onCerrar={() => setVerReporte(false)} />
+      )}
       {verFinanciar && (
         <Financiar medios={medios} cfg={cfg} onCerrar={() => setVerFinanciar(false)} />
       )}
@@ -4223,6 +4395,7 @@ export default function App() {
           onCargarEjemplo={cargarEjemplo}
           onAbrirMedios={() => { setVerAjustes(false); setVerMedios(true); }}
           onAbrirImportar={() => { setVerAjustes(false); setVerImportar(true); }}
+          onReportar={() => { setVerAjustes(false); setVerReporte(true); }}
           onCerrar={() => setVerAjustes(false)}
         />
       )}
