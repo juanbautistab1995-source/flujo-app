@@ -77,6 +77,12 @@ const CSS = `
 `;
 
 /* ===================== MEDIOS DE PAGO ===================== */
+// Una cuenta nueva NO hereda las tarjetas de nadie: arranca solo con efectivo.
+const MEDIOS_NUEVO = [
+  { id: "efectivo", nombre: "Efectivo / débito", corto: "Efvo", cierre: 0, vto: 0 },
+];
+
+// Solo se usan junto con la semilla de ejemplo
 const MEDIOS_INI = [
   { id: "icbc", nombre: "Visa ICBC Signature", corto: "ICBC", cierre: 23, vto: 6, ciclos: [
     { cierre: "2026-07-23", vto: "2026-08-04" },
@@ -352,28 +358,96 @@ const BANCOS = [
 const MARCAS = ["Visa", "Mastercard", "Amex", "Cabal"];
 
 // Adivinar la categoría por el texto ahorra un campo entero en la carga
+// Los resúmenes traen basura del procesador: MERPAGO*, DLO*, códigos de referencia.
+// Un diccionario resuelve casi todo sin IA: gratis, instantáneo y sin inventar nada.
+const PREFIJOS = /^(MERPAGO|MERCADOPAGO|MP|DLO|PVS|CP|DEBIN|PEDIDOSYA|RAPIPAGO|TIENDANUBE|EBANX|DL)\s*[*.\-]\s*/i;
+
+const COMERCIOS = {
+  rappiargsas: "Rappi", rappi: "Rappi", pedidosya: "PedidosYa",
+  meli: "Mercado Libre", mercadolibre: "Mercado Libre", ebanxsa: "Ebanx",
+  fpatronal: "Federación Patronal", "fed patronal": "Federación Patronal", federa: "Federación Patronal",
+  playstation: "PlayStation", "apple.com": "Apple", google: "Google",
+  netflix: "Netflix", spotify: "Spotify", disney: "Disney+", hbo: "HBO Max",
+  claro: "Claro", movistar: "Movistar", madacom: "Madacom", telepase: "Telepase",
+  edelap: "Edelap", edenor: "Edenor", edesur: "Edesur", "bhn seguros": "Seguro BHN", bhn: "Seguro BHN",
+  shell: "Shell", ypf: "YPF", axion: "Axion",
+  disco: "Disco", coto: "Coto", carrefour: "Carrefour", jumbo: "Jumbo", "super juan": "Super Juan",
+  nike: "Nike", adidasargenti: "Adidas", adidas: "Adidas", kevingston: "Kevingston",
+  "las pepas": "Las Pepas", portsaid: "Portsaid", simplicity: "Simplicity",
+  despegar: "Despegar", almundo: "Almundo", aerolineas: "Aerolíneas Argentinas",
+  bidcom: "Bidcom", fravega: "Frávega", garbarino: "Garbarino", musimundo: "Musimundo",
+  cinemalaplata: "Cine La Plata", cuspide: "Cúspide", buscalibreargenti: "Buscalibre",
+  gadnic: "Gadnic", "seven electronics": "Seven Electronics",
+  farmacia: "Farmacia", drugstorekapr: "Drugstore", kiosco: "Kiosco",
+  alfisjeans: "Alfis Jeans", "get the look": "Get The Look", "casa tomada": "Casa Tomada",
+  pigmento: "Perfumería Pigmento", perfumeria: "Perfumería", perfumsnow: "Perfum Snow",
+  parfumerie: "Perfumería", opensports: "Open Sports", thebrandschoi: "The Brand's Choice",
+  "las margaritas": "Las Margaritas", "home sweet": "Home Sweet", visaur: "Visaur",
+  consumiblesds: "Consumibles", "shop gallery": "Shop Gallery", blossomfragancias: "Blossom",
+  busplus: "BusPlus", tune: "Tune", kingofkings: "King of Kings",
+  vegahernan: "Vega Hernán", gaona: "Gaona", florysol: "Florysol", pimpollo: "Pimpollo",
+};
+
+// "MERPAGO*FPATRONAL04351" -> "Federación Patronal"
+function limpiarComercio(txt) {
+  let t = String(txt || "").trim().replace(PREFIJOS, "").replace(/\s{2,}/g, " ").trim();
+
+  const bajo = t.toLowerCase();
+  for (const [clave, nombre] of Object.entries(COMERCIOS))
+    if (bajo.includes(clave)) return nombre;
+
+  // Solo lo que es CLARAMENTE un código: no queremos borrar el nombre del comercio.
+  t = t.replace(/\s*[\/#]{1,2}\d{6,}.*$/, "");           // //4040486240026
+  t = t.replace(/\s+\d{5,}\b/g, "");                      // " 368058701"
+  t = t.replace(/\s*\([^)]*\)\s*$/, "");                  // "(USA,USD, )"
+  t = t.replace(/\s+[A-Za-z]{2,}\d[A-Za-z0-9]{4,}\b/g, ""); // MVGMK6T7VUSD
+  t = t.replace(/\s+(SRL|SA|SAS|S\.A\.?)[\s\-].*$/i, "");
+  t = t.replace(/\d{2,}$/, "");                             // "LOOK233" -> "LOOK"
+  t = t.replace(/^(WWW\.|HTTPS?:\/\/)/i, "").replace(/\.(COM\.AR|COM|AR)\b/i, "");
+  t = t.replace(/[*\-\/.]+$/, "").replace(/\s{2,}/g, " ").trim();
+
+  if (!t) return String(txt || "").trim();
+
+  const SIGLAS = /^(sa|srl|sas|bhn|ypf|icbc|bna|usa|usd|ars)$/i;
+  return t.toLowerCase().split(" ").filter(Boolean).map((p) =>
+    SIGLAS.test(p) ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1)
+  ).join(" ").trim();
+}
+
 const PISTAS = {
-  comida: ["super", "disco", "coto", "carrefour", "jumbo", "dia", "chino", "verdu", "carnice", "panade"],
-  delivery: ["rappi", "pedidos", "pedidosya", "uber eats", "delivery", "mcdonald", "burger", "pizza"],
-  transporte: ["uber", "cabify", "didi", "sube", "taxi", "remis", "telepase", "peaje", "estaciona"],
-  combustible: ["shell", "ypf", "axion", "puma", "nafta", "combustible", "gnc"],
-  salidas: ["bar", "cerveza", "boliche", "resto", "cine", "teatro", "birra", "salida", "finde"],
-  servicios: ["edelap", "edenor", "edesur", "camuzzi", "metrogas", "absa", "agua", "luz", "gas", "aysa"],
-  suscripciones: ["netflix", "spotify", "disney", "hbo", "max", "apple", "google", "youtube", "prime", "claro", "personal", "movistar", "internet"],
-  salud: ["farmacia", "osde", "swiss", "medic", "dentista", "kinesio"],
-  ropa: ["nike", "adidas", "zara", "ropa", "zapatilla", "remera", "campera"],
-  hogar: ["easy", "sodimac", "ferrete", "mueble", "deco", "limpieza"],
-  educacion: ["curso", "facultad", "libro", "capacita", "ingles"],
-  regalos: ["regalo", "cumple", "navidad", "aguinaldo"],
-  viajes: ["vuelo", "aerolineas", "latam", "hotel", "airbnb", "pasaje", "viaje"],
-  prestamos: ["prestamo", "cuota del", "prendario", "hipotecar"],
+  "Alimentación": ["super", "disco", "coto", "carrefour", "jumbo", "chino", "verdu", "carnice",
+    "panade", "almacen", "dietetica", "vea ", "super juan", "kiosco", "pastas", "granja"],
+  "Gastronomía y salidas": ["rappi", "pedidosya", "pedidos ya", "delivery", "mcdonald", "burger",
+    "pizza", "bar", "cerveza", "boliche", "resto", "cine", "teatro", "birra", "cafe", "heladeria",
+    "parrilla", "sushi", "cinema"],
+  "Transporte y nafta": ["uber", "cabify", "didi", "sube", "taxi", "remis", "telepase", "peaje",
+    "estaciona", "shell", "ypf", "axion", "puma", "nafta", "combustible", "gnc", "cochera"],
+  "Vivienda y servicios": ["edelap", "edenor", "edesur", "camuzzi", "metrogas", "absa", "aysa",
+    "expensas", "alquiler", "abl", "arba", "municipal"],
+  "Suscripciones": ["netflix", "spotify", "disney", "hbo", "max ", "apple", "google", "youtube",
+    "prime", "claro", "personal", "movistar", "internet", "madacom", "playstation", "chatgpt",
+    "openai", "icloud", "telecom", "flow"],
+  "Salud": ["farmacia", "osde", "swiss", "medic", "dentista", "kinesio", "psico", "laboratorio",
+    "optica", "drugstore"],
+  "Indumentaria": ["nike", "adidas", "zara", "ropa", "zapatilla", "remera", "campera", "jeans",
+    "kevingston", "pepas", "portsaid", "simplicity", "indumentaria", "calzado", "sport"],
+  "Deporte": ["gimnasio", "gym", "basquet", "futbol", "padel", "tenis", "club", "natacion"],
+  "Cuidado personal": ["perfumeria", "peluqueria", "barberia", "cosmetic", "fragancia", "perfum"],
+  "Hogar y compras": ["easy", "sodimac", "ferrete", "mueble", "deco", "limpieza", "bazar",
+    "mercadolibre", "mercado libre", "fravega", "garbarino", "musimundo", "bidcom", "electro"],
+  "Viajes": ["vuelo", "aerolineas", "latam", "hotel", "airbnb", "pasaje", "despegar", "almundo",
+    "turismo", "excursion"],
+  "Préstamos": ["prestamo", "prendario", "hipotecar", "cuota del prestamo"],
+  "Seguros": ["seguro", "patronal", "bhn", "sancor", "rivadavia", "poliza"],
+  "Educación": ["curso", "facultad", "libro", "capacita", "ingles", "universidad", "cuspide",
+    "buscalibre", "libreria"],
 };
 function adivinarCategoria(texto) {
   const t = (texto || "").toLowerCase();
-  if (!t.trim()) return "otros";
+  if (!t.trim()) return "Otros";
   for (const [cat, pistas] of Object.entries(PISTAS))
     if (pistas.some((p) => t.includes(p))) return cat;
-  return "otros";
+  return "Otros";
 }
 
 const CATEGORIAS = [
@@ -1068,7 +1142,7 @@ function Rapido({ medios, onGuardar, onDetallado, onImportar, onCerrar }) {
     onCerrar();
   };
   const cat = adivinarCategoria(detalle);
-  const catNom = (CATEGORIAS.find((c) => c.id === cat) || {}).nombre;
+  const catNom = cat !== "Otros" ? cat : null;
   const mesPago = mesDePago(hoyISO(), medio, medios);
 
   return (
@@ -1203,6 +1277,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
   const [res, setRes] = useState(null);
   const [sel, setSel] = useState({});
   const [medio, setMedio] = useState("");
+  const [dudoso, setDudoso] = useState(false);
 
   const yaEsta = (m) => movs.some((x) =>
     x.detalleOrig === m.detalle && Math.round(x.montoCuota || 0) === Math.round(m.monto) && x.fechaCompra === m.fecha);
@@ -1213,10 +1288,22 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
       const txt = await textoDelPdf(file, clave);
       const r = leerResumen(txt);
       if (!r.movs.length) throw new Error("No encontré movimientos. ¿Es el resumen completo?");
-      const auto = medios.find((x) =>
-        (r.banco !== "Desconocido" && (x.nombre || "").toLowerCase().includes(r.banco.split(" ").pop().toLowerCase())) ||
-        (x.nombre || "").toLowerCase().includes((r.banco || "").toLowerCase()));
-      setMedio(auto ? auto.id : (medios.find((m) => m.id !== "efectivo") || {}).id || "");
+      // Un banco puede tener varias tarjetas: hay que mirar banco Y marca, si no
+      // un resumen de Mastercard cae en la Visa del mismo banco.
+      const clave = (r.banco || "").split(" ").pop().toLowerCase();   // "icbc", "nación", "provincia"
+      const esMaster = (t) => /master|mc\b/i.test(t);
+      const puntaje = (x) => {
+        const n = ((x.nombre || "") + " " + (x.corto || "") + " " + (x.banco || "")).toLowerCase();
+        let p = 0;
+        if (clave && clave !== "desconocido" && n.includes(clave)) p += 2;
+        if (esMaster(n) === (r.marca === "Mastercard")) p += 3;       // la marca pesa más
+        return p;
+      };
+      const candidatos = medios.filter((m) => m.id !== "efectivo");
+      const mejor = candidatos.map((m) => ({ m, p: puntaje(m) })).sort((a, b) => b.p - a.p)[0];
+      const auto = mejor && mejor.p >= 4 ? mejor.m : null;             // banco + marca, o nada
+      setMedio(auto ? auto.id : "");
+      setDudoso(!auto);
       const s = {};
       r.movs.forEach((m, i) => { s[i] = !yaEsta(m); });
       setRes(r); setSel(s); setEtapa("revisar"); setPidePass(false);
@@ -1235,7 +1322,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
       return {
         id: "imp" + Date.now() + "_" + k,
         tipo: "gasto",
-        detalle: m.detalle,
+        detalle: limpiarComercio(m.detalle),
         detalleOrig: m.detalle,
         fechaCompra: m.fecha,
         montoCuota: m.monto,
@@ -1244,7 +1331,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         moneda: m.montoUsd ? "USD" : "ARS",
         medio, cuotas: restantes,
         mesInicio: mesPago,
-        categoria: adivinarCategoria(m.detalle),
+        categoria: adivinarCategoria(limpiarComercio(m.detalle) + " " + m.detalle),
         recurrente: false, pagadoPor: "yo",
       };
     });
@@ -1264,8 +1351,9 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
         <span style={{ fontSize: 15, fontWeight: 620 }}>Importar resumen</span>
         {etapa === "revisar"
-          ? <button onClick={importar} style={{ fontSize: 15, fontWeight: 620,
-                    color: marcados ? T.tinta : T.tenue }}>Importar</button>
+          ? <button onClick={() => medio && marcados && importar()}
+                    style={{ fontSize: 15, fontWeight: 620,
+                    color: (marcados && medio) ? T.tinta : T.tenue }}>Importar</button>
           : <span style={{ width: 60 }} />}
       </div>
 
@@ -1329,6 +1417,11 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
             </div>
 
             <label className="lbl">¿A qué tarjeta van?</label>
+            {dudoso && (
+              <div className="aviso" style={{ background: T.ambarBg, color: T.ambar, marginBottom: 9 }}>
+                No pude identificar la tarjeta con seguridad. Elegila vos antes de importar.
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
               {medios.filter((m) => m.id !== "efectivo").map((m) => (
                 <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
@@ -1361,7 +1454,9 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
                       {sel[i] ? "●" : "○"}
                     </span>
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: "block", fontSize: 13.5, fontWeight: 560 }}>{m.detalle}</span>
+                      <span style={{ display: "block", fontSize: 13.5, fontWeight: 560 }}>
+                        {limpiarComercio(m.detalle)}
+                      </span>
                       <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
                         {m.fecha.split("-").reverse().join("/")}
                         {m.cuotas > 1 && ` · cuota ${m.cuota} de ${m.cuotas} · quedan ${rest}`}
@@ -2732,7 +2827,7 @@ function Personas({ filas }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onCerrar }) {
   const [texto, setTexto] = useState("");
   const [modo, setModo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -2929,12 +3024,25 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
           className="btn ghost"
           style={{ marginTop: 10 }}
           onClick={() => {
-            if (confirm("¿Volver a los datos originales de tus resúmenes? Se pierde todo lo que cargaste."))
+            if (confirm("¿Dejar la cuenta completamente vacía? Se borran todos tus movimientos y tarjetas. No se puede deshacer."))
               onReiniciar();
           }}
         >
-          Reiniciar con mis datos originales
+          Vaciar la cuenta
         </button>
+
+        {!movs.length && (
+          <button
+            className="btn ghost"
+            style={{ marginTop: 10 }}
+            onClick={() => {
+              if (confirm("Voy a cargar un juego de datos de ejemplo para que veas cómo funciona. Después podés vaciarla."))
+                onCargarEjemplo();
+            }}
+          >
+            Cargar datos de ejemplo
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2959,7 +3067,9 @@ export default function App() {
   const [verMedios, setVerMedios] = useState(false);
   const [verRapido, setVerRapido] = useState(false);
   const [verImportar, setVerImportar] = useState(false);
-  const medios = (cfg.medios && cfg.medios.length) ? cfg.medios : MEDIOS_INI;
+  // Si la cuenta nunca definió medios, dependemos de si trae la semilla o arrancó vacía
+  const medios = (cfg.medios && cfg.medios.length) ? cfg.medios
+               : (movs.length ? MEDIOS_INI : MEDIOS_NUEVO);
 
   // Sesion
   useEffect(() => {
@@ -2992,11 +3102,14 @@ export default function App() {
         } catch (e) { /* nada guardado */ }
       }
       // Cuenta nueva de verdad: arranca vacia. La semilla es solo de quien la cargo.
-      if (!movsN) movsN = [];
+      // Las tarjetas tampoco se heredan: son datos personales de otra persona.
+      let nueva = false;
+      if (!movsN) { movsN = []; nueva = true; }
 
       const mk = mesDeHoy();
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
                   ajustes: (cfgN && cfgN.ajustes) || {}, aplicados: (cfgN && cfgN.aplicados) || {} };
+      if (nueva && !c.medios) c.medios = MEDIOS_NUEVO;
 
       // Limpieza: si quedo el efecto de un movimiento que ya no existe, lo revertimos.
       // Pasa si se borro el movimiento sin deshacer primero.
@@ -3034,7 +3147,7 @@ export default function App() {
       }
       if (!vivo) return;
       setCfgRaw(c); setMovs(movsN);
-      const tieneSemilla = movsN.some((m) => String(m.id).startsWith("s"));
+      const tieneSemilla = movsN.length > 0 && movsN.some((m) => String(m.id).startsWith("s"));
       if (tieneSemilla && (cfgN && cfgN.seedVersion ? cfgN.seedVersion : 0) < SEED_VERSION) setHayUpdate(true);
       setCargando(false);
       guardarNube(uid, c, movsN);
@@ -3115,17 +3228,27 @@ export default function App() {
     const c = { ...cfg, ajustes: a, aplicados: ap,
                 saldoHoy: Math.round(caja), reservasUsd: Math.max(0, Math.round(res * 100) / 100) };
     const n = movs.filter((x) => !ids.includes(x.id));
+    // Si no queda ningun movimiento, las tarjetas tampoco tienen por que sobrevivir
+    if (!n.length && !cfg.medios) c.medios = MEDIOS_NUEVO;
     setCfgRaw(c); setMovs(n); persistir(c, n);
     setEditando(null);
   };
   const guardarMedios = (lista) => {
     // Nunca dejamos la app sin medios de pago
-    const l = lista.length ? lista : MEDIOS_INI;
+    const l = lista.length ? lista : MEDIOS_NUEVO;
     setCfg({ ...cfg, medios: l });
   };
+  // Vaciar deja la cuenta como recién creada: sin movimientos, sin tarjetas, sin saldo.
+  // NUNCA vuelve a cargar la semilla: esos son los datos de una persona, no un ejemplo.
   const reiniciar = () => {
+    const c = { ...CFG_INI, tc: cfg.tc, horizonte: cfg.horizonte, diaCobro: cfg.diaCobro,
+                nombre: cfg.nombre, medios: MEDIOS_NUEVO, ajustesInit: true };
+    setMovs([]); setCfgRaw(c); persistir(c, []); setVerAjustes(false);
+  };
+  // Para probar la app sin cargar nada a mano
+  const cargarEjemplo = () => {
     const mk = mesDeHoy();
-    const c = { ...CFG_INI, saldoHoy: cfg.saldoHoy, tc: cfg.tc, horizonte: cfg.horizonte,
+    const c = { ...CFG_INI, tc: cfg.tc, horizonte: cfg.horizonte, medios: MEDIOS_INI,
                 ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, cfg.tc) } };
     setMovs(SEED); setCfgRaw(c); persistir(c, SEED); setVerAjustes(false);
   };
@@ -3327,6 +3450,7 @@ export default function App() {
         <Ajustes
           cfg={cfg} setCfg={setCfg} medios={medios} movs={movs}
           onBorrarVarios={borrarVarios} onReiniciar={reiniciar} onImportar={importar}
+          onCargarEjemplo={cargarEjemplo}
           onAbrirMedios={() => { setVerAjustes(false); setVerMedios(true); }}
           onAbrirImportar={() => { setVerAjustes(false); setVerImportar(true); }}
           onCerrar={() => setVerAjustes(false)}
