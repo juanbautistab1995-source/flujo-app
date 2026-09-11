@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 /* ===================== TOKENS ===================== */
@@ -384,6 +384,56 @@ function leerResumen(texto) {
 
 
 
+
+/* ===================== DEUDAS ENTRE USUARIOS ===================== */
+const ESTADOS = {
+  pendiente:   { nombre: "Esperando respuesta", color: "ambar" },
+  aceptada:    { nombre: "Aceptada",            color: "tinta" },
+  rechazada:   { nombre: "Rechazada",           color: "rojo" },
+  dice_pagada: { nombre: "Dice que pagó",       color: "ambar" },
+  saldada:     { nombre: "Saldada",             color: "verde" },
+};
+const ABIERTAS = ["pendiente", "aceptada", "dice_pagada"];
+
+// Buscar a alguien por su @usuario. El mail queda privado.
+async function buscarUsuario(handle) {
+  const h = String(handle || "").trim().replace(/^@/, "").toLowerCase();
+  if (h.length < 2) return null;
+  const { data, error } = await sb.from("perfiles")
+    .select("id, usuario, nombre").ilike("usuario", h).limit(1);
+  if (error || !data || !data.length) return null;
+  return data[0];
+}
+
+async function traerDeudas(uid) {
+  const { data, error } = await sb.from("deudas")
+    .select("*").or(`acreedor.eq.${uid},deudor.eq.${uid}`)
+    .order("creado", { ascending: false }).limit(400);
+  if (error) throw error;
+  return data || [];
+}
+
+// Neto por persona: positivo = te deben, negativo = debés
+function netoPorPersona(deudas, uid, perfiles) {
+  const m = {};
+  (deudas || []).filter((d) => ABIERTAS.includes(d.estado)).forEach((d) => {
+    const otro = d.acreedor === uid ? d.deudor : d.acreedor;
+    const signo = d.acreedor === uid ? 1 : -1;
+    if (!m[otro]) m[otro] = { id: otro, neto: 0, items: [],
+      nombre: (perfiles && perfiles[otro]) || "alguien" };
+    m[otro].neto += signo * (+d.monto || 0);
+    m[otro].items.push(d);
+  });
+  return Object.values(m).sort((a, b) => Math.abs(b.neto) - Math.abs(a.neto));
+}
+
+// Lo que necesita atención mía: deudas que me cargaron y no respondí,
+// o pagos que me avisaron y no confirmé.
+function requierenAccion(deudas, uid) {
+  return (deudas || []).filter((d) =>
+    (d.deudor === uid && d.estado === "pendiente") ||
+    (d.acreedor === uid && d.estado === "dice_pagada"));
+}
 
 /* ===================== COTIZACIONES EN VIVO ===================== */
 // Dos APIs públicas gratuitas, sin clave:
@@ -2279,6 +2329,302 @@ function Reportar({ sesion, cfg, movs, medios, tab, onCerrar }) {
   );
 }
 
+/* ===================== COMPARTIR UN GASTO ===================== */
+// Cargar un gasto y mandarle la mitad a alguien, por @usuario.
+function Compartir({ sesion, medios, onListo, onCerrar }) {
+  const [monto, setMonto] = useState("");
+  const [detalle, setDetalle] = useState("");
+  const [medio, setMedio] = useState("efectivo");
+  const [handle, setHandle] = useState("");
+  const [encontrado, setEncontrado] = useState(null);
+  const [buscando, setBuscando] = useState(false);
+  const [pct, setPct] = useState(0.5);
+  const [estado, setEstado] = useState("");
+
+  const n = parseInt(monto || "0", 10);
+  const suMitad = Math.round(n * pct);
+
+  const buscar = async () => {
+    setBuscando(true); setEncontrado(null); setEstado("");
+    const u = await buscarUsuario(handle);
+    setBuscando(false);
+    if (!u) { setEstado("No encontré a nadie con ese usuario"); return; }
+    if (sesion && sesion.user && u.id === sesion.user.id) {
+      setEstado("Ese sos vos"); return;
+    }
+    setEncontrado(u);
+  };
+
+  const guardar = async () => {
+    if (!n || !encontrado) return;
+    setEstado("Guardando…");
+    try {
+      const { error } = await sb.from("deudas").insert({
+        acreedor: sesion.user.id, deudor: encontrado.id,
+        detalle: detalle.trim() || "Gasto compartido",
+        monto: suMitad, total: n, moneda: "ARS",
+        fecha: hoyISO(), medio, cuotas: 1, estado: "pendiente",
+      });
+      if (error) throw error;
+      // El gasto entero queda como movimiento mío; la parte de la otra persona
+      // vuelve como deuda, así no se cuenta dos veces.
+      onListo({
+        id: "c" + Date.now(), tipo: "gasto",
+        detalle: detalle.trim() || "Gasto compartido",
+        monto: n, moneda: "ARS", medio, cuotas: 1, fecha: hoyISO(),
+        mesInicio: mesDePago(hoyISO(), medio, medios),
+        categoria: adivinarCategoria(detalle), recurrente: false, pagadoPor: "yo",
+        persona: "@" + encontrado.usuario, pct: 1 - pct, personaId: encontrado.id,
+      });
+      onCerrar();
+    } catch (e) {
+      setEstado("No pude guardarlo. ¿Corriste el SQL de deudas en Supabase?");
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 86, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
+                    padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>Gasto compartido</span>
+        <button onClick={guardar}
+          style={{ fontSize: 15, fontWeight: 620, color: (n && encontrado) ? T.tinta : T.tenue }}>
+          Guardar
+        </button>
+      </div>
+
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        <label className="lbl">¿Cuánto salió en total?</label>
+        <input className="num" inputMode="numeric" value={monto}
+          onChange={(e) => setMonto(e.target.value.replace(/[^\d]/g, ""))}
+          style={{ textAlign: "right", fontSize: 22, fontWeight: 640 }} placeholder="0" />
+
+        <label className="lbl" style={{ marginTop: 14 }}>¿En qué?</label>
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)}
+          placeholder="Súper, cena, nafta…" />
+
+        <label className="lbl" style={{ marginTop: 14 }}>¿Cómo lo pagaste?</label>
+        <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+          {medios.map((m) => (
+            <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
+              onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+          ))}
+        </div>
+
+        <label className="lbl" style={{ marginTop: 18 }}>¿Con quién lo compartís?</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={handle} style={{ flex: 1 }}
+            onChange={(e) => { setHandle(e.target.value.replace(/\s/g, "")); setEncontrado(null); }}
+            placeholder="@usuario" autoCapitalize="none" autoCorrect="off" />
+          <button onClick={buscar} className="chip" style={{ whiteSpace: "nowrap" }}>
+            {buscando ? "..." : "Buscar"}
+          </button>
+        </div>
+
+        {encontrado && (
+          <div className="aviso" style={{ background: T.verdeBg, marginTop: 10 }}>
+            <b>{encontrado.nombre || "@" + encontrado.usuario}</b> · @{encontrado.usuario}
+          </div>
+        )}
+        {estado && !encontrado && (
+          <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 8 }}>{estado}</div>
+        )}
+
+        {n > 0 && (
+          <>
+            <label className="lbl" style={{ marginTop: 18 }}>¿Cómo lo dividen?</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[[0.5, "Mitad y mitad"], [0.3, "30% suyo"], [0.7, "70% suyo"], [1, "Todo suyo"]].map(([v, n2]) => (
+                <button key={v} className={"chip sm" + (pct === v ? " on" : "")}
+                  onClick={() => setPct(v)}>{n2}</button>
+              ))}
+            </div>
+            <div className="card" style={{ padding: 14, marginTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+                <span style={{ color: T.suave }}>Ponés vos</span>
+                <span className="num">{plata(n)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14.5,
+                            marginTop: 7, fontWeight: 620 }}>
+                <span>Te queda debiendo</span>
+                <span className="num" style={{ color: T.verde }}>{plata(suMitad)}</span>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 11, lineHeight: 1.55 }}>
+              El gasto completo entra en tu flujo, y {encontrado ? "@" + encontrado.usuario : "la otra persona"} lo
+              va a ver en su app para aceptarlo. Hasta que no lo salden, te lo voy a seguir recordando.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ===================== PANTALLA PERSONAS (con deudas reales) ===================== */
+function PersonasNube({ sesion, deudas, perfiles, onActualizar, onCompartir, cargando }) {
+  const uid = sesion && sesion.user ? sesion.user.id : null;
+  const [filtro, setFiltro] = useState("abiertas");
+  const grupos = netoPorPersona(deudas, uid, perfiles);
+  const meDeben = grupos.filter((g) => g.neto > 0).reduce((a, g) => a + g.neto, 0);
+  const debo = grupos.filter((g) => g.neto < 0).reduce((a, g) => a - g.neto, 0);
+  const accion = requierenAccion(deudas, uid);
+
+  const cambiar = async (d, estado, extra) => {
+    try {
+      await sb.from("deudas").update({ estado, actualizado: new Date().toISOString(), ...(extra || {}) })
+        .eq("id", d.id);
+      onActualizar();
+    } catch (e) { /* la pantalla se refresca igual */ }
+  };
+
+  const lista = (deudas || []).filter((d) =>
+    filtro === "abiertas" ? ABIERTAS.includes(d.estado) : true);
+
+  const nombreDe = (id) => perfiles[id] ? "@" + perfiles[id] : "alguien";
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 30 }}>
+      <div className="cima sube" style={{ padding: "19px 19px 17px" }}>
+        <div style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>
+          {meDeben >= debo ? "Te deben" : "Debés"}
+        </div>
+        <div className="plata hero" style={{ marginTop: 6,
+              color: meDeben >= debo ? "#7FD6A8" : "#F0A896" }}>
+          {plata(Math.abs(meDeben - debo))}
+        </div>
+        <div style={{ fontSize: 13, color: "rgba(234,240,236,.65)", marginTop: 9 }}>
+          Te deben <b className="num" style={{ color: "#fff" }}>{plata(meDeben)}</b>
+          {"  ·  "}Debés <b className="num" style={{ color: "#fff" }}>{plata(debo)}</b>
+        </div>
+      </div>
+
+      {accion.length > 0 && (
+        <div className="aviso" style={{ background: T.ambarBg, marginTop: 13 }}>
+          <b>Tenés {accion.length} {accion.length === 1 ? "cosa" : "cosas"} para responder.</b>
+          {" "}Están marcadas abajo.
+        </div>
+      )}
+
+      <button className="btn" style={{ marginTop: 13 }} onClick={onCompartir}>
+        Compartir un gasto
+      </button>
+
+      {cargando && (
+        <div style={{ fontSize: 13, color: T.suave, textAlign: "center", marginTop: 20 }}>
+          Buscando…
+        </div>
+      )}
+
+      {!cargando && !lista.length && (
+        <div className="aviso" style={{ background: T.ambarBg, marginTop: 14 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 620, marginBottom: 5 }}>Todavía no hay nada</div>
+          Cuando pongas plata por alguien —una cena, el súper, la nafta— cargalo acá con su
+          @usuario. Le va a aparecer en su app para que lo acepte, y los dos van a ver la cuenta
+          igual. Se salda cuando los dos están de acuerdo.
+        </div>
+      )}
+
+      {grupos.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Por persona</div>
+          <div className="card" style={{ overflow: "hidden" }}>
+            {grupos.map((g, i) => (
+              <div key={g.id} style={{ display: "flex", justifyContent: "space-between",
+                    padding: "12px 15px", borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+                <span>
+                  <span style={{ display: "block", fontSize: 14, fontWeight: 560 }}>
+                    {nombreDe(g.id)}
+                  </span>
+                  <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
+                    {g.items.length} {g.items.length === 1 ? "gasto" : "gastos"} sin saldar
+                  </span>
+                </span>
+                <span className="num plata" style={{ fontSize: 15,
+                      color: g.neto >= 0 ? T.verde : T.rojo }}>
+                  {g.neto >= 0 ? "" : "−"}{plata(Math.abs(g.neto))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {lista.length > 0 && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                        marginTop: 22, marginBottom: 9 }}>
+            <span style={{ fontSize: 15.5, fontWeight: 620 }}>Detalle</span>
+            <button onClick={() => setFiltro(filtro === "abiertas" ? "todas" : "abiertas")}
+              style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+              {filtro === "abiertas" ? "Ver también las saldadas" : "Ver solo las abiertas"}
+            </button>
+          </div>
+
+          {lista.map((d) => {
+            const soyAcreedor = d.acreedor === uid;
+            const otro = soyAcreedor ? d.deudor : d.acreedor;
+            const est = ESTADOS[d.estado] || { nombre: d.estado, color: "tinta" };
+            const col = { ambar: T.ambar, rojo: T.rojo, verde: T.verde, tinta: T.tinta }[est.color];
+            const meToca = (!soyAcreedor && d.estado === "pendiente") ||
+                           (soyAcreedor && d.estado === "dice_pagada");
+            return (
+              <div key={d.id} className="card"
+                style={{ padding: 14, marginBottom: 9,
+                         borderColor: meToca ? T.ambar : T.linea }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                  <span style={{ fontSize: 14.5, fontWeight: 600 }}>{d.detalle}</span>
+                  <span className="num plata" style={{ fontSize: 15,
+                        color: soyAcreedor ? T.verde : T.rojo }}>
+                    {soyAcreedor ? "" : "−"}{plata(+d.monto)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: T.suave, marginTop: 3 }}>
+                  {soyAcreedor ? `${nombreDe(otro)} te debe` : `Le debés a ${nombreDe(otro)}`}
+                  {" · "}{String(d.fecha).split("-").reverse().slice(0, 2).join("/")}
+                  {d.total ? ` · de ${plata(+d.total)} en total` : ""}
+                </div>
+                <div style={{ fontSize: 12, color: col, fontWeight: 600, marginTop: 5 }}>
+                  {est.nombre}
+                  {d.promesa ? ` · dice que paga el ${String(d.promesa).split("-").reverse().slice(0, 2).join("/")}` : ""}
+                </div>
+
+                {!soyAcreedor && d.estado === "pendiente" && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
+                    <button className="chip sm" onClick={() => cambiar(d, "aceptada")}>Es correcto</button>
+                    <button className="chip sm" onClick={() => cambiar(d, "rechazada")}>No es así</button>
+                  </div>
+                )}
+                {!soyAcreedor && d.estado === "aceptada" && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 11, flexWrap: "wrap" }}>
+                    <button className="chip sm" onClick={() => cambiar(d, "dice_pagada")}>Ya se lo pagué</button>
+                    <button className="chip sm" onClick={() => {
+                      const f = prompt("¿Qué día se lo vas a pagar? (AAAA-MM-DD)", hoyISO());
+                      if (f) cambiar(d, "aceptada", { promesa: f });
+                    }}>Le pago tal día</button>
+                  </div>
+                )}
+                {soyAcreedor && d.estado === "dice_pagada" && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
+                    <button className="chip sm" onClick={() => cambiar(d, "saldada")}>Sí, lo recibí</button>
+                    <button className="chip sm" onClick={() => cambiar(d, "aceptada")}>Todavía no</button>
+                  </div>
+                )}
+                {soyAcreedor && d.estado === "pendiente" && (
+                  <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 9 }}>
+                    Esperando que {nombreDe(otro)} lo acepte
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
 function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null }) {
   const esNuevo = !inicial?.id;
@@ -2765,7 +3111,8 @@ function Vencimientos({ medios }) {
 function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
-               invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar }) {
+               invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar,
+               pendientesDeuda = 0, onVerPersonas }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
@@ -3207,6 +3554,20 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         </div>
       )}
 
+      {pendientesDeuda > 0 && (
+        <button onClick={onVerPersonas} className="aviso"
+          style={{ width: "100%", textAlign: "left", marginTop: 12, background: T.ambarBg }}>
+          <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 4 }}>
+            {pendientesDeuda === 1
+              ? "Tenés un gasto compartido para responder"
+              : `Tenés ${pendientesDeuda} gastos compartidos para responder`}
+          </div>
+          <div style={{ fontSize: 12.5, color: T.suave }}>
+            Alguien cargó algo que compartieron, o te avisó que ya te pagó.
+          </div>
+        </button>
+      )}
+
       {estimados.length > 0 && (
         <button onClick={onAbrirMedios} className="aviso"
           style={{ width: "100%", textAlign: "left", marginTop: 12, background: T.ambarBg }}>
@@ -3600,130 +3961,6 @@ function Simular({ cfg, movs, medios }) {
   );
 }
 
-/* ===================== PANTALLA: PERSONAS ===================== */
-function Personas({ filas }) {
-  const [abierta, setAbierta] = useState(null);
-  const por = {};
-  const tocar = (p) => (por[p] = por[p] || { deben: 0, debo: 0, meses: {}, itDeben: {}, itDebo: {} });
-
-  filas.forEach((f) => {
-    f.reint.forEach((r) => {
-      const d = tocar(r.persona);
-      d.deben += r.monto;
-      d.meses[f.mk] = (d.meses[f.mk] || 0) + r.monto;
-      d.itDeben[r.detalle] = (d.itDeben[r.detalle] || 0) + r.monto;
-    });
-    f.deudas.forEach((r) => {
-      const d = tocar(r.persona);
-      d.debo += r.monto;
-      d.meses[f.mk] = (d.meses[f.mk] || 0) - r.monto;
-      d.itDebo[r.detalle] = (d.itDebo[r.detalle] || 0) + r.monto;
-    });
-  });
-
-  const gente = Object.keys(por).sort(
-    (a, b) => Math.abs(por[b].deben - por[b].debo) - Math.abs(por[a].deben - por[a].debo)
-  );
-
-  if (!gente.length)
-    return (
-      <div style={{ padding: 30, textAlign: "center", color: T.suave, fontSize: 14.5, lineHeight: 1.6 }}>
-        Todavía no compartís ningún gasto.<br />
-        Cargá uno y elegí con quién.
-      </div>
-    );
-
-  const totalNeto = gente.reduce((a, p) => a + por[p].deben - por[p].debo, 0);
-
-  return (
-    <div style={{ padding: 16, paddingBottom: 30 }}>
-      <div className="card" style={{ padding: 15, marginBottom: 14,
-                                     background: totalNeto < 0 ? T.rojoBg : T.ambarBg, borderColor: "transparent" }}>
-        <div style={{ fontSize: 13, color: T.suave }}>
-          {totalNeto < 0 ? "En total le debés a otros" : "En total te deben"}
-        </div>
-        <div className="num" style={{ fontSize: 27, fontWeight: 640, marginTop: 2,
-                                      color: totalNeto < 0 ? T.rojo : T.verde }}>
-          {plata(Math.abs(totalNeto))}
-        </div>
-        <div style={{ fontSize: 12, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
-          Neto de {filas.length} {filas.length === 1 ? "mes" : "meses"}, ya descontando lo que va en las dos direcciones.
-        </div>
-      </div>
-
-      {gente.map((p) => {
-        const d = por[p];
-        const neto = d.deben - d.debo;
-        const open = abierta === p;
-        return (
-          <div key={p} className="card" style={{ marginBottom: 11, overflow: "hidden" }}>
-            <button onClick={() => setAbierta(open ? null : p)} style={{ width: "100%", textAlign: "left", padding: 15 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                <span style={{ fontSize: 16.5, fontWeight: 620 }}>{p}</span>
-                <span className="num" style={{ fontSize: 16.5, fontWeight: 620, color: neto < 0 ? T.rojo : T.verde }}>
-                  {neto < 0 ? "−" : "+"}{plata(Math.abs(neto))}
-                </span>
-              </div>
-              <div style={{ fontSize: 12.5, color: T.suave, marginTop: 3 }}>
-                {neto < 0 ? "le transferís vos" : "te transfiere"}
-              </div>
-
-              {d.deben > 0 && d.debo > 0 && (
-                <div style={{ display: "flex", gap: 14, marginTop: 11, fontSize: 12.5 }}>
-                  <span style={{ color: T.verde }}>te debe {corta(d.deben)}</span>
-                  <span style={{ color: T.rojo }}>le debés {corta(d.debo)}</span>
-                </div>
-              )}
-            </button>
-
-            {open && (
-              <div style={{ borderTop: `1px solid ${T.linea}`, padding: "12px 15px" }}>
-                {Object.keys(d.itDebo).length > 0 && (
-                  <>
-                    <div style={{ fontSize: 11.5, color: T.tenue, marginBottom: 5 }}>LE DEBÉS</div>
-                    {Object.entries(d.itDebo).sort((a, b) => b[1] - a[1]).map(([n, v]) => (
-                      <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", gap: 12 }}>
-                        <span style={{ color: T.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</span>
-                        <span className="num" style={{ flexShrink: 0, color: T.rojo }}>{plata(v)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-                {Object.keys(d.itDeben).length > 0 && (
-                  <>
-                    <div style={{ fontSize: 11.5, color: T.tenue, margin: "11px 0 5px" }}>TE DEBE</div>
-                    {Object.entries(d.itDeben).sort((a, b) => b[1] - a[1]).map(([n, v]) => (
-                      <div key={n} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", gap: 12 }}>
-                        <span style={{ color: T.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</span>
-                        <span className="num" style={{ flexShrink: 0, color: T.verde }}>{plata(v)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-                <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 13 }}>
-                  {filas.map((f) => {
-                    const v = d.meses[f.mk] || 0;
-                    return (
-                      <div key={f.mk} style={{ minWidth: 60, textAlign: "center", padding: "6px 4px",
-                                               background: T.papel, borderRadius: 9 }}>
-                        <div style={{ fontSize: 10.5, color: T.tenue }}>{etiqMes(f.mk)}</div>
-                        <div className="num" style={{ fontSize: 12, fontWeight: 600, marginTop: 2,
-                                                      color: v < 0 ? T.rojo : v > 0 ? T.verde : T.tenue }}>
-                          {v ? (v < 0 ? "−" : "+") + corta(Math.abs(v)).replace("$", "$") : "—"}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 /* ===================== AJUSTES ===================== */
 function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onReportar, onCerrar }) {
   const [texto, setTexto] = useState("");
@@ -3975,6 +4212,9 @@ export default function App() {
   const [cfg, setCfgRaw] = useState(CFG_INI);
   const [movs, setMovs] = useState(SEED);
   const [cargando, setCargando] = useState(true);
+  const [falloCarga, setFalloCarga] = useState(false);
+  const vaciadoPedido = useRef(false);
+  const soloLectura = useRef(true);   // hasta confirmar qué hay en la nube, no escribimos nada
   const [editando, setEditando] = useState(null);
   const [verAjustes, setVerAjustes] = useState(false);
   const [verMedios, setVerMedios] = useState(false);
@@ -3982,6 +4222,37 @@ export default function App() {
   const [verImportar, setVerImportar] = useState(false);
   const [verFinanciar, setVerFinanciar] = useState(false);
   const [verReporte, setVerReporte] = useState(false);
+  const [verCompartir, setVerCompartir] = useState(false);
+  const [deudas, setDeudas] = useState([]);
+  const [perfiles, setPerfiles] = useState({});
+  const [cargandoDeudas, setCargandoDeudas] = useState(false);
+
+  // Traemos las deudas al entrar y cada vez que vuelve el foco a la app
+  const refrescarDeudas = React.useCallback(async () => {
+    if (!sesion || !sesion.user) return;
+    setCargandoDeudas(true);
+    try {
+      const d = await traerDeudas(sesion.user.id);
+      setDeudas(d);
+      const ids = [...new Set(d.flatMap((x) => [x.acreedor, x.deudor]))]
+        .filter((x) => x && x !== sesion.user.id);
+      if (ids.length) {
+        const { data } = await sb.from("perfiles").select("id, usuario").in("id", ids);
+        const m = {}; (data || []).forEach((p) => { m[p.id] = p.usuario; });
+        setPerfiles(m);
+      }
+    } catch (e) { /* la tabla puede no existir todavía */ }
+    setCargandoDeudas(false);
+  }, [sesion]);
+
+  useEffect(() => { refrescarDeudas(); }, [refrescarDeudas]);
+  useEffect(() => {
+    const f = () => { if (!document.hidden) refrescarDeudas(); };
+    document.addEventListener("visibilitychange", f);
+    return () => document.removeEventListener("visibilitychange", f);
+  }, [refrescarDeudas]);
+
+  const pendientes = sesion && sesion.user ? requierenAccion(deudas, sesion.user.id).length : 0;
   // Si la cuenta nunca definió medios, dependemos de si trae la semilla o arrancó vacía
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios
                : (movs.length ? MEDIOS_INI : MEDIOS_NUEVO);
@@ -4004,10 +4275,19 @@ export default function App() {
     (async () => {
       const uid = sesion.user.id;
       let cfgN = null, movsN = null;
+      let leyoBien = false;   // ¿pudimos confirmar QUÉ hay en la nube?
       try {
-        const { data } = await sb.from("datos").select("cfg, movs").eq("id", uid).maybeSingle();
+        const { data, error } = await sb.from("datos").select("cfg, movs").eq("id", uid).maybeSingle();
+        if (error) throw error;
+        leyoBien = true;                       // la consulta anduvo: sabemos si hay datos o no
         if (data && data.movs && data.movs.length) { cfgN = data.cfg; movsN = data.movs; }
-      } catch (e) { /* sin conexion: caemos al respaldo local */ }
+      } catch (e) {
+        // No pudimos leer. NO es lo mismo que estar vacío: si asumiéramos eso,
+        // el guardado automático borraría los datos reales.
+        setFalloCarga(true);
+        setCargando(false);
+        return;
+      }
 
       if (!movsN) {
         // Cuenta nueva: si habia datos en este navegador, se los llevamos a la nube.
@@ -4020,6 +4300,7 @@ export default function App() {
       // Las tarjetas tampoco se heredan: son datos personales de otra persona.
       let nueva = false;
       if (!movsN) { movsN = []; nueva = true; }
+      soloLectura.current = false;
 
       const mk = mesDeHoy();
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
@@ -4074,6 +4355,13 @@ export default function App() {
   const timer = React.useRef(null);
   const guardarNube = useCallback((uid, c, m) => {
     if (!uid) return;
+    if (soloLectura.current) return;          // todavía no sabemos qué hay en la nube
+    // Red de seguridad: escribir una lista vacía encima de datos existentes solo
+    // puede pasar si el usuario lo pidió explícitamente (vaciar o borrar todo).
+    if ((!m || !m.length) && !vaciadoPedido.current) {
+      setEstado("error");
+      return;
+    }
     setEstado("guardando");
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
@@ -4100,6 +4388,7 @@ export default function App() {
     const c = { ...cfg, ajustesInit: true,
                 ajustes: { ...cfg.ajustes,
                            [mk]: { ...ajustesEnCero(SEED, mk, cfg.tc), ...((cfg.ajustes || {})[mk] || {}) } } };
+    if (!n.length) vaciadoPedido.current = true;
     setMovs(n); setCfgRaw(c); persistir(c, n);
     setHayUpdate(false);
   };
@@ -4145,6 +4434,7 @@ export default function App() {
     const n = movs.filter((x) => !ids.includes(x.id));
     // Si no queda ningun movimiento, las tarjetas tampoco tienen por que sobrevivir
     if (!n.length && !cfg.medios) c.medios = MEDIOS_NUEVO;
+    if (!n.length) vaciadoPedido.current = true;
     setCfgRaw(c); setMovs(n); persistir(c, n);
     setEditando(null);
   };
@@ -4158,6 +4448,7 @@ export default function App() {
   const reiniciar = () => {
     const c = { ...CFG_INI, tc: cfg.tc, horizonte: cfg.horizonte, diaCobro: cfg.diaCobro,
                 nombre: cfg.nombre, medios: MEDIOS_NUEVO, ajustesInit: true };
+    vaciadoPedido.current = true;
     setMovs([]); setCfgRaw(c); persistir(c, []); setVerAjustes(false);
   };
   // Para probar la app sin cargar nada a mano
@@ -4225,6 +4516,23 @@ export default function App() {
   const [postergado, setPostergado] = useState(false);
   const personas = useMemo(() => [...new Set(movs.filter((m) => m.persona).map((m) => m.persona))], [movs]);
 
+  // Si no pudimos leer, mostramos un error. Mostrar una cuenta vacía sería peor:
+  // el usuario cree que perdió todo y la app termina guardando ese vacío.
+  if (falloCarga) return (
+    <div className="bz" style={{ minHeight: "100vh", background: T.papel, padding: 26,
+          display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 10 }}>
+        No pude leer tus datos
+      </div>
+      <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.6 }}>
+        Hubo un problema al conectarme. <b>Tus datos están a salvo</b>: prefiero no mostrarte nada
+        antes que mostrarte una cuenta vacía que no es la tuya.
+      </div>
+      <button className="btn" style={{ marginTop: 24 }}
+        onClick={() => window.location.reload()}>Reintentar</button>
+    </div>
+  );
+
   if (sesion === undefined || (sesion && cargando))
     return <div className="bz" style={{ padding: 40, textAlign: "center", color: T.suave }}><style>{CSS}</style>Cargando…</div>;
   if (sesion === null) return <Acceso />;
@@ -4281,6 +4589,8 @@ export default function App() {
           onVerInvertido={() => setTab("inv")}
           onAbrirImportar={() => setVerImportar(true)}
           onFinanciar={() => setVerFinanciar(true)}
+          pendientesDeuda={pendientes}
+          onVerPersonas={() => setTab("rep")}
           onAbrirMedios={() => setVerMedios(true)}
           revisadas={cfg.revisadas || {}}
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
@@ -4289,7 +4599,11 @@ export default function App() {
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
       {tab === "sim" && <Simular cfg={{ ...cfgTC, desdeMes: desde }} movs={movs} medios={medios} />}
       {tab === "inv" && <Invertido cfg={cfg} setCfg={setCfg} tc={cfgTC.tc} />}
-      {tab === "rep" && <Personas filas={filas} />}
+      {tab === "rep" && (
+        <PersonasNube sesion={sesion} deudas={deudas} perfiles={perfiles}
+          cargando={cargandoDeudas} onActualizar={refrescarDeudas}
+          onCompartir={() => setVerCompartir(true)} />
+      )}
 
       <button
         onClick={() => setVerRapido(true)}
@@ -4315,11 +4629,22 @@ export default function App() {
               aria-label={n} aria-current={on ? "page" : undefined}
               style={{ padding: "9px 2px 8px", display: "flex", flexDirection: "column",
                        alignItems: "center", gap: 3, color: on ? T.tinta : T.tenue }}>
-              <svg width="21" height="21" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth={on ? 2.1 : 1.7}
-                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d={ICONOS[id]} />
-              </svg>
+              <span style={{ position: "relative", lineHeight: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" strokeWidth={on ? 2.1 : 1.7}
+                     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d={ICONOS[id]} />
+                </svg>
+                {id === "rep" && pendientes > 0 && (
+                  <span aria-label={`${pendientes} para responder`}
+                    style={{ position: "absolute", top: -4, right: -7, minWidth: 15, height: 15,
+                             padding: "0 4px", borderRadius: 99, background: T.rojo, color: "#fff",
+                             fontSize: 9.5, fontWeight: 700, display: "flex",
+                             alignItems: "center", justifyContent: "center" }}>
+                    {pendientes}
+                  </span>
+                )}
+              </span>
               <span style={{ fontSize: 10, fontWeight: on ? 640 : 480, letterSpacing: "-0.01em",
                              whiteSpace: "nowrap" }}>{n}</span>
             </button>
@@ -4341,6 +4666,11 @@ export default function App() {
           pendientes={sinActualizar} medios={medios}
           onGuardar={guardarMedios} onPostergar={() => setPostergado(true)}
         />
+      )}
+      {verCompartir && (
+        <Compartir sesion={sesion} medios={medios}
+          onListo={(m) => { setMovs([...movs, m]); refrescarDeudas(); }}
+          onCerrar={() => setVerCompartir(false)} />
       )}
       {verReporte && (
         <Reportar sesion={sesion} cfg={cfg} movs={movs} medios={medios} tab={tab}
