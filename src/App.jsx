@@ -798,7 +798,20 @@ function ciclosEstimados(medios) {
 }
 
 // Cuánto pesa un movimiento en un mes dado (0 si no aplica).
-function montoEnMes(mv, mk, tc) {
+// Un gasto recurrente en tarjeta se consume un mes y se PAGA al siguiente cierre.
+// Sin esto, Netflix de septiembre aparecía en septiembre en vez de en el resumen
+// que se paga en octubre, y el mes en curso mostraba tarjetas ya saldadas.
+function mesConsumo(mv, mkPago, medios) {
+  if (!mv.recurrente || !mv.medio || mv.medio === "efectivo") return mkPago;
+  // Tomamos el 15 como día típico del débito automático
+  for (let k = 0; k <= 2; k++) {
+    const cand = sumaMes(mkPago, -k);
+    if (mesDePago(cand + "-15", mv.medio, medios) === mkPago) return cand;
+  }
+  return sumaMes(mkPago, -1);
+}
+
+function montoEnMes(mv, mk, tc, medios) {
   // Un importe negativo no tiene sentido en este modelo y contaminaba los totales:
   // lo tratamos como cero en vez de dejar que reste.
   const num = (v) => {
@@ -810,9 +823,12 @@ function montoEnMes(mv, mk, tc) {
              : num(mv.monto);
   if (!base) return 0;
   if (mv.recurrente) {
-    if (mv.meses && mv.meses.length && !mv.meses.includes(+mk.slice(5, 7))) return 0;
-    if (mv.desde && idxMes(mk) < idxMes(mv.desde)) return 0;
-    if (mv.hasta && idxMes(mk) > idxMes(mv.hasta)) return 0;
+    // Las reglas (meses, desde, hasta) se evalúan sobre el mes en que se CONSUME,
+    // no sobre el mes en que se paga.
+    const mc = medios ? mesConsumo(mv, mk, medios) : mk;
+    if (mv.meses && mv.meses.length && !mv.meses.includes(+mc.slice(5, 7))) return 0;
+    if (mv.desde && idxMes(mc) < idxMes(mv.desde)) return 0;
+    if (mv.hasta && idxMes(mc) > idxMes(mv.hasta)) return 0;
     return base;
   }
   // Sin mes de inicio no se puede ubicar: lo ignoramos en vez de romper la app.
@@ -829,14 +845,26 @@ function nroCuota(mv, mk) {
 }
 
 // Deja todo el mes en cero: sirve para dar por saldado el mes en curso.
-function ajustesEnCero(movs, mk, tc) {
+function ajustesEnCero(movs, mk, tc, medios) {
   const o = {};
-  movs.forEach((mv) => { if (montoEnMes(mv, mk, tc) > 0) o[mv.id] = 0; });
+  movs.forEach((mv) => { if (montoEnMes(mv, mk, tc, medios) > 0) o[mv.id] = 0; });
   return o;
 }
 
+// Un recurrente en un mes está ESTIMADO o CONFIRMADO.
+// Confirmado = ya sabemos el número real, sea igual o distinto al estimado.
+function estaConfirmado(cfg, mk, id) {
+  return !!((cfg.confirmados || {})[mk] || {})[id];
+}
+// Los automáticos (suscripciones, seguros, servicios) se debitan solos y casi
+// nunca cambian. Los variables (nafta, súper) son una apuesta hasta que pasan.
+const esAuto = (mv) => mv.recurrente && mv.auto !== false;
+
 function proyectar(cfg, movs, medios, meses, extra) {
   const arr = extra ? [...movs, extra] : movs;
+  // Meses de los que YA tenemos el resumen real de una tarjeta. Para esos, los
+  // recurrentes de esa tarjeta dejan de estimar: manda el dato del resumen.
+  const conResumen = cfg.resumenes || {};
   const desde = cfg.desdeMes || mesDeHoy();
   const filas = [];
   for (let i = 0; i < meses; i++) {
@@ -850,8 +878,12 @@ function proyectar(cfg, movs, medios, meses, extra) {
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
     arr.forEach((mv) => {
-      const base = montoEnMes(mv, mk, cfg.tc);
+      // Un recurrente de tarjeta es una ESTIMACIÓN: si ya importamos el resumen
+      // real de ese mes, se calla y deja hablar a los movimientos de verdad.
+      if (mv.recurrente && mv.medio && mv.medio !== "efectivo" && conResumen[mv.medio + "|" + mk]) return;
+      const base = montoEnMes(mv, mk, cfg.tc, medios);
       const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
+      const confirmado = mv.recurrente ? estaConfirmado(cfg, mk, mv.id) : true;
       // Ajuste puntual: este mes vale otra cosa (0 = ya pagado o no aplica).
       let m = tocado ? aj[mv.id] : base;
       if (!m) {
@@ -887,7 +919,10 @@ function proyectar(cfg, movs, medios, meses, extra) {
         return;
       }
       porMedio[mv.medio] = (porMedio[mv.medio] || 0) + m;
-      items.push({ mv, monto: m, cuota: nroCuota(mv, mk) });
+      items.push({ mv, monto: m, cuota: nroCuota(mv, mk),
+                   estimado: mv.recurrente && !confirmado,
+                   auto: esAuto(mv),
+                   desvio: mv.recurrente && confirmado && tocado ? m - base : 0 });
       if (mv.persona && mv.pct) {
         const p = isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
         if (p > 0) reint.push({ persona: mv.persona, monto: m * p, detalle: mv.detalle });
@@ -1592,6 +1627,10 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
             <div style={{ fontSize: 13.5, color: T.suave, lineHeight: 1.6, marginBottom: 16 }}>
               Subí el PDF del resumen que te manda el banco. Leo los consumos, las cuotas
               y las fechas de cierre. <b>El archivo no sale de tu teléfono.</b>
+              <br /><br />
+              Los gastos fijos que tengas cargados para esa tarjeta se usan para estimar los
+              meses que todavía no tienen resumen. Cuando importás uno, ese mes pasa a usar
+              los datos reales y la estimación se hace a un lado, así nada se cuenta dos veces.
             </div>
             {error && (
               <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginBottom: 14 }}>{error}</div>
@@ -2863,6 +2902,23 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </button>
         </div>
 
+        {f.recurrente && (
+          <>
+            <label className="lbl" style={{ marginTop: 16 }}>¿Cómo se comporta?</label>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              <button className={"chip sm" + (f.auto !== false ? " on" : "")}
+                onClick={() => set("auto", true)}>Siempre igual</button>
+              <button className={"chip sm" + (f.auto === false ? " on" : "")}
+                onClick={() => set("auto", false)}>Varía cada mes</button>
+            </div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.55 }}>
+              {f.auto === false
+                ? "Como la nafta o el súper: uso este monto para estimar los meses que vienen, y cuando cargues el gasto real lo reemplazo."
+                : "Como Netflix o un seguro: se debita solo y casi nunca cambia, así que lo vas a poder confirmar de a varios con un toque."}
+            </div>
+          </>
+        )}
+
         {!f.recurrente ? (
           <>
             <label className="lbl" style={{ marginTop: 16 }}>
@@ -3112,7 +3168,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar,
-               pendientesDeuda = 0, onVerPersonas }) {
+               pendientesDeuda = 0, onVerPersonas, onConfirmarAuto }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
@@ -3220,7 +3276,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     const verS = verSaldados === f.mk;
 
                     const fila = (it) => {
-                      const { mv, monto, cuota, ingreso, saldado, base } = it;
+                      const { mv, monto, cuota, ingreso, saldado, base, estimado, desvio } = it;
                       // it.ahorro / it.usd se usan mas abajo
                       const clave = f.mk + "|" + mv.id;
                       const abierto = editItem === clave;
@@ -3237,9 +3293,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                      alignItems: "center", gap: 10, padding: "8px 0", textAlign: "left" }}
                           >
                             <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap", color: saldado ? T.tenue : T.tinta }}>
+                                  whiteSpace: "nowrap", color: saldado ? T.tenue : T.tinta,
+                                  fontStyle: estimado && !saldado ? "italic" : "normal",
+                                  opacity: estimado && !saldado ? 0.75 : 1 }}>
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
+                              {estimado && !saldado ? "  ~" : ""}
                               {ajustado && !saldado ? "  ✎" : ""}
+                              {!estimado && desvio ? (
+                                <span style={{ color: desvio > 0 ? T.rojo : T.verde, fontSize: 11.5 }}>
+                                  {"  "}{desvio > 0 ? "+" : "−"}{corta(Math.abs(desvio))}
+                                </span>
+                              ) : null}
                             </span>
                             <span className="num" style={{ fontSize: 13, flexShrink: 0,
                                   color: saldado ? T.tenue : ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
@@ -3317,7 +3381,15 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     } else {
                       meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
                       medios.filter((m) => m.id !== "efectivo").forEach((m) =>
-                        meter(m.nombre, "vence el " + m.vto,
+                        meter(m.nombre, (() => {
+                          // El día real del ciclo que se paga ESE mes, no el día genérico
+                          const c = (m.ciclos || []).find((x) => x.vto && x.vto.slice(0, 7) === f.mk);
+                          const dia = c ? "vence el " + (+c.vto.slice(8, 10)) : "vence el " + m.vto;
+                          const real = (cfg.resumenes || {})[m.id + "|" + f.mk];
+                          if (real) return dia + " · del resumen";
+                          const sinConf = pend.filter((i) => i.mv.medio === m.id && i.estimado).length;
+                          return dia + (sinConf ? ` · ${sinConf} sin confirmar` : " · todo confirmado");
+                        })(),
                               pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === m.id)));
                       meter("Efectivo y débito", "",
                             pend.filter((i) => !i.ingreso && !i.deuda && !i.ahorro && i.mv.medio === "efectivo"));
@@ -3338,6 +3410,21 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                             ))}
                           </div>
                         )}
+                        {pend.some((i) => i.estimado && i.auto) && (
+                          <div style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
+                            <button
+                              onClick={() => onConfirmarAuto && onConfirmarAuto(f.mk,
+                                pend.filter((i) => i.estimado && i.auto).map((i) => i.mv.id))}
+                              className="chip sm" style={{ width: "100%", padding: "9px 0" }}>
+                              Confirmar {pend.filter((i) => i.estimado && i.auto).length} gastos automáticos
+                            </button>
+                            <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 6, lineHeight: 1.5 }}>
+                              Suscripciones, seguros y servicios. Si alguno cambió de precio, tocalo
+                              antes y poné el importe real.
+                            </div>
+                          </div>
+                        )}
+
                         {grupos.map((g) => (
                           <div key={g.titulo} style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
                             <div style={{ display: "flex", justifyContent: "space-between",
@@ -4201,7 +4288,7 @@ const ICONOS = {
 const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -4387,7 +4474,7 @@ export default function App() {
     const mk = mesDeHoy();
     const c = { ...cfg, ajustesInit: true,
                 ajustes: { ...cfg.ajustes,
-                           [mk]: { ...ajustesEnCero(SEED, mk, cfg.tc), ...((cfg.ajustes || {})[mk] || {}) } } };
+                           [mk]: { ...ajustesEnCero(SEED, mk, cfg.tc, MEDIOS_INI), ...((cfg.ajustes || {})[mk] || {}) } } };
     if (!n.length) vaciadoPedido.current = true;
     setMovs(n); setCfgRaw(c); persistir(c, n);
     setHayUpdate(false);
@@ -4455,7 +4542,7 @@ export default function App() {
   const cargarEjemplo = () => {
     const mk = mesDeHoy();
     const c = { ...CFG_INI, tc: cfg.tc, horizonte: cfg.horizonte, medios: MEDIOS_INI,
-                ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, cfg.tc) } };
+                ajustesInit: true, ajustes: { [mk]: ajustesEnCero(SEED, mk, cfg.tc, MEDIOS_INI) } };
     setMovs(SEED); setCfgRaw(c); persistir(c, SEED); setVerAjustes(false);
   };
   const importar = (d) => {
@@ -4466,6 +4553,13 @@ export default function App() {
   // monto = null borra el ajuste.
   // Para compras de dolares ya hechas guardamos EXACTAMENTE lo que movimos, asi deshacer es exacto
   // y nunca se aplica dos veces.
+  // Poner el importe real de un recurrente lo da por CONFIRMADO: ya no es estimación.
+  const confirmar = (mk, id, si) => {
+    const c = { ...(cfg.confirmados || {}) };
+    c[mk] = { ...(c[mk] || {}) };
+    if (si) c[mk][id] = true; else delete c[mk][id];
+    return c;
+  };
   const ajustar = (mk, id, monto, mover) => {
     const a = { ...(cfg.ajustes || {}) };
     const delMes = { ...(a[mk] || {}) };
@@ -4591,6 +4685,12 @@ export default function App() {
           onFinanciar={() => setVerFinanciar(true)}
           pendientesDeuda={pendientes}
           onVerPersonas={() => setTab("rep")}
+          onConfirmarAuto={(mk, ids) => {
+            const c = { ...(cfg.confirmados || {}) };
+            c[mk] = { ...(c[mk] || {}) };
+            ids.forEach((id) => { c[mk][id] = true; });
+            setCfg({ ...cfg, confirmados: c });
+          }}
           onAbrirMedios={() => setVerMedios(true)}
           revisadas={cfg.revisadas || {}}
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
@@ -4684,6 +4784,11 @@ export default function App() {
           medios={medios} movs={movs}
           onImportar={(nuevos, ciclos, medioId, fin) => {
             setMovs([...movs, ...nuevos]);
+            // Ese mes ya no se estima: tenemos el resumen real
+            if (medioId && ciclos && ciclos.vto) {
+              setCfg({ ...cfg, resumenes: { ...(cfg.resumenes || {}),
+                       [medioId + "|" + ciclos.vto.slice(0, 7)]: true } });
+            }
             // El resumen trae las fechas del próximo ciclo: las guardamos como confirmadas
             if (medioId && ((ciclos && ciclos.proxCierre) || fin)) {
               const lista = medios.map((m) => {
