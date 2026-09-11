@@ -3014,19 +3014,48 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           value={f.persona} onChange={(e) => set("persona", e.target.value)}
           placeholder="o escribí otro nombre" style={{ marginTop: 9 }}
         />
-        {f.persona && (
-          <div style={{ marginTop: 11, display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 13.5, color: T.suave }}>
-              {f.pagadoPor === "otro" ? "Me toca el" : "Recupero el"}
-            </span>
-            <input
-              className="num" inputMode="numeric" value={f.pct}
-              onChange={(e) => set("pct", Math.min(100, +e.target.value.replace(/\D/g, "") || 0))}
-              style={{ width: 78, textAlign: "right", padding: "8px 10px" }}
-            />
-            <span style={{ fontSize: 13.5, color: T.suave }}>%</span>
-          </div>
-        )}
+        {f.persona && (() => {
+          // Se puede pensar en porcentaje o en plata: van sincronizados.
+          const totalMov = f.moneda === "USD" ? (+f.montoUsd || 0) * tcRef : (+f.monto || 0);
+          const porCuota = totalMov / Math.max(1, f.recurrente ? 1 : (+f.cuotas || 1));
+          const pctNum = Math.min(100, Math.max(0, +f.pct || 0));
+          const montoParte = Math.round(totalMov * pctNum / 100);
+          return (
+            <>
+              <div style={{ marginTop: 11, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13.5, color: T.suave }}>
+                  {f.pagadoPor === "otro" ? "Me toca" : "Recupero"}
+                </span>
+                <input className="num" inputMode="numeric" value={f.pct}
+                  onChange={(e) => set("pct", Math.min(100, +e.target.value.replace(/\D/g, "") || 0))}
+                  style={{ width: 66, textAlign: "right", padding: "8px 10px" }} />
+                <span style={{ fontSize: 13.5, color: T.suave }}>%</span>
+                <span style={{ fontSize: 13.5, color: T.tenue }}>o</span>
+                <input className="num" inputMode="numeric" value={montoParte || ""}
+                  onChange={(e) => {
+                    const v = +e.target.value.replace(/\D/g, "") || 0;
+                    set("pct", totalMov > 0 ? Math.min(100, Math.round((v / totalMov) * 100)) : 0);
+                  }}
+                  placeholder="$" style={{ flex: 1, minWidth: 96, textAlign: "right", padding: "8px 10px" }} />
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {[50, 100, 30, 70].map((v) => (
+                  <button key={v} className={"chip sm" + (pctNum === v ? " on" : "")}
+                    onClick={() => set("pct", v)}>{v === 50 ? "Mitad" : v + "%"}</button>
+                ))}
+              </div>
+              {totalMov > 0 && (
+                <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+                  {f.pagadoPor === "otro" ? "Le devolvés " : "Te devuelven "}
+                  <b className="num">{plata(montoParte)}</b>
+                  {(+f.cuotas || 1) > 1 && !f.recurrente
+                    ? `, o sea ${plata(Math.round(porCuota * pctNum / 100))} por cuota`
+                    : ""}
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         <button
           className={"chip" + (f.excepcional ? " on" : "")}
@@ -3059,7 +3088,8 @@ function Curva({ filas, onTocar }) {
   if (filas.length < 2) return null;
   const W = 320, H = 116, pl = 6, pr = 6, pt = 14, pb = 22;
   const vals = filas.map((f) => f.saldo);
-  const hi = Math.max(...vals, 0), lo = Math.min(...vals, 0);
+  const egr = filas.map((f) => f.egresos || 0);
+  const hi = Math.max(...vals, ...egr, 0), lo = Math.min(...vals, 0);
   const rango = hi - lo || 1;
   const x = (i) => pl + (i * (W - pl - pr)) / (filas.length - 1);
   const y = (v) => pt + ((hi - v) / rango) * (H - pt - pb);
@@ -3092,6 +3122,13 @@ function Curva({ filas, onTocar }) {
               strokeLinejoin="round" strokeLinecap="round" clipPath="url(#arriba)" />
         {hayRojo && <path d={linea} fill="none" stroke={T.rojo} strokeWidth="2.2"
               strokeLinejoin="round" strokeLinecap="round" clipPath="url(#abajo)" />}
+
+        {/* Lo que sale cada mes, para leer la curva del saldo con contexto */}
+        {egr.some((v) => v > 0) && (
+          <path d={filas.map((f, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.egresos || 0).toFixed(1)}`).join(" ")}
+                fill="none" stroke={T.rojo} strokeWidth="1.6" strokeDasharray="4 3"
+                strokeLinejoin="round" strokeLinecap="round" opacity="0.75" />
+        )}
 
         {filas.map((f, i) => (
           <g key={f.mk} onClick={() => onTocar && onTocar(f.mk)} style={{ cursor: "pointer" }}>
@@ -3520,9 +3557,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           const porDia = Math.max(0, Math.floor(libre / faltan));
 
           // Lo que ya gastaste hoy: el gancho para abrir la app todos los días
-          const gastadoHoy = movs
+          const brutoHoy = movs
             .filter((m) => m.fecha === hISO && m.tipo === "gasto" && !m.recurrente)
             .reduce((a, m) => a + (+m.monto || 0) / Math.max(1, m.cuotas || 1), 0);
+          // Si pusiste el contador a cero hoy, descontamos lo que ya había
+          const base = cfg.ritmoBase && cfg.ritmoBase.fecha === hISO ? +cfg.ritmoBase.monto || 0 : 0;
+          const gastadoHoy = Math.max(0, brutoHoy - base);
           const usado = porDia > 0 ? Math.min(100, (gastadoHoy / porDia) * 100) : 0;
           const pasado = porDia > 0 && gastadoHoy > porDia;
 
@@ -3547,12 +3587,24 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                 <i style={{ width: `${Math.max(2, usado)}%`,
                      background: pasado ? "#E88B72" : "#7FD6A8" }} />
               </div>
-              <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)", marginTop: 8, lineHeight: 1.5 }}>
-                {pasado
-                  ? `Te pasaste ${plata(gastadoHoy - porDia)} de tu día. Compensalo mañana.`
-                  : gastadoHoy > 0
-                    ? `Te quedan ${plata(porDia - gastadoHoy)} para hoy · faltan ${faltan} días para cobrar`
-                    : `${plata(porDia)} por día durante ${faltan} días, hasta que cobres`}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                            gap: 10, marginTop: 8 }}>
+                <span style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)", lineHeight: 1.5 }}>
+                  {pasado
+                    ? `Te pasaste ${plata(gastadoHoy - porDia)} de tu día. Compensalo mañana.`
+                    : gastadoHoy > 0
+                      ? `Te quedan ${plata(porDia - gastadoHoy)} para hoy · faltan ${faltan} días para cobrar`
+                      : `${plata(porDia)} por día durante ${faltan} días, hasta que cobres`}
+                </span>
+                {brutoHoy > 0 && (
+                  <button
+                    onClick={() => setCfg({ ...cfg,
+                      ritmoBase: base ? null : { fecha: hISO, monto: brutoHoy } })}
+                    style={{ fontSize: 12, color: "rgba(234,240,236,.7)", fontWeight: 600,
+                             whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {base ? "Deshacer" : "Poner en cero"}
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -3764,6 +3816,16 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                   color: fin.saldo < 0 ? T.rojo : T.tinta }}>{plata(fin.saldo)}</span>
           </div>
           <Curva filas={filas} onTocar={(mk) => setAbierta(abierta === mk ? null : mk)} />
+          <div style={{ display: "flex", gap: 14, padding: "0 3px 8px", fontSize: 11.5, color: T.tenue }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 13, height: 2.5, background: T.verde, borderRadius: 2 }} />
+              lo que te queda
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 13, height: 0, borderTop: `2px dashed ${T.rojo}` }} />
+              lo que sale
+            </span>
+          </div>
           <div style={{ fontSize: 12, color: T.suave, padding: "0 3px 6px", lineHeight: 1.5 }}>
             {(() => {
               const peor = filas.reduce((a, b) => (b.saldo < a.saldo ? b : a));
@@ -4288,7 +4350,7 @@ const ICONOS = {
 const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
