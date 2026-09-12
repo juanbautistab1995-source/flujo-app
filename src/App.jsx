@@ -869,14 +869,21 @@ function devolucionDe(mv, tc, medios, mk) {
   if (!mv || mv.tipo !== "gasto" || mv.pagadoPor === "otro") return 0;
   const pct = +mv.devPct || 0, tope = +mv.devTope || 0;
   if (pct <= 0 && tope <= 0) return 0;
-  // El gasto de un mes se acredita en el resumen siguiente, salvo que digas lo contrario
-  const mo = sumaMes(mk, mv.devMes === "mismo" ? 0 : -1);
+  const aCaja = (mv.devDestino || "caja") !== "tarjeta";
+  // A la caja te lo acreditan el mismo día; al resumen, recién en el siguiente.
+  const cuando = mv.devMes || (aCaja ? "mismo" : "siguiente");
+  const mo = sumaMes(mk, cuando === "mismo" ? 0 : -1);
   let bruto;
   if (mv.recurrente) {
     bruto = montoEnMes(mv, mo, tc, medios);
   } else {
+    // Si cae en la caja, el reloj es el DÍA DE LA COMPRA. Si cae en el resumen,
+    // es el mes en que se paga esa tarjeta: son dos momentos distintos.
+    const ref = aCaja
+      ? ((mv.fecha || mv.fechaCompra || "").slice(0, 7) || mv.mesInicio)
+      : mv.mesInicio;
+    if (!ref || !/^\d{4}-\d{2}$/.test(ref) || distMes(ref, mo) !== 0) return 0;
     // Se calcula sobre el TOTAL de la compra y se acredita una sola vez
-    if (!mv.mesInicio || distMes(mv.mesInicio, mo) !== 0) return 0;
     bruto = mv.moneda === "USD" ? (+mv.montoUsd || 0) * tc : (+mv.monto || 0);
   }
   if (!bruto || bruto <= 0) return 0;
@@ -2831,7 +2838,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     consume: "",
     devPct: "",
     devTope: "",
-    devMes: "siguiente",
+    devMes: "mismo",
     devDestino: "caja",
     ...inicial,
     monto: inicial?.monto ?? "",
@@ -2916,7 +2923,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     if (f.tipo === "gasto" && f.pagadoPor !== "otro" && (+f.devPct > 0 || +f.devTope > 0)) {
       if (+f.devPct > 0) mv.devPct = +f.devPct;
       if (+f.devTope > 0) mv.devTope = +f.devTope;
-      mv.devMes = f.devMes === "mismo" ? "mismo" : "siguiente";
+      mv.devMes = f.devMes === "siguiente" ? "siguiente" : "mismo";
       mv.devDestino = f.devDestino === "tarjeta" ? "tarjeta" : "caja";
     }
     if (f.tipo === "ahorro") {
@@ -3271,7 +3278,10 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           const pct = +f.devPct || 0, tope = +f.devTope || 0;
           const dev = pct > 0 ? Math.min(bruto * pct / 100, tope > 0 ? tope : Infinity) : tope;
           const hay = pct > 0 || tope > 0;
-          const mesDev = mesPago ? (f.devMes === "mismo" ? mesPago : sumaMes(mesPago, 1)) : null;
+          const aCajaTop = (f.devDestino || "caja") !== "tarjeta";
+          // A la caja entra el día de la compra; al resumen, en el mes que lo pagás
+          const mesRef = aCajaTop ? (f.fecha || hoyISO()).slice(0, 7) : mesPago;
+          const mesDev = mesRef ? (f.devMes === "siguiente" ? sumaMes(mesRef, 1) : mesRef) : null;
           return (
             <>
               <label className="lbl" style={{ marginTop: 18 }}>¿El banco te devuelve parte?</label>
@@ -3299,13 +3309,14 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {[["caja", "A mi caja de ahorro"], ["tarjeta", "Al resumen de la tarjeta"]].map(([v, n]) => (
                         <button key={v} className={"chip sm" + ((f.devDestino || "caja") === v ? " on" : "")}
-                          onClick={() => set("devDestino", v)}>{n}</button>
+                          onClick={() => { set("devDestino", v);
+                                           set("devMes", v === "caja" ? "mismo" : "siguiente"); }}>{n}</button>
                       ))}
                     </div>
 
                     <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                       {(aCaja
-                        ? [["siguiente", "Al mes siguiente"], ["mismo", "En el mismo mes"]]
+                        ? [["mismo", "El mismo día"], ["siguiente", "Al mes siguiente"]]
                         : [["siguiente", "En el resumen siguiente"], ["mismo", "En este mismo resumen"]]
                       ).map(([v, n]) => (
                         <button key={v} className={"chip sm" + ((f.devMes || "siguiente") === v ? " on" : "")}
@@ -3319,7 +3330,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                       {mesDev ? <> en <b>{etiqMesLargo(mesDev)}</b></> : null}
                       {pct > 0 && tope > 0 && bruto * pct / 100 > tope ? " (llegaste al tope)" : ""}.
                       {aCaja
-                        ? " Entra como plata disponible en tu caja."
+                        ? " Entra como plata disponible en tu caja, el día que gastaste."
                         : ` Baja lo que pagás de ${med ? med.nombre : "esa tarjeta"}, no entra como plata nueva.`}
                     </div>
                   </>
