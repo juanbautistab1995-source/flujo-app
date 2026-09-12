@@ -860,6 +860,49 @@ function estaConfirmado(cfg, mk, id) {
 // nunca cambian. Los variables (nafta, súper) son una apuesta hasta que pasan.
 const esAuto = (mv) => mv.recurrente && mv.auto !== false;
 
+// Los estimados VARIABLES de un mes (nafta, súper) con lo que ya les comieron
+// los gastos reales que apuntan a ellos. Es lo que ofrecemos al cargar a mano.
+// Reintegros del banco: "gastás X con la tarjeta Y y te devuelven Z%, con tope".
+// El crédito entra en el resumen, así que baja lo que pagás de esa tarjeta.
+// Si solo cargás el tope, se toma como un reintegro fijo.
+function devolucionDe(mv, tc, medios, mk) {
+  if (!mv || mv.tipo !== "gasto" || mv.pagadoPor === "otro") return 0;
+  const pct = +mv.devPct || 0, tope = +mv.devTope || 0;
+  if (pct <= 0 && tope <= 0) return 0;
+  // El gasto de un mes se acredita en el resumen siguiente, salvo que digas lo contrario
+  const mo = sumaMes(mk, mv.devMes === "mismo" ? 0 : -1);
+  let bruto;
+  if (mv.recurrente) {
+    bruto = montoEnMes(mv, mo, tc, medios);
+  } else {
+    // Se calcula sobre el TOTAL de la compra y se acredita una sola vez
+    if (!mv.mesInicio || distMes(mv.mesInicio, mo) !== 0) return 0;
+    bruto = mv.moneda === "USD" ? (+mv.montoUsd || 0) * tc : (+mv.monto || 0);
+  }
+  if (!bruto || bruto <= 0) return 0;
+  const d = pct > 0 ? Math.min(bruto * pct / 100, tope > 0 ? tope : Infinity) : tope;
+  return isFinite(d) && d > 0 ? d : 0;
+}
+
+function estimadosDelMes(movs, cfg, medios, mk) {
+  const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
+  const consumido = {};
+  (movs || []).forEach((mv) => {
+    if (mv.recurrente || !mv.consume) return;
+    const v = montoEnMes(mv, mk, cfg.tc, medios);
+    if (v > 0) consumido[mv.consume] = (consumido[mv.consume] || 0) + v;
+  });
+  return (movs || [])
+    .filter((mv) => mv.recurrente && mv.tipo !== "ingreso" && mv.auto === false)
+    .map((mv) => {
+      const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
+      const base = tocado ? aj[mv.id] : montoEnMes(mv, mk, cfg.tc, medios);
+      const usado = consumido[mv.id] || 0;
+      return { mv, base, usado, queda: Math.max(0, base - usado) };
+    })
+    .filter((x) => x.base > 0);
+}
+
 function proyectar(cfg, movs, medios, meses, extra) {
   const arr = extra ? [...movs, extra] : movs;
   // Meses de los que YA tenemos el resumen real de una tarjeta. Para esos, los
@@ -880,6 +923,14 @@ function proyectar(cfg, movs, medios, meses, extra) {
     let ingresos = 0, excepcional = 0, ahorro = 0, usdComprados = 0;
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
+    // Gastos reales cargados a mano que se comen la estimación de un recurrente
+    // variable. Los juntamos antes para poder descontárselos abajo.
+    const consumido = {};
+    arr.forEach((mv) => {
+      if (mv.recurrente || !mv.consume) return;
+      const v = montoEnMes(mv, mk, cfg.tc, medios);
+      if (v > 0) consumido[mv.consume] = (consumido[mv.consume] || 0) + v;
+    });
     arr.forEach((mv) => {
       // Un recurrente de tarjeta es una ESTIMACIÓN: si ya importamos el resumen
       // real de ese mes, se calla y deja hablar a los movimientos de verdad.
@@ -889,12 +940,18 @@ function proyectar(cfg, movs, medios, meses, extra) {
       const confirmado = mv.recurrente ? estaConfirmado(cfg, mk, mv.id) : true;
       // Ajuste puntual: este mes vale otra cosa (0 = ya pagado o no aplica).
       let m = tocado ? aj[mv.id] : base;
+      if (mv.recurrente) m *= infl;
+      // Ya cargaste el gasto real: la estimación se corre para no contar dos veces.
+      const usado = consumido[mv.id] || 0;
+      if (usado > 0 && m > 0) m = Math.max(0, m - usado);
       if (!m) {
-        // Si lo diste por saldado, lo dejamos visible para poder revertirlo.
-        if (tocado && base > 0) items.push({ mv, monto: 0, base, saldado: true, cuota: nroCuota(mv, mk) });
+        // Lo dejamos visible para poder revertirlo o ver que quedó cubierto.
+        if (usado > 0 && base > 0)
+          items.push({ mv, monto: 0, base, usado, saldado: true, cubierto: true, cuota: nroCuota(mv, mk) });
+        else if (tocado && base > 0)
+          items.push({ mv, monto: 0, base, saldado: true, cuota: nroCuota(mv, mk) });
         return;
       }
-      if (mv.recurrente) m *= infl;
       if (mv.tipo === "ingreso") {
         ingresos += m;
         items.push({ mv, monto: m, ingreso: true });
@@ -937,11 +994,32 @@ function proyectar(cfg, movs, medios, meses, extra) {
         reint.push({ persona: mv.persona, monto: m * p, detalle: mv.detalle });
       }
       items.push({ mv, monto: m, cuota: nroCuota(mv, mk),
-                   soloDeuda: !!mv.soloDeuda,
+                   soloDeuda: !!mv.soloDeuda, usado,
+                   credito: p > 0 ? m * p : 0,
                    estimado: mv.recurrente && !confirmado,
                    auto: esAuto(mv),
                    desvio: mv.recurrente && confirmado && tocado ? m - base : 0 });
       if (mv.excepcional && !mv.soloDeuda) excepcional += m;
+    });
+
+    // Reintegros del banco: se acreditan en el resumen de su tarjeta
+    const devPorMedio = {};
+    let totalDev = 0, devCaja = 0;
+    arr.forEach((mv) => {
+      const d = devolucionDe(mv, cfg.tc, medios, mk);
+      if (d <= 0) return;
+      totalDev += d;
+      // Lo normal es que el banco te lo acredite en la caja de ahorro: es plata
+      // que entra. Solo si lo aclarás, baja el resumen de la tarjeta.
+      if ((mv.devDestino || "caja") === "tarjeta") {
+        const k = mv.medio || "efectivo";
+        devPorMedio[k] = (devPorMedio[k] || 0) + d;
+        items.push({ mv, monto: d, devolucion: true, medioDev: k });
+      } else {
+        devCaja += d;
+        ingresos += d;
+        items.push({ mv, monto: d, devolucion: true, aCaja: true });
+      }
     });
 
     // Se cruzan las dos puntas y queda UN número por persona.
@@ -954,13 +1032,15 @@ function proyectar(cfg, movs, medios, meses, extra) {
       if (x.neto < 0) porMedio.efectivo = (porMedio.efectivo || 0) - x.neto;
     });
 
-    let tarjetas = 0;
     Object.keys(porMedio).forEach((k) => {
-      if (k !== "efectivo") {
-        porMedio[k] *= 1 + (cfg.sellos || 0);
-        tarjetas += porMedio[k];
-      }
+      if (k !== "efectivo") porMedio[k] *= 1 + (cfg.sellos || 0);
     });
+    // El reintegro es un crédito: no paga sellos, así que se resta después
+    Object.keys(devPorMedio).forEach((k) => {
+      porMedio[k] = (porMedio[k] || 0) - devPorMedio[k];
+    });
+    let tarjetas = 0;
+    Object.keys(porMedio).forEach((k) => { if (k !== "efectivo") tarjetas += porMedio[k]; });
     const efvo = porMedio["efectivo"] || 0;
     const totalReint = netos.reduce((a, x) => a + Math.max(0, x.neto), 0);
     const totalDeudas = netos.reduce((a, x) => a + Math.max(0, -x.neto), 0);
@@ -968,7 +1048,7 @@ function proyectar(cfg, movs, medios, meses, extra) {
     const egresos = tarjetas + efvo;
     filas.push({
       mk, ingresos: totIng, egresos, tarjetas, efvo, reint, totalReint,
-      deudas, netos, totalDeudas, excepcional, ahorro, usdComprados,
+      deudas, netos, totalDeudas, totalDev, devCaja, devPorMedio, excepcional, ahorro, usdComprados,
       porMedio, items, resultado: totIng - egresos,
     });
   }
@@ -1407,11 +1487,12 @@ function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
 
 /* ===================== CARGA RÁPIDA ===================== */
 // Un gasto en tres toques: monto, con qué lo pagaste, listo.
-function Rapido({ medios, onGuardar, onDetallado, onImportar, onCerrar }) {
+function Rapido({ medios, movs = [], cfg = {}, onGuardar, onDetallado, onImportar, onCerrar }) {
   const [monto, setMonto] = useState("");
   const [detalle, setDetalle] = useState("");
   const [medio, setMedio] = useState(medios[0]?.id || "efectivo");
   const [cuotas, setCuotas] = useState(1);
+  const [consume, setConsume] = useState("");
 
   const n = parseInt(monto || "0", 10);
   const tecla = (t) => {
@@ -1426,12 +1507,19 @@ function Rapido({ medios, onGuardar, onDetallado, onImportar, onCerrar }) {
       monto: n, moneda: "ARS", medio, cuotas, fecha: hoyISO(),
       mesInicio: mesDePago(hoyISO(), medio, medios),
       categoria: adivinarCategoria(detalle), recurrente: false, pagadoPor: "yo",
+      ...(cuotas === 1 && consume ? { consume } : {}),
     });
     onCerrar();
   };
   const cat = adivinarCategoria(detalle);
   const catNom = cat !== "Otros" ? cat : null;
   const mesPago = mesDePago(hoyISO(), medio, medios);
+  // Estimados variables de ese mes que todavía tienen saldo sin usar
+  const candidatos = useMemo(
+    () => (cuotas === 1 ? estimadosDelMes(movs, cfg, medios, mesPago).filter((x) => x.queda > 0) : []),
+    [movs, cfg, medios, mesPago, cuotas]
+  );
+  const elegido = candidatos.find((x) => x.mv.id === consume);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
@@ -1482,6 +1570,33 @@ function Rapido({ medios, onGuardar, onDetallado, onImportar, onCerrar }) {
               <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
                 onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
             ))}
+          </div>
+        )}
+
+        {n > 0 && candidatos.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 12, color: T.suave, textAlign: "center", marginBottom: 8 }}>
+              ¿Es alguno de tus gastos estimados de {etiqMesLargo(mesPago)}?
+            </div>
+            <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto",
+                  paddingBottom: 3, justifyContent: candidatos.length < 3 ? "center" : "flex-start" }}>
+              <button className={"chip sm" + (!consume ? " on" : "")}
+                onClick={() => setConsume("")}>No, es aparte</button>
+              {candidatos.map((x) => (
+                <button key={x.mv.id} className={"chip sm" + (consume === x.mv.id ? " on" : "")}
+                  onClick={() => setConsume(consume === x.mv.id ? "" : x.mv.id)}>
+                  {x.mv.detalle} · quedan {corta(x.queda)}
+                </button>
+              ))}
+            </div>
+            {elegido && (
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 8, textAlign: "center",
+                            lineHeight: 1.5 }}>
+                {n >= elegido.queda
+                  ? `Con esto queda cubierto: la estimación de ${elegido.mv.detalle} baja a cero.`
+                  : `La estimación de ${elegido.mv.detalle} baja a ${plata(elegido.queda - n)}.`}
+              </div>
+            )}
           </div>
         )}
 
@@ -2689,7 +2804,8 @@ function PersonasNube({ sesion, deudas, perfiles, onActualizar, onCompartir, car
 }
 
 /* ===================== FORMULARIO DE MOVIMIENTO ===================== */
-function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null }) {
+function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcRef = 1550, disponible = null,
+                   movs = [], cfg = {} }) {
   const esNuevo = !inicial?.id;
   const [f, setF] = useState(() => ({
     tipo: "gasto",
@@ -2712,6 +2828,11 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     pagadoPor: "yo",
     excepcional: false,
     soloDeuda: false,
+    consume: "",
+    devPct: "",
+    devTope: "",
+    devMes: "siguiente",
+    devDestino: "caja",
     ...inicial,
     monto: inicial?.monto ?? "",
     montoUsd: inicial?.montoUsd ?? "",
@@ -2751,6 +2872,14 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     return mesDePago(f.fecha, f.medio, medios);
   }, [f.fecha, f.medio, f.recurrente, f.mesInicio, f.pagadoPor, medios]);
 
+  // Estimados variables de ese mes que este gasto podría estar cubriendo
+  const candidatos = useMemo(() => {
+    if (f.recurrente || f.tipo !== "gasto" || !mesPago) return [];
+    if (Math.max(1, +f.cuotas || 1) !== 1) return [];
+    return estimadosDelMes(movs, cfg, medios, mesPago)
+      .filter((x) => x.queda > 0 || x.mv.id === f.consume);
+  }, [movs, cfg, medios, mesPago, f.recurrente, f.tipo, f.cuotas, f.consume]);
+
   const guardar = () => {
     if (!valido) return;
     if (noAlcanza && !confirm(
@@ -2781,6 +2910,15 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
     // Solo tiene sentido si lo pusiste vos y hay alguien que te lo devuelve
     if (f.soloDeuda && f.pagadoPor !== "otro" && f.persona) mv.soloDeuda = true;
+    // Se imputa contra un estimado del mes: solo para compras en un pago
+    if (!f.recurrente && f.consume && Math.max(1, +f.cuotas || 1) === 1) mv.consume = f.consume;
+    // Reintegro del banco por una promo
+    if (f.tipo === "gasto" && f.pagadoPor !== "otro" && (+f.devPct > 0 || +f.devTope > 0)) {
+      if (+f.devPct > 0) mv.devPct = +f.devPct;
+      if (+f.devTope > 0) mv.devTope = +f.devTope;
+      mv.devMes = f.devMes === "mismo" ? "mismo" : "siguiente";
+      mv.devDestino = f.devDestino === "tarjeta" ? "tarjeta" : "caja";
+    }
     if (f.tipo === "ahorro") {
       mv.montoUsd = Math.round(usdFinal * 100) / 100;
       mv.tcCompra = tcUsar;
@@ -3031,6 +3169,29 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         )}
 
+        {candidatos.length > 0 && (
+          <>
+            <label className="lbl" style={{ marginTop: 18 }}>
+              ¿Cubre alguno de tus estimados de {etiqMesLargo(mesPago)}?
+            </label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button className={"chip sm" + (!f.consume ? " on" : "")}
+                onClick={() => set("consume", "")}>Ninguno</button>
+              {candidatos.map((x) => (
+                <button key={x.mv.id} className={"chip sm" + (f.consume === x.mv.id ? " on" : "")}
+                  onClick={() => set("consume", f.consume === x.mv.id ? "" : x.mv.id)}>
+                  {x.mv.detalle} · quedan {corta(x.queda)}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+              {f.consume
+                ? "Este importe se descuenta de la estimación de ese mes, así el gasto no se cuenta dos veces."
+                : "Si esto es la nafta o el súper que ya tenés estimado, elegilo y la estimación se corre sola."}
+            </div>
+          </>
+        )}
+
         <label className="lbl" style={{ marginTop: 18 }}>
           {f.pagadoPor === "otro" ? "Se lo debo a" : "Lo comparto con"}
         </label>
@@ -3104,6 +3265,73 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             </div>
           </>
         )}
+
+        {f.tipo === "gasto" && f.pagadoPor !== "otro" && (() => {
+          const bruto = f.moneda === "USD" ? (+f.montoUsd || 0) * tcRef : (+f.monto || 0);
+          const pct = +f.devPct || 0, tope = +f.devTope || 0;
+          const dev = pct > 0 ? Math.min(bruto * pct / 100, tope > 0 ? tope : Infinity) : tope;
+          const hay = pct > 0 || tope > 0;
+          const mesDev = mesPago ? (f.devMes === "mismo" ? mesPago : sumaMes(mesPago, 1)) : null;
+          return (
+            <>
+              <label className="lbl" style={{ marginTop: 18 }}>¿El banco te devuelve parte?</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <input className="num" inputMode="numeric" value={f.devPct}
+                  onChange={(e) => set("devPct", e.target.value.replace(/\D/g, "").slice(0, 3))}
+                  placeholder="0" style={{ width: 70, textAlign: "right", padding: "8px 10px" }} />
+                <span style={{ fontSize: 13.5, color: T.suave }}>% con tope</span>
+                <input className="num" inputMode="numeric" value={f.devTope}
+                  onChange={(e) => set("devTope", e.target.value.replace(/\D/g, ""))}
+                  placeholder="sin tope" style={{ flex: 1, minWidth: 110, textAlign: "right", padding: "8px 10px" }} />
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {[10, 20, 25, 30].map((v) => (
+                  <button key={v} className={"chip sm" + (pct === v ? " on" : "")}
+                    onClick={() => set("devPct", pct === v ? "" : String(v))}>{v}%</button>
+                ))}
+              </div>
+              {hay && (() => {
+                const aCaja = (f.devDestino || "caja") !== "tarjeta";
+                const med = medios.find((x) => x.id === f.medio);
+                return (
+                  <>
+                    <label className="lbl" style={{ marginTop: 14 }}>¿Dónde te lo acreditan?</label>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[["caja", "A mi caja de ahorro"], ["tarjeta", "Al resumen de la tarjeta"]].map(([v, n]) => (
+                        <button key={v} className={"chip sm" + ((f.devDestino || "caja") === v ? " on" : "")}
+                          onClick={() => set("devDestino", v)}>{n}</button>
+                      ))}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                      {(aCaja
+                        ? [["siguiente", "Al mes siguiente"], ["mismo", "En el mismo mes"]]
+                        : [["siguiente", "En el resumen siguiente"], ["mismo", "En este mismo resumen"]]
+                      ).map(([v, n]) => (
+                        <button key={v} className={"chip sm" + ((f.devMes || "siguiente") === v ? " on" : "")}
+                          onClick={() => set("devMes", v)}>{n}</button>
+                      ))}
+                    </div>
+
+                    <div style={{ marginTop: 10, padding: "11px 13px", background: T.verdeBg,
+                                  borderRadius: 11, fontSize: 13, lineHeight: 1.55 }}>
+                      Te acreditan <b className="num">{plata(Math.round(dev) || 0)}</b>
+                      {mesDev ? <> en <b>{etiqMesLargo(mesDev)}</b></> : null}
+                      {pct > 0 && tope > 0 && bruto * pct / 100 > tope ? " (llegaste al tope)" : ""}.
+                      {aCaja
+                        ? " Entra como plata disponible en tu caja."
+                        : ` Baja lo que pagás de ${med ? med.nombre : "esa tarjeta"}, no entra como plata nueva.`}
+                    </div>
+                  </>
+                );
+              })()}
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+                Para un reintegro fijo, dejá el % vacío y poné el importe en el tope. El tope es
+                por compra, no un acumulado mensual de la tarjeta.
+              </div>
+            </>
+          );
+        })()}
 
         <button
           className={"chip" + (f.excepcional ? " on" : "")}
@@ -3326,10 +3554,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                 <div style={{ borderTop: `1px solid ${T.linea}` }}>
                   {(f.ingresos || f.tarjetas || f.efvo) > 0 && (
                   <div style={{ padding: "13px 15px", fontSize: 13.5 }}>
-                    {[["Ingresos", f.ingresos - f.totalReint],
+                    {[["Ingresos", f.ingresos - f.totalReint - (f.devCaja || 0)],
                       ["Tarjetas", -f.tarjetas],
                       ["Efectivo y débito", -(f.efvo - f.totalDeudas - f.ahorro)],
-                      ["Neto con otras personas", f.totalReint - f.totalDeudas],
+                      ...(f.totalDev > 0 ? [["Reintegros del banco", f.totalDev]] : []),
+                      ...(f.netos || []).map((x) => [
+                        (x.neto > 0 ? "Te devuelve " : "Le transferís a ") + x.persona, x.neto]),
                       ["Compra de dólares", -f.ahorro]]
                       .filter(([, v]) => v)
                       .map(([n, v]) => (
@@ -3360,13 +3590,35 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     const sald = f.items.filter((i) => i.saldado);
                     const verS = verSaldados === f.mk;
 
-                    const fila = (it) => {
+                    const fila = (it, enPersona) => {
                       const { mv, monto, cuota, ingreso, saldado, base, estimado, desvio } = it;
+                      // Dentro del grupo de una persona mostramos lo que TE devuelven, en verde
+                      const aFavor = enPersona && !it.deuda && (it.credito || 0) > 0;
                       // it.ahorro / it.usd se usan mas abajo
                       const clave = f.mk + "|" + mv.id;
                       const abierto = editItem === clave;
                       const ajustado = !!(cfg.ajustes && cfg.ajustes[f.mk] &&
                         Object.prototype.hasOwnProperty.call(cfg.ajustes[f.mk], mv.id));
+                      if (it.devolucion) {
+                        const med = medios.find((x) => x.id === it.medioDev);
+                        const donde = it.aCaja ? "a tu caja de ahorro" : (med ? "baja " + med.corto : "");
+                        return (
+                          <div key={"dev" + mv.id} style={{ display: "flex", justifyContent: "space-between",
+                                alignItems: "center", gap: 10, padding: "8px 0" }}>
+                            <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap" }}>
+                              {mv.detalle}
+                              <span style={{ color: T.tenue, fontSize: 11.5 }}>
+                                {"  "}{donde}
+                                {mv.devPct ? ` · ${mv.devPct}%` : ""}
+                              </span>
+                            </span>
+                            <span className="num" style={{ fontSize: 13, flexShrink: 0, color: T.verde }}>
+                              +{corta(monto)}
+                            </span>
+                          </div>
+                        );
+                      }
                       return (
                         <div key={mv.id} style={{ background: abierto ? T.papel : "transparent",
                                                   borderRadius: abierto ? 10 : 0,
@@ -3384,6 +3636,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
                               {estimado && !saldado ? "  ~" : ""}
                               {ajustado && !saldado ? "  ✎" : ""}
+                              {it.usado > 0 ? (
+                                <span style={{ color: T.ambar, fontSize: 11.5 }}>
+                                  {"  "}−{corta(it.usado)} ya cargado
+                                </span>
+                              ) : null}
                               {!estimado && desvio ? (
                                 <span style={{ color: desvio > 0 ? T.rojo : T.verde, fontSize: 11.5 }}>
                                   {"  "}{desvio > 0 ? "+" : "−"}{corta(Math.abs(desvio))}
@@ -3391,8 +3648,10 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                               ) : null}
                             </span>
                             <span className="num" style={{ fontSize: 13, flexShrink: 0,
-                                  color: saldado ? T.tenue : ingreso ? T.verde : ajustado ? T.ambar : T.tinta }}>
-                              {saldado ? (ingreso ? "cobrado" : "pagado")
+                                  color: saldado ? T.tenue : (ingreso || aFavor) ? T.verde
+                                       : ajustado ? T.ambar : T.tinta }}>
+                              {saldado ? (it.cubierto ? "cubierto" : ingreso ? "cobrado" : "pagado")
+                                       : aFavor ? "+" + corta(it.credito)
                                        : (ingreso ? "+" : "") + corta(monto)}
                             </span>
                           </button>
@@ -3451,13 +3710,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     };
 
                     const grupos = [];
-                    const meter = (titulo, sub, arr, color, totalFijo) => {
-                      if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color,
+                    const meter = (titulo, sub, arr, color, totalFijo, persona) => {
+                      if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color, persona,
                         total: totalFijo != null ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
                     };
                     if (agrupar === "categoria") {
                       meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
-                      const gastos = pend.filter((i) => !i.ingreso);
+                      const gastos = pend.filter((i) => !i.ingreso && !i.devolucion);
                       const cats = [...new Set(gastos.map((i) => i.mv.categoria || "Sin categoría"))]
                         .sort((a, b) =>
                           gastos.filter((i) => (i.mv.categoria || "Sin categoría") === b).reduce((x, y) => x + y.monto, 0) -
@@ -3475,16 +3734,23 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           const sinConf = pend.filter((i) => i.mv.medio === m.id && i.estimado).length;
                           return dia + (sinConf ? ` · ${sinConf} sin confirmar` : " · todo confirmado");
                         })(),
-                              pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && i.mv.medio === m.id)));
+                              pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.devolucion
+                                                 && i.mv.medio === m.id)));
                       meter("Efectivo y débito", "",
-                            pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.ahorro && i.mv.medio === "efectivo"));
+                            pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.devolucion
+                                               && !i.ahorro && i.mv.medio === "efectivo"));
                       meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar);
+                      // Lo que te acredita el banco por promos, ya descontado de cada resumen
+                      if (f.totalDev > 0)
+                        meter("Reintegros del banco", "promos y devoluciones",
+                              pend.filter((i) => i.devolucion), T.verde);
                       // Una sola línea por persona: las dos puntas ya están cruzadas.
                       (f.netos || []).forEach((x) => {
-                        const arr = pend.filter((i) => (i.deuda || i.soloDeuda) && i.mv.persona === x.persona);
-                        meter(x.neto < 0 ? "Le transferís a " + x.persona : "Te transfiere " + x.persona,
+                        const arr = pend.filter((i) => i.mv.persona === x.persona
+                          && (i.deuda || i.soloDeuda || (i.credito || 0) > 0));
+                        meter(x.neto < 0 ? "Le transferís a " + x.persona : "Te devuelve " + x.persona,
                               "neto, ya cruzado con lo que " + (x.neto < 0 ? "te debe" : "le debés"),
-                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto));
+                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto), x.persona);
                       });
                     }
 
@@ -3526,7 +3792,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                               <span className="num" style={{ fontSize: 13, fontWeight: 620,
                                     color: g.color || T.tinta }}>{plata(g.total)}</span>
                             </div>
-                            {g.arr.map(fila)}
+                            {g.arr.map((it) => fila(it, g.persona))}
                           </div>
                         ))}
 
@@ -3972,6 +4238,8 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
     else p.push(etiqMes(m.mesInicio));
     if (m.persona) p.push(`${m.persona} ${Math.round(m.pct * 100)}%`);
     if (m.soloDeuda) p.push("ya salió de tu caja");
+    if (m.devPct || m.devTope) p.push("reintegro " + (m.devPct ? m.devPct + "%" : plata(m.devTope))
+      + (m.devDestino === "tarjeta" ? " a la tarjeta" : " a la caja"));
     if (m.categoria) p.push(m.categoria);
     return p.join(" · ");
   };
@@ -4700,6 +4968,8 @@ export default function App() {
     ap[mk] = apMes;
 
     setCfg({ ...cfg, ajustes: a, aplicados: ap,
+             // Poner el importe real deja de ser una estimación
+             confirmados: confirmar(mk, id, monto !== null),
              saldoHoy: Math.round(caja),
              reservasUsd: Math.max(0, Math.round(res * 100) / 100) });
   };
@@ -4871,7 +5141,7 @@ export default function App() {
       {editando && (
         <FormMov
           inicial={editando} medios={medios} personas={personas}
-          tcRef={cfgTC.tc}
+          movs={movs} cfg={cfgTC} tcRef={cfgTC.tc}
           disponible={filas[0] && filas[0].mk === mesDeHoy()
             ? cfg.saldoHoy - (filas[0].egresos - filas[0].ingresos) : cfg.saldoHoy}
           onGuardar={guardarMov} onBorrar={(id) => borrarVarios([id])} onCerrar={() => setEditando(null)}
@@ -4924,8 +5194,8 @@ export default function App() {
           onCerrar={() => setVerImportar(false)} />
       )}
       {verRapido && (
-        <Rapido medios={medios}
-          onGuardar={(m) => setMovs([...movs, m])}
+        <Rapido medios={medios} movs={movs} cfg={cfgTC}
+          onGuardar={(m) => setM([...movs, m])}
           onDetallado={() => { setVerRapido(false); setEditando({}); }}
           onImportar={() => { setVerRapido(false); setVerImportar(true); }}
           onCerrar={() => setVerRapido(false)} />
