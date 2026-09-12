@@ -874,6 +874,9 @@ function proyectar(cfg, movs, medios, meses, extra) {
     const items = [];
     const reint = [];
     const deudas = [];
+    // Cuenta corriente con cada persona: + es a mi favor, − es lo que le debo.
+    // Al final del mes se cruzan las dos puntas y sale UN solo movimiento.
+    const saldos = {};
     let ingresos = 0, excepcional = 0, ahorro = 0, usdComprados = 0;
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
@@ -908,26 +911,47 @@ function proyectar(cfg, movs, medios, meses, extra) {
         return;
       }
       if (mv.pagadoPor === "otro") {
-        // Lo puso otra persona con su plata: a vos te sale solo tu parte, y se la transferís.
+        // Lo puso otra persona con su plata: a vos te toca solo tu parte.
+        // No sale de la caja acá: entra a la cuenta corriente con esa persona
+        // y recién al final del mes se transfiere el neto.
         // El porcentaje tiene que vivir entre 0 y 1: fuera de ahí generaba deudas negativas
         const pct = mv.pct != null && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 1;
         const mio = m * pct;
-        porMedio.efectivo = (porMedio.efectivo || 0) + mio;
         items.push({ mv, monto: mio, cuota: nroCuota(mv, mk), deuda: true });
-        if (mv.persona) deudas.push({ persona: mv.persona, monto: mio, detalle: mv.detalle });
+        if (mv.persona) {
+          saldos[mv.persona] = (saldos[mv.persona] || 0) - mio;
+          deudas.push({ persona: mv.persona, monto: mio, detalle: mv.detalle });
+        } else {
+          // Sin persona no hay a quién cruzarle nada: sale de la caja y listo.
+          porMedio.efectivo = (porMedio.efectivo || 0) + mio;
+        }
         if (mv.excepcional) excepcional += mio;
         return;
       }
-      porMedio[mv.medio] = (porMedio[mv.medio] || 0) + m;
+      // Lo pusiste vos. Si la plata YA salió antes de cargarlo (soloDeuda), no vuelve
+      // a descontarse: lo único vivo es lo que te tienen que devolver.
+      if (!mv.soloDeuda) porMedio[mv.medio] = (porMedio[mv.medio] || 0) + m;
+      const p = mv.persona && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+      if (p > 0) {
+        saldos[mv.persona] = (saldos[mv.persona] || 0) + m * p;
+        reint.push({ persona: mv.persona, monto: m * p, detalle: mv.detalle });
+      }
       items.push({ mv, monto: m, cuota: nroCuota(mv, mk),
+                   soloDeuda: !!mv.soloDeuda,
                    estimado: mv.recurrente && !confirmado,
                    auto: esAuto(mv),
                    desvio: mv.recurrente && confirmado && tocado ? m - base : 0 });
-      if (mv.persona && mv.pct) {
-        const p = isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
-        if (p > 0) reint.push({ persona: mv.persona, monto: m * p, detalle: mv.detalle });
-      }
-      if (mv.excepcional) excepcional += m;
+      if (mv.excepcional && !mv.soloDeuda) excepcional += m;
+    });
+
+    // Se cruzan las dos puntas y queda UN número por persona.
+    // Negativo = le transferís. Positivo = te transfiere.
+    const netos = Object.keys(saldos)
+      .map((persona) => ({ persona, neto: Math.round(saldos[persona]) }))
+      .filter((x) => x.neto !== 0)
+      .sort((a, b) => Math.abs(b.neto) - Math.abs(a.neto));
+    netos.forEach((x) => {
+      if (x.neto < 0) porMedio.efectivo = (porMedio.efectivo || 0) - x.neto;
     });
 
     let tarjetas = 0;
@@ -938,13 +962,13 @@ function proyectar(cfg, movs, medios, meses, extra) {
       }
     });
     const efvo = porMedio["efectivo"] || 0;
-    const totalReint = reint.reduce((a, r) => a + r.monto, 0);
+    const totalReint = netos.reduce((a, x) => a + Math.max(0, x.neto), 0);
+    const totalDeudas = netos.reduce((a, x) => a + Math.max(0, -x.neto), 0);
     const totIng = ingresos + totalReint;
     const egresos = tarjetas + efvo;
-    const totalDeudas = deudas.reduce((a, d) => a + d.monto, 0);
     filas.push({
       mk, ingresos: totIng, egresos, tarjetas, efvo, reint, totalReint,
-      deudas, totalDeudas, excepcional, ahorro, usdComprados,
+      deudas, netos, totalDeudas, excepcional, ahorro, usdComprados,
       porMedio, items, resultado: totIng - egresos,
     });
   }
@@ -2687,6 +2711,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     pct: 50,
     pagadoPor: "yo",
     excepcional: false,
+    soloDeuda: false,
     ...inicial,
     monto: inicial?.monto ?? "",
     montoUsd: inicial?.montoUsd ?? "",
@@ -2710,6 +2735,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     const n = Math.max(1, +f.cuotas || 1);
     if (f.tipo === "ahorro") return pesosFinal / n;
     if (f.tipo === "ingreso") return 0;
+    // Ya lo pagaste antes de cargarlo: no vuelve a salir plata de la caja.
+    if (f.soloDeuda) return 0;
     const base = f.moneda === "USD" ? (+f.montoUsd || 0) * tcRef : +f.monto || 0;
     const mio = f.pagadoPor === "otro" ? base * ((+f.pct || 0) / 100) : base;
     return mio / n;
@@ -2752,6 +2779,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     if (f.recurrente && +f.cuotasRestantes > 0)
       mv.hasta = sumaMes(mesDeHoy(), +f.cuotasRestantes - 1);
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
+    // Solo tiene sentido si lo pusiste vos y hay alguien que te lo devuelve
+    if (f.soloDeuda && f.pagadoPor !== "otro" && f.persona) mv.soloDeuda = true;
     if (f.tipo === "ahorro") {
       mv.montoUsd = Math.round(usdFinal * 100) / 100;
       mv.tcCompra = tcUsar;
@@ -2866,7 +2895,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
               <button className={"chip" + (f.pagadoPor === "yo" ? " on" : "")} onClick={() => set("pagadoPor", "yo")}>
                 Yo
               </button>
-              <button className={"chip" + (f.pagadoPor === "otro" ? " on" : "")} onClick={() => set("pagadoPor", "otro")}>
+              <button className={"chip" + (f.pagadoPor === "otro" ? " on" : "")}
+                onClick={() => { set("pagadoPor", "otro"); set("soloDeuda", false); }}>
                 Otra persona
               </button>
             </div>
@@ -3005,7 +3035,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           {f.pagadoPor === "otro" ? "Se lo debo a" : "Lo comparto con"}
         </label>
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-          <button className={"chip" + (!f.persona ? " on" : "")} onClick={() => set("persona", "")}>Nadie</button>
+          <button className={"chip" + (!f.persona ? " on" : "")}
+            onClick={() => { set("persona", ""); set("soloDeuda", false); }}>Nadie</button>
           {personas.map((p) => (
             <button key={p} className={"chip" + (f.persona === p ? " on" : "")} onClick={() => set("persona", p)}>{p}</button>
           ))}
@@ -3056,6 +3087,23 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             </>
           );
         })()}
+
+        {f.tipo === "gasto" && f.pagadoPor === "yo" && f.persona && (
+          <>
+            <button
+              className={"chip" + (f.soloDeuda ? " on" : "")}
+              onClick={() => set("soloDeuda", !f.soloDeuda)}
+              style={{ marginTop: 18 }}
+            >
+              {f.soloDeuda ? "✓ " : ""}Esta plata ya salió
+            </button>
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+              Marcalo si ya pagaste y lo cargás solo para registrar lo que te tienen que
+              devolver. No vuelve a descontarse de tu caja: entra únicamente a la cuenta
+              con {f.persona}.
+            </div>
+          </>
+        )}
 
         <button
           className={"chip" + (f.excepcional ? " on" : "")}
@@ -3278,10 +3326,10 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                 <div style={{ borderTop: `1px solid ${T.linea}` }}>
                   {(f.ingresos || f.tarjetas || f.efvo) > 0 && (
                   <div style={{ padding: "13px 15px", fontSize: 13.5 }}>
-                    {[["Ingresos", f.ingresos],
+                    {[["Ingresos", f.ingresos - f.totalReint],
                       ["Tarjetas", -f.tarjetas],
                       ["Efectivo y débito", -(f.efvo - f.totalDeudas - f.ahorro)],
-                      ["A otras personas", -f.totalDeudas],
+                      ["Neto con otras personas", f.totalReint - f.totalDeudas],
                       ["Compra de dólares", -f.ahorro]]
                       .filter(([, v]) => v)
                       .map(([n, v]) => (
@@ -3403,9 +3451,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     };
 
                     const grupos = [];
-                    const meter = (titulo, sub, arr, color) => {
-                      if (arr.length) grupos.push({ titulo, sub, arr, color,
-                        total: arr.reduce((a, b) => a + b.monto, 0) });
+                    const meter = (titulo, sub, arr, color, totalFijo) => {
+                      if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color,
+                        total: totalFijo != null ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
                     };
                     if (agrupar === "categoria") {
                       meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
@@ -3427,12 +3475,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           const sinConf = pend.filter((i) => i.mv.medio === m.id && i.estimado).length;
                           return dia + (sinConf ? ` · ${sinConf} sin confirmar` : " · todo confirmado");
                         })(),
-                              pend.filter((i) => !i.ingreso && !i.deuda && i.mv.medio === m.id)));
+                              pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && i.mv.medio === m.id)));
                       meter("Efectivo y débito", "",
-                            pend.filter((i) => !i.ingreso && !i.deuda && !i.ahorro && i.mv.medio === "efectivo"));
+                            pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.ahorro && i.mv.medio === "efectivo"));
                       meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar);
-                      [...new Set(pend.filter((i) => i.deuda).map((i) => i.mv.persona))].forEach((per) =>
-                        meter("Le transferís a " + per, "", pend.filter((i) => i.deuda && i.mv.persona === per)));
+                      // Una sola línea por persona: las dos puntas ya están cruzadas.
+                      (f.netos || []).forEach((x) => {
+                        const arr = pend.filter((i) => (i.deuda || i.soloDeuda) && i.mv.persona === x.persona);
+                        meter(x.neto < 0 ? "Le transferís a " + x.persona : "Te transfiere " + x.persona,
+                              "neto, ya cruzado con lo que " + (x.neto < 0 ? "te debe" : "le debés"),
+                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto));
+                      });
                     }
 
                     return (
@@ -3918,6 +3971,7 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
     else if ((m.cuotas || 1) > 1) p.push(`${m.cuotas} cuotas desde ${etiqMes(m.mesInicio)}`);
     else p.push(etiqMes(m.mesInicio));
     if (m.persona) p.push(`${m.persona} ${Math.round(m.pct * 100)}%`);
+    if (m.soloDeuda) p.push("ya salió de tu caja");
     if (m.categoria) p.push(m.categoria);
     return p.join(" · ");
   };
