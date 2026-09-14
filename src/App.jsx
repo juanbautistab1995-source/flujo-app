@@ -811,7 +811,10 @@ function mesConsumo(mv, mkPago, medios) {
   return sumaMes(mkPago, -1);
 }
 
-function montoEnMes(mv, mk, tc, medios) {
+function montoEnMes(mv, mkPedido, tc, medios) {
+  // Cobrás el 28 pero esa plata es del mes que viene: el ingreso se corre un mes
+  // para quedar al lado de los gastos que va a pagar.
+  const mk = mv.paraMes === "siguiente" ? sumaMes(mkPedido, -1) : mkPedido;
   // Un importe negativo no tiene sentido en este modelo y contaminaba los totales:
   // lo tratamos como cero en vez de dejar que reste.
   const num = (v) => {
@@ -841,7 +844,7 @@ function montoEnMes(mv, mk, tc, medios) {
 
 function nroCuota(mv, mk) {
   if (mv.recurrente || !mv.mesInicio) return null;
-  return distMes(mv.mesInicio, mk) + 1;
+  return distMes(mv.mesInicio, mv.paraMes === "siguiente" ? sumaMes(mk, -1) : mk) + 1;
 }
 
 // Deja todo el mes en cero: sirve para dar por saldado el mes en curso.
@@ -859,6 +862,14 @@ function estaConfirmado(cfg, mk, id) {
 // Los automáticos (suscripciones, seguros, servicios) se debitan solos y casi
 // nunca cambian. Los variables (nafta, súper) son una apuesta hasta que pasan.
 const esAuto = (mv) => mv.recurrente && mv.auto !== false;
+
+// El mes en curso y los que ya pasaron se arman SOLO con lo que cargaste.
+// Las bolsas estimadas (nafta, súper, gastos varios) valen de acá en adelante.
+const mesCerradoOEnCurso = (mk) => idxMes(mk) <= idxMes(mesDeHoy());
+// Una bolsa es un recurrente variable que ADEMÁS cargás a mano gasto por gasto.
+// Si no lo cargás a mano (la psicología, los almuerzos), cuenta siempre: es real.
+const esEstimacion = (mv) =>
+  mv.recurrente && mv.tipo !== "ingreso" && mv.auto === false && mv.manual !== false;
 
 // Los estimados VARIABLES de un mes (nafta, súper) con lo que ya les comieron
 // los gastos reales que apuntan a ellos. Es lo que ofrecemos al cargar a mano.
@@ -899,8 +910,9 @@ function estimadosDelMes(movs, cfg, medios, mk) {
     const v = montoEnMes(mv, mk, cfg.tc, medios);
     if (v > 0) consumido[mv.consume] = (consumido[mv.consume] || 0) + v;
   });
+  if (mesCerradoOEnCurso(mk)) return [];
   return (movs || [])
-    .filter((mv) => mv.recurrente && mv.tipo !== "ingreso" && mv.auto === false)
+    .filter(esEstimacion)
     .map((mv) => {
       const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
       const base = tocado ? aj[mv.id] : montoEnMes(mv, mk, cfg.tc, medios);
@@ -944,6 +956,8 @@ function proyectar(cfg, movs, medios, meses, extra) {
       if (mv.recurrente && mv.medio && mv.medio !== "efectivo" && conResumen[mv.medio + "|" + mk]) return;
       const base = montoEnMes(mv, mk, cfg.tc, medios);
       const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
+      // Una estimación no tiene nada que hacer en un mes que ya viviste
+      if (esEstimacion(mv) && !tocado && mesCerradoOEnCurso(mk)) return;
       const confirmado = mv.recurrente ? estaConfirmado(cfg, mk, mv.id) : true;
       // Ajuste puntual: este mes vale otra cosa (0 = ya pagado o no aplica).
       let m = tocado ? aj[mv.id] : base;
@@ -1015,18 +1029,27 @@ function proyectar(cfg, movs, medios, meses, extra) {
     arr.forEach((mv) => {
       const d = devolucionDe(mv, cfg.tc, medios, mk);
       if (d <= 0) return;
-      totalDev += d;
+      // El reintegro lleva su propia clave: marcarlo como cobrado no tiene que
+      // tocar el gasto que lo generó.
+      const devKey = "dev|" + mv.id;
+      const tocadoDev = Object.prototype.hasOwnProperty.call(aj, devKey);
+      const monto = tocadoDev ? aj[devKey] : d;
+      const aCaja = (mv.devDestino || "caja") !== "tarjeta";
+      const medioDev = aCaja ? null : (mv.medio || "efectivo");
+      if (!monto) {
+        items.push({ mv, monto: 0, base: d, devolucion: true, devKey, aCaja, medioDev, saldado: true });
+        return;
+      }
+      totalDev += monto;
       // Lo normal es que el banco te lo acredite en la caja de ahorro: es plata
       // que entra. Solo si lo aclarás, baja el resumen de la tarjeta.
-      if ((mv.devDestino || "caja") === "tarjeta") {
-        const k = mv.medio || "efectivo";
-        devPorMedio[k] = (devPorMedio[k] || 0) + d;
-        items.push({ mv, monto: d, devolucion: true, medioDev: k });
+      if (!aCaja) {
+        devPorMedio[medioDev] = (devPorMedio[medioDev] || 0) + monto;
       } else {
-        devCaja += d;
-        ingresos += d;
-        items.push({ mv, monto: d, devolucion: true, aCaja: true });
+        devCaja += monto;
+        ingresos += monto;
       }
+      items.push({ mv, monto, devolucion: true, devKey, aCaja, medioDev });
     });
 
     // Se cruzan las dos puntas y queda UN número por persona.
@@ -2840,6 +2863,8 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     devTope: "",
     devMes: "mismo",
     devDestino: "caja",
+    manual: true,
+    paraMes: "mismo",
     ...inicial,
     monto: inicial?.monto ?? "",
     montoUsd: inicial?.montoUsd ?? "",
@@ -2904,12 +2929,15 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     else mv.monto = +f.monto;
     if (f.recurrente) {
       mv.recurrente = true;
+      if (f.auto === false) mv.auto = false;
+      if (f.auto === false && f.manual === false) mv.manual = false;
       if (f.meses?.length) mv.meses = f.meses;
     } else {
       mv.cuotas = Math.max(1, +f.cuotas || 1);
       mv.mesInicio = mesPago;
       mv.fecha = f.fecha;
     }
+    if (f.tipo === "ingreso" && f.paraMes === "siguiente") mv.paraMes = "siguiente";
     if (f.persona) { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
     if (f.tipo === "gasto" && f.categoria) mv.categoria = f.categoria;
     if (f.recurrente && +f.cuotasRestantes > 0)
@@ -3067,6 +3095,23 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         )}
 
+        {f.tipo === "ingreso" && (
+          <>
+            <label className="lbl" style={{ marginTop: 16 }}>¿De qué mes es esta plata?</label>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              <button className={"chip sm" + ((f.paraMes || "mismo") === "mismo" ? " on" : "")}
+                onClick={() => set("paraMes", "mismo")}>Del mes que la cobro</button>
+              <button className={"chip sm" + (f.paraMes === "siguiente" ? " on" : "")}
+                onClick={() => set("paraMes", "siguiente")}>Del mes siguiente</button>
+            </div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.55 }}>
+              {f.paraMes === "siguiente"
+                ? "Cobrás a fin de mes y con eso pagás el mes que viene: la plata se muestra ahí, al lado de los gastos que cubre."
+                : "La cobrás y la gastás en el mismo mes."}
+            </div>
+          </>
+        )}
+
         <label className="lbl" style={{ marginTop: 18 }}>Frecuencia</label>
         <div style={{ display: "flex", gap: 7 }}>
           <button className={"chip" + (!f.recurrente ? " on" : "")} onClick={() => set("recurrente", false)}>
@@ -3088,9 +3133,26 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             </div>
             <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.55 }}>
               {f.auto === false
-                ? "Como la nafta o el súper: uso este monto para estimar los meses que vienen, y cuando cargues el gasto real lo reemplazo."
+                ? "Como la nafta o el súper: el monto cambia mes a mes, así que es una apuesta hasta que pasa."
                 : "Como Netflix o un seguro: se debita solo y casi nunca cambia, así que lo vas a poder confirmar de a varios con un toque."}
             </div>
+
+            {f.auto === false && (
+              <>
+                <label className="lbl" style={{ marginTop: 16 }}>¿Cargás estos gastos a mano?</label>
+                <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                  <button className={"chip sm" + (f.manual !== false ? " on" : "")}
+                    onClick={() => set("manual", true)}>Sí, los cargo uno por uno</button>
+                  <button className={"chip sm" + (f.manual === false ? " on" : "")}
+                    onClick={() => set("manual", false)}>No, dejá el estimado</button>
+                </div>
+                <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.55 }}>
+                  {f.manual !== false
+                    ? "Entonces en el mes en curso no aparece: manda lo que cargaste. Sirve solo para estimar los meses que vienen."
+                    : "Entonces cuenta todos los meses, igual que un gasto fijo. Si algún mes no va, tocalo y ponelo en cero."}
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -3596,6 +3658,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                   </div>
                   )}
 
+                  {f.mk === mesAct && movs.some(esEstimacion) && (
+                    <div style={{ padding: "0 15px 12px", fontSize: 12, color: T.suave,
+                                  lineHeight: 1.5 }}>
+                      Este mes va con lo real: solo lo que cargaste. Tus estimaciones
+                      ({movs.filter(esEstimacion).map((m) => m.detalle).slice(0, 3).join(", ")}
+                      {movs.filter(esEstimacion).length > 3
+                        ? ` y ${movs.filter(esEstimacion).length - 3} más` : ""})
+                      empiezan a contar en {etiqMesLargo(sumaMes(mesAct, 1))}.
+                    </div>
+                  )}
+
                   {(() => {
                     const pend = f.items.filter((i) => !i.saldado);
                     const sald = f.items.filter((i) => i.saldado);
@@ -3613,21 +3686,26 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       if (it.devolucion) {
                         const med = medios.find((x) => x.id === it.medioDev);
                         const donde = it.aCaja ? "a tu caja de ahorro" : (med ? "baja " + med.corto : "");
+                        const cobrado = !!saldado;
                         return (
-                          <div key={"dev" + mv.id} style={{ display: "flex", justifyContent: "space-between",
-                                alignItems: "center", gap: 10, padding: "8px 0" }}>
+                          <button key={"dev" + mv.id}
+                            onClick={() => onAjustar(f.mk, it.devKey, cobrado ? null : 0,
+                              cobrado || !it.aCaja ? null : { usd: 0, pesos: -(monto || 0) })}
+                            style={{ width: "100%", display: "flex", justifyContent: "space-between",
+                                     alignItems: "center", gap: 10, padding: "8px 0", textAlign: "left" }}>
                             <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap" }}>
+                                  whiteSpace: "nowrap", color: cobrado ? T.tenue : T.tinta }}>
                               {mv.detalle}
                               <span style={{ color: T.tenue, fontSize: 11.5 }}>
                                 {"  "}{donde}
                                 {mv.devPct ? ` · ${mv.devPct}%` : ""}
                               </span>
                             </span>
-                            <span className="num" style={{ fontSize: 13, flexShrink: 0, color: T.verde }}>
-                              +{corta(monto)}
+                            <span className="num" style={{ fontSize: 13, flexShrink: 0,
+                                  color: cobrado ? T.tenue : T.verde }}>
+                              {cobrado ? "acreditado" : "+" + corta(monto)}
                             </span>
-                          </div>
+                          </button>
                         );
                       }
                       return (
@@ -3681,6 +3759,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                 >Guardar</button>
                               </div>
                               <div style={{ display: "flex", gap: 7, marginTop: 9, flexWrap: "wrap" }}>
+                                {!saldado && mv.recurrente && (
+                                  <button className="chip sm"
+                                    onClick={() => { onAjustar(f.mk, mv.id, 0); setEditItem(null); }}>
+                                    Este mes no va
+                                  </button>
+                                )}
                                 {!saldado && (
                                   <button className="chip sm"
                                     onClick={() => {
@@ -3847,7 +3931,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
       <div className="cima sube" style={{ padding: "20px 20px 18px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>
-            {pendiente > 0 ? "Te queda libre este mes" : "Tenés disponible"}
+            {pendiente > 0 ? "Te queda libre este mes"
+             : pendiente < 0 ? "Vas a cerrar el mes con"
+             : "Tenés disponible"}
           </span>
           <button onClick={() => setEditSaldo(!editSaldo)}
             style={{ fontSize: 13, color: "rgba(234,240,236,.62)", fontWeight: 560 }}>
@@ -3972,10 +4058,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           </button>
         )}
 
-        {pendiente > 0 && !editSaldo && (
+        {pendiente !== 0 && !editSaldo && (
           <div style={{ marginTop: 15, paddingTop: 13,
                         borderTop: "1px solid rgba(234,240,236,.14)" }}>
-            {[["En la cuenta", cfg.saldoHoy], ...(gastoPend > 0 ? [["Falta pagar", -gastoPend]] : []),
+            {[["En la cuenta hoy", cfg.saldoHoy],
+              ...(gastoPend > 0 ? [["Falta pagar", -gastoPend]] : []),
+              ...(gastoPend < 0 ? [["Falta que entre", -gastoPend]] : []),
               ...(ahorroMes > 0 ? [["Pasás a dólares", -ahorroMes]] : [])]
               .map(([n, v]) => (
                 <div key={n} style={{ display: "flex", justifyContent: "space-between",
@@ -4243,12 +4331,14 @@ function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
     const p = [];
     if (m.recurrente) {
       p.push(m.meses?.length ? `solo ${m.meses.map((i) => MESN[i - 1]).join(", ")}` : "todos los meses");
+      if (m.auto === false) p.push(m.manual === false ? "varía" : "estimado, desde el mes que viene");
       if (m.hasta) p.push(`hasta ${etiqMes(m.hasta)}`);
     }
     else if ((m.cuotas || 1) > 1) p.push(`${m.cuotas} cuotas desde ${etiqMes(m.mesInicio)}`);
     else p.push(etiqMes(m.mesInicio));
     if (m.persona) p.push(`${m.persona} ${Math.round(m.pct * 100)}%`);
     if (m.soloDeuda) p.push("ya salió de tu caja");
+    if (m.paraMes === "siguiente") p.push("para el mes siguiente");
     if (m.devPct || m.devTope) p.push("reintegro " + (m.devPct ? m.devPct + "%" : plata(m.devTope))
       + (m.devDestino === "tarjeta" ? " a la tarjeta" : " a la caja"));
     if (m.categoria) p.push(m.categoria);
@@ -4792,12 +4882,14 @@ export default function App() {
       // Limpieza: si quedo el efecto de un movimiento que ya no existe, lo revertimos.
       // Pasa si se borro el movimiento sin deshacer primero.
       const vivos = new Set(movsN.map((m) => m.id));
+      // Las claves auxiliares (dev|xxx) cuelgan del movimiento xxx
+      const raiz = (id) => String(id).replace(/^dev\|/, "");
       let cajaFix = c.saldoHoy || 0, resFix = c.reservasUsd || 0, huerfanos = 0;
       const apLimpio = {};
       Object.keys(c.aplicados || {}).forEach((k) => {
         const mes = {};
         Object.keys(c.aplicados[k] || {}).forEach((id) => {
-          if (vivos.has(id)) mes[id] = c.aplicados[k][id];
+          if (vivos.has(raiz(id))) mes[id] = c.aplicados[k][id];
           else {
             cajaFix += c.aplicados[k][id].pesos;
             resFix -= c.aplicados[k][id].usd;
@@ -4814,7 +4906,7 @@ export default function App() {
       // Ajustes que apuntan a movimientos borrados: sobran
       Object.keys(c.ajustes || {}).forEach((k) => {
         const mes = {};
-        Object.keys(c.ajustes[k] || {}).forEach((id) => { if (vivos.has(id)) mes[id] = c.ajustes[k][id]; });
+        Object.keys(c.ajustes[k] || {}).forEach((id) => { if (vivos.has(raiz(id))) mes[id] = c.ajustes[k][id]; });
         c.ajustes[k] = mes;
       });
       if (!c.ajustesInit) {
@@ -4892,7 +4984,9 @@ export default function App() {
     setM(existe ? movs.map((x) => (x.id === mv.id ? mv : x)) : [mv, ...movs]);
     setEditando(null);
   };
-  const borrarVarios = (ids) => {
+  const borrarVarios = (idsBase) => {
+    // Al borrar un gasto se va también la marca de su reintegro
+    const ids = [...idsBase, ...idsBase.map((x) => "dev|" + x)];
     // Al borrar hay que revertir lo que ese movimiento ya habia movido y limpiar sus ajustes,
     // si no quedan reservas o saldo fantasma.
     const a = { ...(cfg.ajustes || {}) };
@@ -4913,7 +5007,7 @@ export default function App() {
     });
     const c = { ...cfg, ajustes: a, aplicados: ap,
                 saldoHoy: Math.round(caja), reservasUsd: Math.max(0, Math.round(res * 100) / 100) };
-    const n = movs.filter((x) => !ids.includes(x.id));
+    const n = movs.filter((x) => !idsBase.includes(x.id));
     // Si no queda ningun movimiento, las tarjetas tampoco tienen por que sobrevivir
     if (!n.length && !cfg.medios) c.medios = MEDIOS_NUEVO;
     if (!n.length) vaciadoPedido.current = true;
