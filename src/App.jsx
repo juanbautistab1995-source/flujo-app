@@ -3765,10 +3765,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                     Este mes no va
                                   </button>
                                 )}
-                                {!saldado && (
+                                {/* Una plata que sale de la caja hoy. En tarjeta no: eso lo
+                                    pagás cuando vence el resumen, no de a un consumo. */}
+                                {!saldado && (it.ahorro || ingreso || mv.medio === "efectivo") && (
                                   <button className="chip sm"
                                     onClick={() => {
-                                      // Marcar como hecho mueve la caja: un gasto la baja, un ingreso la sube.
                                       onAjustar(f.mk, mv.id, 0, {
                                         usd: it.ahorro ? (it.usd || 0) : 0,
                                         pesos: ingreso ? -(monto || 0) : (monto || 0),
@@ -3778,6 +3779,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                     {it.ahorro ? "Ya la hice" : ingreso ? "Ya lo cobré" : "Ya lo pagué"}
                                   </button>
                                 )}
+                                {!saldado && estimado && (
+                                  <button className="chip sm"
+                                    onClick={() => { onConfirmarAuto && onConfirmarAuto(f.mk, [mv.id]);
+                                                     setEditItem(null); }}>
+                                    Es este monto
+                                  </button>
+                                )}
                                 {!saldado && (
                                   <div style={{ width: "100%", fontSize: 12, color: T.suave,
                                                 marginTop: 6, lineHeight: 1.5 }}>
@@ -3785,7 +3793,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                       ? `Al marcarla descuento ${plata(monto)} de tu caja y sumo U$S ${Math.round(it.usd)} a tus reservas.`
                                       : ingreso
                                       ? `Al marcarlo sumo ${plata(monto)} a tu caja.`
-                                      : `Al marcarlo descuento ${plata(monto)} de tu caja.`}
+                                      : mv.medio === "efectivo"
+                                      ? `Al marcarlo descuento ${plata(monto)} de tu caja.`
+                                      : estimado
+                                      ? "Poné el importe real y guardá, o confirmá el estimado si ya sabés que es ese. Se paga cuando vence el resumen."
+                                      : "Este gasto se paga cuando vence el resumen de la tarjeta."}
                                   </div>
                                 )}
                                 {ajustado && (
