@@ -460,6 +460,42 @@ function cacheGuardar(clave, v) {
   try { localStorage.setItem("coti:" + clave, JSON.stringify({ t: Date.now(), v })); } catch (e) { /* lleno */ }
 }
 
+// UVA diaria del BCRA. Devuelve [{fecha, valor}] ordenado por fecha.
+async function traerUva() {
+  const cache = cacheLeer("uva", 360);
+  if (cache) return cache;
+  const r = await fetch("https://api.argentinadatos.com/v1/finanzas/indices/uva");
+  if (!r.ok) throw new Error("uva");
+  const d = await r.json();
+  const l = (Array.isArray(d) ? d : [])
+    .filter((x) => x && /^\d{4}-\d{2}-\d{2}/.test(x.fecha) && +x.valor > 0)
+    .map((x) => ({ fecha: x.fecha.slice(0, 10), valor: +x.valor }))
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : 1))
+    .slice(-500);                    // con el último año y pico alcanza
+  cacheGuardar("uva", l);
+  return l;
+}
+// Elige la UVA "del día 10" más nueva publicada (el BCRA la anticipa unas semanas)
+function uvaDelDia10(lista) {
+  const d10 = (lista || []).filter((x) => x.fecha.slice(8, 10) === "10");
+  const u = d10.length ? d10[d10.length - 1] : (lista || [])[(lista || []).length - 1];
+  return u ? { mes: u.fecha.slice(0, 7), valor: Math.round(u.valor * 100) / 100, fecha: u.fecha } : null;
+}
+// Inflación mensual publicada por el INDEC, como fracción: { "2026-08": 0.019 }
+async function traerInflacion() {
+  const cache = cacheLeer("inflacion", 720);
+  if (cache) return cache;
+  const r = await fetch("https://api.argentinadatos.com/v1/finanzas/indices/inflacion");
+  if (!r.ok) throw new Error("inflacion");
+  const d = await r.json();
+  const m = {};
+  (Array.isArray(d) ? d : []).forEach((x) => {
+    if (x && /^\d{4}-\d{2}/.test(x.fecha) && isFinite(+x.valor)) m[x.fecha.slice(0, 7)] = +x.valor / 100;
+  });
+  cacheGuardar("inflacion", m);
+  return m;
+}
+
 async function traerTasas() {
   const cache = cacheLeer("tasas", 720);          // 12 h: las tasas se mueven poco
   if (cache) return cache;
@@ -1090,6 +1126,496 @@ function proyectar(cfg, movs, medios, meses, extra) {
     f.patrimonio = s + usd * cfg.tc;
   });
   return filas;
+}
+
+/* ===================== ESCENARIOS (capa ficticia) ===================== */
+// Un escenario NUNCA toca tus movimientos: toma la proyección real, le saca lo que
+// reemplaza y le suma lo suyo. Todo vive en cfg.escenarios.
+
+// Inflación mensual por tramos: cada tasa vale desde su mes hasta el próximo tramo.
+const INFL_BASE = [
+  { desde: "2026-07", tasa: 0.018 },   // jul y ago-26: supuesto, editalo
+  { desde: "2026-09", tasa: 0.018 },
+  { desde: "2026-10", tasa: 0.017 },
+  { desde: "2026-11", tasa: 0.016 },
+  { desde: "2026-12", tasa: 0.018 },
+  { desde: "2027-01", tasa: 0.017 },
+  { desde: "2027-02", tasa: 0.016 },
+  { desde: "2027-03", tasa: 0.015 },
+  { desde: "2028-01", tasa: 0.011 },
+  { desde: "2029-01", tasa: 0.0085 },
+  { desde: "2030-01", tasa: 0.0075 },
+  { desde: "2031-01", tasa: 0.0065 },
+];
+
+// Arma las funciones de inflación, índice de precios y UVA para un juego de supuestos.
+// base = mes de los "pesos de hoy" (índice 1). uva = { mes, valor } conocido.
+// real = { "2026-08": 0.019, ... } inflación ya publicada: le gana a cualquier supuesto.
+// ajuste = { mult, shockMes, shockPct }: para los casos optimista / pesimista.
+function crearMacro(tramosIn, base, uvaAncla, real, ajuste) {
+  const tramos = (tramosIn && tramosIn.length ? tramosIn : INFL_BASE)
+    .filter((t) => t && /^\d{4}-\d{2}$/.test(t.desde))
+    .slice().sort((a, b) => (a.desde < b.desde ? -1 : 1));
+  const cInf = {}, cIdx = {}, cUva = {};
+  const b = base || mesDeHoy();
+  const aj = ajuste || {};
+  const infl = (mk) => {
+    if (cInf[mk] != null) return cInf[mk];
+    if (real && real[mk] != null && isFinite(+real[mk])) return (cInf[mk] = +real[mk]);
+    let t = tramos.length ? +tramos[0].tasa || 0 : 0;
+    for (const x of tramos) { if (x.desde <= mk) t = +x.tasa || 0; else break; }
+    // El caso solo mueve el futuro: lo que ya pasó no se reescribe
+    if (mk > b && aj.mult != null && isFinite(+aj.mult)) t *= +aj.mult;
+    if (aj.shockMes && mk === aj.shockMes) t += +aj.shockPct || 0;
+    return (cInf[mk] = t);
+  };
+  // índice(b) = 1 · índice(m) = índice(m-1) × (1 + inflación de m)
+  const idx = (mk) => {
+    if (cIdx[mk] != null) return cIdx[mk];
+    const d = distMes(b, mk);
+    let v = 1;
+    if (d > 0) for (let i = 1; i <= d; i++) v *= 1 + infl(sumaMes(b, i));
+    if (d < 0) for (let i = 0; i > d; i--) v /= 1 + infl(sumaMes(b, i));
+    return (cIdx[mk] = v);
+  };
+  // UVA(t) = UVA(t-1) × (1 + inflación de t-2)
+  const ua = uvaAncla && uvaAncla.mes ? uvaAncla : { mes: b, valor: 1 };
+  const uva = (mk) => {
+    if (cUva[mk] != null) return cUva[mk];
+    const d = distMes(ua.mes, mk);
+    let v = +ua.valor || 1;
+    if (d > 0) for (let i = 1; i <= d; i++) v *= 1 + infl(sumaMes(ua.mes, i - 2));
+    if (d < 0) for (let i = 0; i > d; i--) v /= 1 + infl(sumaMes(ua.mes, i - 2));
+    return (cUva[mk] = v);
+  };
+  return { infl, idx, uva, base: b };
+}
+
+// Préstamo en sistema francés, en UVA (o en pesos si uva === false), con IVA sobre intereses.
+function cronogramaPrestamo(p, macro) {
+  if (!p || !(+p.monto > 0) || !(+p.cuotas > 0)) return [];
+  const n = Math.round(+p.cuotas);
+  const r = (+p.tna || 0) / 12;
+  const iva = p.iva != null ? +p.iva : 0.21;
+  const enUva = p.uva !== false;
+  const u = (mk) => (enUva ? macro.uva(mk) : 1);
+  const u0 = u(p.desembolso || sumaMes(p.primera, -1));
+  let saldo = +p.monto / u0;
+  const pura = r > 0 ? (saldo * r) / (1 - Math.pow(1 + r, -n)) : saldo / n;
+  const out = [];
+  for (let k = 1; k <= n; k++) {
+    const mk = sumaMes(p.primera, k - 1);
+    const interes = saldo * r;
+    const amort = Math.min(saldo, pura - interes);
+    const ivaU = interes * iva;
+    saldo = Math.max(0, saldo - amort);
+    const uv = u(mk);
+    out.push({
+      k, mk, uva: uv,
+      cuota: (amort + interes + ivaU) * uv,
+      interes: interes * uv, iva: ivaU * uv, amort: amort * uv,
+      saldoPost: saldo * uv,
+    });
+  }
+  return out;
+}
+
+// Cuánto rinde un mes el instrumento donde está el fondo (multiplicador sobre el saldo).
+function rendimientoMes(inst, macro, mk) {
+  const t = (inst && inst.tipo) || "pfuva";
+  const tna = inst && inst.tna != null ? +inst.tna : 0.01;
+  if (t === "pfuva") return (macro.uva(mk) / macro.uva(sumaMes(mk, -1))) * (1 + tna / 12);
+  if (t === "pf" || t === "fci") return 1 + tna / 12;
+  if (t === "mep") return 1 + (inst && inst.dev != null ? +inst.dev : 0);
+  return 1;   // "ninguno": el colchón queda quieto
+}
+
+// Valor de un ítem del escenario en un mes.
+function valorItemEsc(it, mk, macro) {
+  if (!it || !(+it.monto > 0)) return 0;
+  if (it.desde && mk < it.desde) return 0;
+  if (it.hasta && mk > it.hasta) return 0;
+  if (it.meses && it.meses.length && !it.meses.includes(+mk.slice(5, 7))) return 0;
+  const m = +it.monto;
+  if (it.ajuste === "inflacion") return m * macro.idx(mk);
+  if (it.ajuste === "periodico" && it.primerAjuste) {
+    const cada = Math.max(1, +it.cada || 6);
+    const d = distMes(it.primerAjuste, mk);
+    if (d < 0) return m;
+    const ult = sumaMes(it.primerAjuste, Math.floor(d / cada) * cada);
+    return m * macro.idx(sumaMes(ult, -1));   // cubre la inflación hasta el mes anterior al ajuste
+  }
+  return m;
+}
+
+// Sueldo del escenario mes a mes. El neto es el de "hoy" (mes base). Cada ajuste cubre
+// la inflación desde el último mes cubierto hasta "rezago" meses antes del mes del ajuste.
+// Con rezago 3, el ajuste de marzo cubre hasta diciembre: ventanas parejas de 6 meses.
+function sueldoEscenario(s, macro, desde, meses) {
+  const out = {};
+  if (!s || !(+s.neto > 0)) return out;
+  let v = +s.neto;
+  let cubierto = s.ultimoCubierto || sumaMes(macro.base, -2);
+  const ajustes = (s.ajustes && s.ajustes.length ? s.ajustes : [3, 9]).map(Number);
+  const fin = sumaMes(desde, meses - 1);
+  for (let mk = sumaMes(macro.base, 1); mk <= fin; mk = sumaMes(mk, 1)) {
+    if (ajustes.includes(+mk.slice(5, 7))) {
+      const hasta = sumaMes(mk, -Math.max(1, +s.rezago || 3));
+      let fac = 1;
+      for (let j = sumaMes(cubierto, 1); j <= hasta; j = sumaMes(j, 1)) fac *= 1 + macro.infl(j);
+      // cobertura 1 = empata la inflación; 0,85 = el sueldo pierde contra los precios
+      const cob = s.cobertura != null && isFinite(+s.cobertura) ? +s.cobertura : 1;
+      v *= 1 + (fac - 1) * cob;
+      if (hasta > cubierto) cubierto = hasta;
+    }
+    if (s.meritoMes && mk === s.meritoMes && +s.meritoPct) v *= 1 + +s.meritoPct / 100;
+    out[mk] = v;
+  }
+  return out;
+}
+
+const macroDeEscenario = (esc, base) =>
+  crearMacro(esc && esc.inflacion, base || (esc && esc.base), esc && esc.uva,
+             esc && esc.inflacionReal, esc && esc.ajusteMacro);
+
+// ¿Y si sale mejor o peor? Dos casos editables que se aplican encima de tus supuestos.
+const CASOS_DEF = {
+  optimista: { nombre: "Optimista", inflMult: 0.7, cobertura: 1, shockMes: "", shockPct: 0,
+               devMult: 0.7, tasaMult: 0.8 },
+  pesimista: { nombre: "Pesimista", inflMult: 1.5, cobertura: 0.85, shockMes: "2027-11", shockPct: 0.06,
+               devMult: 1.8, tasaMult: 1.3 },
+};
+const casosDe = (esc) => ({
+  optimista: { ...CASOS_DEF.optimista, ...((esc && esc.casos && esc.casos.optimista) || {}) },
+  pesimista: { ...CASOS_DEF.pesimista, ...((esc && esc.casos && esc.casos.pesimista) || {}) },
+});
+// Ajusta un instrumento según el caso: el dólar y las tasas acompañan (o no) a la inflación
+function instrumentoEnCaso(inst, caso) {
+  if (!inst || !caso) return inst;
+  if (inst.tipo === "mep") return { ...inst, dev: (+inst.dev || 0) * (+caso.devMult || 1) };
+  if (inst.tipo === "pf" || inst.tipo === "fci") return { ...inst, tna: (+inst.tna || 0) * (+caso.tasaMult || 1) };
+  return inst;
+}
+function aplicarCaso(esc, caso) {
+  if (!esc || !caso) return esc;
+  const f = esc.fondo || {};
+  return {
+    ...esc,
+    ajusteMacro: { mult: +caso.inflMult || 1, shockMes: caso.shockMes || "", shockPct: +caso.shockPct || 0 },
+    sueldo: { ...(esc.sueldo || {}), cobertura: caso.cobertura != null ? +caso.cobertura : 1 },
+    fondo: { ...f, instrumento: instrumentoEnCaso(f.instrumento || { tipo: "pfuva", tna: 0.01 }, caso) },
+  };
+}
+
+// Métricas para comparar casos, todas en pesos de hoy
+function metricasEscenario(res) {
+  const fs = res.filas;
+  const peor = fs.reduce((a, b) => (b.queda / b.ix < a.queda / a.ix ? b : a), fs[0]);
+  const cuotaMax = fs.reduce((a, b) => (b.cuotaEsc / b.ix > a.cuotaEsc / a.ix ? b : a), fs[0]);
+  const ult = fs[fs.length - 1];
+  return {
+    cancelado: res.cancelado,
+    peorMes: peor.mk, peorQueda: peor.queda / peor.ix,
+    enRojo: fs.filter((x) => x.queda < 0).length,
+    cuotaMax: cuotaMax.cuotaEsc / cuotaMax.ix, cuotaMaxMes: cuotaMax.mk,
+    ahorroFinal: ult.ahorro / ult.ix, intIvaHoy: res.intIvaHoy,
+  };
+}
+
+// Tus gastos fijos reales (y los préstamos que se indexan, como el de ANSES) acompañan
+// la inflación de a saltos: cada N meses, alineados con los meses en que ajusta tu sueldo.
+function configFijos(esc, movs) {
+  const f = esc.fijos || {};
+  const modo = f.modo || (esc.fijosConInflacion === false ? "fijo" : "periodico");
+  const cada = Math.max(1, Math.min(12, +f.cada || 3));
+  const ancla = +(((esc.sueldo || {}).ajustes || [3])[0] || 3);
+  const prestamos = Array.isArray(f.prestamos) ? f.prestamos
+    : (movs || []).filter((m) => m.tipo === "gasto" && m.categoria === "Préstamos" &&
+        m.recurrente && /anses|personal/i.test(m.detalle || "")).map((m) => m.id);
+  return { modo, cada, ancla, prestamos };
+}
+const mesesDeAjuste = (fc) =>
+  MESN.map((n, i) => ((((i + 1 - fc.ancla) % fc.cada) + fc.cada) % fc.cada === 0 ? n : null)).filter(Boolean);
+// Cuánto subieron tus fijos en un mes: la inflación acumulada hasta el mes anterior al último ajuste
+function factorFijos(fc, mk, macro) {
+  if (fc.modo !== "periodico") return 1;
+  for (let d = 0; d < fc.cada; d++) {
+    const m = sumaMes(mk, -d);
+    if (m <= macro.base) return 1;
+    if ((((+m.slice(5, 7) - fc.ancla) % fc.cada) + fc.cada) % fc.cada === 0) return macro.idx(sumaMes(m, -1));
+  }
+  return 1;
+}
+
+const esPrestamoOCuota = (mv) =>
+  mv && mv.tipo === "gasto" &&
+  (mv.categoria === "Préstamos" || (!mv.recurrente && (+mv.cuotas || 1) > 1));
+
+// El corazón: la proyección de un escenario, mes a mes.
+function proyectarEscenario(esc, cfg, movs, medios, opts) {
+  const o = opts || {};
+  const desde = esc.desde || sumaMes(mesDeHoy(), 1);
+  const meses = Math.max(1, Math.min(120, +esc.meses || 60));
+  const macro = macroDeEscenario(esc);
+  const sellos = cfg.sellos || 0;
+
+  // 1) Tu flujo real, sin lo que el escenario reemplaza
+  const s = esc.sueldo || {};
+  const fuera = new Set([...(esc.quitar || []), ...(s.activo !== false ? (s.quitar || []) : [])]);
+  const base = o.base || proyectar({ ...cfg, desdeMes: desde, ajuste: 0, saldoHoy: 0, reservasUsd: 0 },
+    (movs || []).filter((m) => !fuera.has(m.id)), medios, meses, null);
+
+  // 2) Lo propio del escenario
+  const sueldo = s.activo !== false ? sueldoEscenario(s, macro, desde, meses) : {};
+  const crono = cronogramaPrestamo(esc.prestamo, macro);
+  const cuotaDe = {}; crono.forEach((c) => { cuotaDe[c.mk] = c; });
+  const f = esc.fondo || {};
+  const p = esc.prestamo || {};
+  const inst = f.instrumento || { tipo: "pfuva", tna: 0.01 };
+  const penal = (k) => (k <= (+p.penalidadHasta || 0) ? +p.penalidad || 0 : 0);
+  const autoCancel = o.sinCancelar ? false : p.autoCancelar !== false;
+
+  const fc = configFijos(esc, movs);
+  let fondo = +f.inicial || 0;
+  let libreAc = +esc.inicial || 0;
+  let cancelado = null;
+  let intIvaHoy = 0, intIvaNom = 0;
+  const filas = [];
+
+  for (let i = 0; i < meses; i++) {
+    const mk = sumaMes(desde, i);
+    const r = base[i];
+    const ix = macro.idx(mk);
+
+    // Préstamos y cuotas reales (con sellos si son de tarjeta), y tus fijos reales
+    let prest = 0, fijos = 0, prestAj = 0;
+    r.items.forEach((it) => {
+      if (it.ingreso || it.ahorro || it.devolucion || it.deuda || it.soloDeuda || !it.monto) return;
+      const conSellos = it.monto * (it.mv.medio && it.mv.medio !== "efectivo" ? 1 + sellos : 1);
+      if (esPrestamoOCuota(it.mv)) {
+        prest += conSellos;
+        if (fc.prestamos.includes(it.mv.id)) prestAj += conSellos;
+      } else if (it.mv.recurrente) {
+        // Lo que te devuelve otra persona (Betty, etc.) sube igual, así que ajustamos solo tu parte
+        fijos += conSellos - (it.credito || 0);
+      }
+    });
+    const facFijos = factorFijos(fc, mk, macro);
+
+    // Ingresos
+    let entra = r.ingresos;
+    const sue = sueldo[mk] || 0;
+    const aguin = s.activo !== false && (s.mesesAguinaldo || [6, 12]).includes(+mk.slice(5, 7))
+      ? sue * ((+s.aguinaldo || 0) + (+s.bono || 0)) : 0;
+    entra += sue + aguin;
+    const extras = (f.extras || []).filter((x) => x.mes === mk && +x.monto > 0)
+      .reduce((a, x) => a + +x.monto * ix, 0);
+    entra += extras;
+
+    // Gastos: lo real que no es préstamo/cuota + ítems del escenario
+    let gastos = r.egresos - prest;
+    gastos += fijos * (facFijos - 1);
+    prest += prestAj * (facFijos - 1);
+    let prestEsc = 0;
+    const det = [];
+    (esc.items || []).forEach((it) => {
+      const v = valorItemEsc(it, mk, macro);
+      if (!v) return;
+      if (it.tipo === "ingreso") { entra += v; return; }
+      if (it.clase === "prestamo") prestEsc += v; else gastos += v;
+      det.push({ nombre: it.nombre, v });
+    });
+    prest += prestEsc;
+
+    // Préstamo del escenario
+    const c = cuotaDe[mk];
+    const cuotaEsc = c && !cancelado ? c.cuota : 0;
+    if (c && !cancelado) {
+      intIvaNom += c.interes + c.iva;
+      intIvaHoy += (c.interes + c.iva) / ix;
+    }
+
+    const queda = entra - gastos - prest - cuotaEsc;
+
+    // Fondo: primero rinde lo que ya había, después entra lo de este mes
+    let separa = 0;
+    if (f.desde && mk >= f.desde) separa += (+f.aporte || 0) * (f.aporteSube === false ? 1 : ix);
+    if (aguin && f.aguinaldoDesde && mk >= f.aguinaldoDesde) separa += aguin * (+f.pctAguinaldo || 0);
+    separa += extras;
+    fondo = fondo * rendimientoMes(inst, macro, mk) + separa;
+
+    // Cancelación automática
+    let cancelacion = 0;
+    const colchon = (+p.colchon || 0) * ix;
+    if (c && !cancelado && autoCancel && c.k >= (+p.cancelarDesde || 1) && c.saldoPost > 0) {
+      const necesita = c.saldoPost * (1 + penal(c.k));
+      if (fondo >= necesita + colchon) {
+        cancelacion = necesita;
+        fondo -= necesita;
+        cancelado = { k: c.k, mk, monto: necesita, penalidad: c.saldoPost * penal(c.k),
+                      colchon: fondo, colchonHoy: fondo / ix };
+        intIvaHoy += (c.saldoPost * penal(c.k)) / ix;
+        intIvaNom += c.saldoPost * penal(c.k);
+      }
+    }
+
+    const libre = queda - separa;
+    libreAc += libre;
+    filas.push({
+      mk, ix, entra, gastos, prest, cuotaEsc, queda, separa, libre,
+      fondo, libreAc, ahorro: fondo + libreAc, cancelacion,
+      cuotaK: c && (!cancelado || cancelado.mk === mk) ? c.k : null, saldoPrestamo: c && !cancelado ? c.saldoPost : (c && cancelado && cancelado.mk === mk ? 0 : null),
+      sueldo: sue, aguinaldo: aguin, detalle: det,
+    });
+  }
+
+  // Ahorro al cierre de cada año (o del último mes)
+  const anual = [];
+  filas.forEach((x, i) => {
+    if (x.mk.slice(5) === "12" || i === filas.length - 1)
+      anual.push({ anio: x.mk.slice(0, 4), mk: x.mk, ahorro: x.ahorro, ahorroHoy: x.ahorro / x.ix });
+  });
+
+  return { filas, cancelado, anual, intIvaHoy, intIvaNom, crono, macro, baseReal: base };
+}
+
+// Cuánta plata extra haría falta para cancelar en ciertas cuotas (sin cancelación automática)
+function faltanteParaCancelar(esc, cfg, movs, medios, cuotas, baseReal) {
+  const sin = proyectarEscenario(esc, cfg, movs, medios, { sinCancelar: true, base: baseReal });
+  const p = esc.prestamo || {};
+  return (cuotas || [15, 18, 24, 30, 36]).map((k) => {
+    const c = sin.crono[k - 1];
+    if (!c) return null;
+    const fila = sin.filas.find((x) => x.mk === c.mk);
+    if (!fila) return null;
+    const pen = k <= (+p.penalidadHasta || 0) ? +p.penalidad || 0 : 0;
+    const necesita = c.saldoPost * (1 + pen) + (+p.colchon || 0) * fila.ix;
+    const falta = Math.max(0, necesita - fila.fondo);
+    return { k, mk: c.mk, saldo: c.saldoPost, fondo: fila.fondo, necesita, falta, faltaHoy: falta / fila.ix };
+  }).filter(Boolean);
+}
+
+// El escenario "Territory Titanium 2023", armado con tus supuestos.
+// Busca tus movimientos por nombre para saber qué reemplazar.
+function escenarioTerritory(movs) {
+  const buscar = (re, id) => {
+    const m = (movs || []).find((x) => x.id === id) ||
+              (movs || []).find((x) => x.recurrente && re.test(x.detalle || ""));
+    return m ? m.id : null;
+  };
+  const quitar = [
+    buscar(/d[ií]a a d[ií]a/i, "tc_diaadia"), buscar(/^disco/i, "tc_disco"),
+    buscar(/^shell/i, "tc_shell"), buscar(/^combustible/i, "tc_comb"),
+    buscar(/almuerzos/i, "fx_almuerzos"), buscar(/^telepase/i, "tc_telepase"),
+    buscar(/patronal \(resto\)/i, "tc_fedpat"),
+  ].filter(Boolean);
+  const sueldoQuitar = (movs || []).filter((m) => m.tipo === "ingreso" &&
+    (m.id === "in_sueldo" || /sueldo|aguin|extra de dic/i.test(m.detalle || ""))).map((m) => m.id);
+  const bolsa = (nombre, monto, modo, desde) =>
+    ({ id: "b" + nombre.slice(0, 4).toLowerCase() + monto, tipo: "gasto", nombre, monto,
+       desde, ajuste: "inflacion", bolsa: true, modo });
+  return {
+    id: "esc" + Date.now(),
+    nombre: "Territory Titanium 2023",
+    activo: true,
+    base: "2026-09",
+    desde: "2026-11",
+    meses: 60,
+    inicial: 0,
+    inflacion: INFL_BASE.map((x) => ({ ...x })),
+    uva: { mes: "2026-10", valor: 2150.5 },
+    sueldo: {
+      activo: true, neto: 3100000, ajustes: [3, 9], ultimoCubierto: "2026-06", rezago: 3,
+      meritoPct: 0, meritoMes: "", aguinaldo: 0.516, bono: 0.452, mesesAguinaldo: [6, 12],
+      quitar: sueldoQuitar,
+    },
+    prestamo: {
+      nombre: "Prendario UVA Territory", monto: 18400000, tna: 0.20, cuotas: 60, iva: 0.21, uva: true,
+      desembolso: "2026-10", primera: "2026-11",
+      penalidad: 0.04, penalidadHasta: 14, cancelarDesde: 15, colchon: 1000000, autoCancelar: true,
+    },
+    quitar,
+    items: [
+      bolsa("Súper", 210000, "reinicia", "2026-11"),
+      bolsa("Almuerzos y viandas", 100000, "reinicia", "2026-11"),
+      bolsa("Salidas y juntadas", 108000, "reinicia", "2026-11"),
+      bolsa("Nafta", 100000, "reinicia", "2026-11"),
+      bolsa("Uber y Telepase", 40000, "reinicia", "2026-11"),
+      bolsa("Farmacia y salud", 70000, "reinicia", "2026-11"),
+      bolsa("Peluquería", 30000, "reinicia", "2026-11"),
+      bolsa("Leña", 29000, "acumula", "2026-10"),
+      bolsa("Otros / esporádicos", 40000, "reinicia", "2026-11"),
+      bolsa("Ropa", 100000, "acumula", "2027-05"),
+      { id: "fpresto", tipo: "gasto", nombre: "Federación Patronal (resto)", monto: 136918,
+        desde: "2026-11", ajuste: "periodico", cada: 6, primerAjuste: "2027-04" },
+    ],
+    fondo: {
+      inicial: 0, aporte: 200000, aporteSube: true, desde: "2027-03",
+      pctAguinaldo: 0.5, aguinaldoDesde: "2027-06",
+      instrumento: { tipo: "pfuva", tna: 0.01 },
+      extras: [
+        { id: "x1", nombre: "Plata de mi familia", monto: 0, mes: "2027-03" },
+        { id: "x2", nombre: "Otro ingreso", monto: 0, mes: "2027-06" },
+      ],
+    },
+  };
+}
+
+/* ===================== SIMULADOR DE INVERSIONES ===================== */
+const INSTRUMENTOS = [
+  { id: "pf",     nombre: "Plazo fijo",       campo: "tna", def: 0.28 },
+  { id: "pfuva",  nombre: "Plazo fijo UVA",   campo: "tna", def: 0.01 },
+  { id: "fci",    nombre: "FCI money market", campo: "tna", def: 0.25 },
+  { id: "mep",    nombre: "Dólar MEP",        campo: "dev", def: 0.015 },
+  { id: "cancelar", nombre: "Cancelar el préstamo antes" },
+];
+
+// Una simulación: arranca con "inicial" y suma "aporte" al final de cada mes.
+function simularInstrumento(sim, inst, macro) {
+  const desde = sim.desde || sumaMes(mesDeHoy(), 1);
+  const n = Math.max(1, Math.min(120, +sim.meses || 12));
+  let v = +sim.inicial || 0;
+  let puesto = v, puestoHoy = v / macro.idx(sumaMes(desde, -1));
+  const tc0 = +sim.tcMep || 0;
+  let tc = tc0;
+  const filas = [];
+  for (let i = 0; i < n; i++) {
+    const mk = sumaMes(desde, i);
+    const ix = macro.idx(mk);
+    v *= rendimientoMes(inst, macro, mk);
+    if (inst.tipo === "mep") tc *= 1 + (+inst.dev || 0);
+    const ap = (+sim.aporte || 0) * (sim.aporteSube ? ix : 1);
+    v += ap; puesto += ap; puestoHoy += ap / ix;
+    filas.push({ mk, valor: v, valorHoy: v / ix, puesto, puestoHoy,
+                 ganancia: v - puesto, gananciaHoy: v / ix - puestoHoy,
+                 usd: inst.tipo === "mep" && tc ? v / tc : null, tc });
+  }
+  return filas;
+}
+
+// "Cancelar antes": juntás la plata sin rendimiento y cancelás apenas alcanza.
+// La ganancia es lo que te ahorrás en intereses + IVA (menos la penalidad), en pesos de hoy.
+function simularCancelacion(sim, esc, macro) {
+  if (!esc || !esc.prestamo) return null;
+  const crono = cronogramaPrestamo(esc.prestamo, macro);
+  const p = esc.prestamo;
+  const desde = sim.desde || sumaMes(mesDeHoy(), 1);
+  let pozo = +sim.inicial || 0;
+  const n = Math.max(1, Math.min(120, +sim.meses || 12));
+  for (let i = 0; i < n; i++) {
+    const mk = sumaMes(desde, i);
+    pozo += (+sim.aporte || 0) * (sim.aporteSube ? macro.idx(mk) : 1);
+    const c = crono.find((x) => x.mk === mk);
+    if (!c || c.saldoPost <= 0) continue;
+    const pen = c.k <= (+p.penalidadHasta || 0) ? +p.penalidad || 0 : 0;
+    if (pozo >= c.saldoPost * (1 + pen)) {
+      const resto = crono.filter((x) => x.k > c.k);
+      const ahorroHoy = resto.reduce((a, x) => a + (x.interes + x.iva) / macro.idx(x.mk), 0)
+                      - (c.saldoPost * pen) / macro.idx(mk);
+      return { k: c.k, mk, monto: c.saldoPost * (1 + pen), ahorroHoy, sobra: pozo - c.saldoPost * (1 + pen) };
+    }
+  }
+  return { k: null, falta: true };
 }
 
 /* ===================== SUPABASE ===================== */
@@ -3484,7 +4010,8 @@ function Curva({ filas, onTocar }) {
             <circle cx={x(i)} cy={y(f.saldo)} r="3.4" fill={T.card}
                     stroke={f.saldo < 0 ? T.rojo : T.verde} strokeWidth="2" />
             <rect x={x(i) - 14} y="0" width="28" height={H} fill="transparent" />
-            {(i === 0 || i === filas.length - 1 || f.saldo === Math.min(...vals)) && (
+            {(i === 0 || i === filas.length - 1 ||
+              (f.saldo === Math.min(...vals) && i > 1 && i < filas.length - 2)) && (
               <text x={Math.min(W - 26, Math.max(16, x(i)))} y={H - 6} fontSize="9.5"
                     fill={T.tenue} textAnchor="middle">{etiqMes(f.mk)}</text>
             )}
@@ -3554,7 +4081,8 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar,
-               pendientesDeuda = 0, onVerPersonas, onConfirmarAuto }) {
+               pendientesDeuda = 0, onVerPersonas, onConfirmarAuto, undo = null, onDeshacer,
+               escenariosCard = null }) {
   const [editSaldo, setEditSaldo] = useState(false);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
@@ -3695,6 +4223,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                      alignItems: "center", gap: 10, padding: "8px 0", textAlign: "left" }}>
                             <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis",
                                   whiteSpace: "nowrap", color: cobrado ? T.tenue : T.tinta }}>
+                              {(mv.fechaCompra || mv.fecha) && (
+                                <span className="num" style={{ color: T.tenue, fontSize: 11.5, marginRight: 7 }}>
+                                  {(mv.fechaCompra || mv.fecha).slice(8, 10)}/{(mv.fechaCompra || mv.fecha).slice(5, 7)}
+                                </span>
+                              )}
                               {mv.detalle}
                               <span style={{ color: T.tenue, fontSize: 11.5 }}>
                                 {"  "}{donde}
@@ -3722,6 +4255,16 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                                   whiteSpace: "nowrap", color: saldado ? T.tenue : T.tinta,
                                   fontStyle: estimado && !saldado ? "italic" : "normal",
                                   opacity: estimado && !saldado ? 0.75 : 1 }}>
+                              {(() => {
+                                // La fecha en que compraste, para ubicar el consumo en el resumen
+                                const fc = !mv.recurrente && (mv.fechaCompra || mv.fecha);
+                                return fc && /^\d{4}-\d{2}-\d{2}/.test(fc) ? (
+                                  <span className="num" style={{ color: T.tenue, fontSize: 11.5,
+                                        fontStyle: "normal", marginRight: 7 }}>
+                                    {fc.slice(8, 10)}/{fc.slice(5, 7)}
+                                  </span>
+                                ) : null;
+                              })()}
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
                               {estimado && !saldado ? "  ~" : ""}
                               {ajustado && !saldado ? "  ✎" : ""}
@@ -3817,7 +4360,18 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                     };
 
                     const grupos = [];
-                    const meter = (titulo, sub, arr, color, totalFijo, persona) => {
+                    // Primero los fijos (sin fecha), después los consumos del más nuevo al más viejo,
+                    // igual que los muestra la app del banco.
+                    const fechaDe = (i) => (!i.mv.recurrente && (i.mv.fechaCompra || i.mv.fecha)) || "";
+                    const ordenar = (arr) => arr.slice().sort((a, b) => {
+                      const fa = fechaDe(a), fb = fechaDe(b);
+                      if (!fa && !fb) return 0;
+                      if (!fa) return -1;
+                      if (!fb) return 1;
+                      return fa < fb ? 1 : fa > fb ? -1 : 0;
+                    });
+                    const meter = (titulo, sub, arrIn, color, totalFijo, persona) => {
+                      const arr = ordenar(arrIn);
                       if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color, persona,
                         total: totalFijo != null ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
                     };
@@ -4088,6 +4642,15 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
         )}
       </div>
 
+      {undo && onDeshacer && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline",
+                      gap: 8, marginTop: 9 }}>
+          <span style={{ fontSize: 11.5, color: T.tenue }}>Acabás de cambiar {undo.que}</span>
+          <button onClick={onDeshacer}
+            style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Deshacer</button>
+        </div>
+      )}
+
       {(cfg.reservasUsd > 0 || filas.some((x) => x.usdComprados > 0)) && (
         <div className="card" style={{ padding: 15, marginTop: 12 }}>
           <div style={{ fontSize: 13, color: T.suave, marginBottom: 8 }}>
@@ -4213,6 +4776,8 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
           </div>
         </div>
       )}
+
+      {escenariosCard}
 
       <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Flujo proyectado</span>
@@ -4773,6 +5338,1407 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
   );
 }
 
+
+/* ===================== ESCENARIOS: PIEZAS DE PANTALLA ===================== */
+const DUENO = "jbblanco";   // las pantallas nuevas solo aparecen con este usuario
+
+const pctTxt = (x, d = 2) =>
+  ((+x || 0) * 100).toLocaleString("es-AR", { maximumFractionDigits: d }) + "%";
+const plataR = (n) => plata(Math.round(+n || 0));
+
+// Número editable. modo: "plata" (entero con miles) · "int" · "pct" (guarda fracción) · "dec"
+function NumIn({ value, onChange, modo = "plata", style, placeholder }) {
+  const fmt = (v) => {
+    if (v == null || v === "" || !isFinite(+v)) return "";
+    if (modo === "pct") return String(+(+v * 100).toFixed(4)).replace(".", ",");
+    if (modo === "dec") return String(+v).replace(".", ",");
+    if (modo === "int") return String(Math.round(+v));
+    return Math.round(+v).toLocaleString("es-AR");
+  };
+  const [txt, setTxt] = useState(fmt(value));
+  const [foco, setFoco] = useState(false);
+  useEffect(() => { if (!foco) setTxt(fmt(value)); }, [value, foco, modo]);
+  const parse = (t) => {
+    let s = String(t || "").trim();
+    if (modo === "plata" || modo === "int") s = s.replace(/[^\d-]/g, "");
+    else s = s.replace(/[^\d.,-]/g, "").replace(",", ".");
+    if (s === "" || s === "-" || s === ".") return null;
+    const n = parseFloat(s);
+    if (!isFinite(n)) return null;
+    return modo === "pct" ? n / 100 : n;
+  };
+  return (
+    <input className="num" inputMode={modo === "plata" || modo === "int" ? "numeric" : "decimal"}
+      value={txt} placeholder={placeholder}
+      onFocus={() => { setFoco(true); if (modo === "plata") setTxt(value ? String(Math.round(+value)) : ""); }}
+      onBlur={() => setFoco(false)}
+      onChange={(e) => { setTxt(e.target.value); const n = parse(e.target.value); onChange(n == null ? 0 : n); }}
+      style={{ textAlign: "right", padding: "9px 11px", ...(style || {}) }} />
+  );
+}
+
+function MesIn({ value, onChange, vacio }) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <input type="month" value={value || ""} onChange={(e) => onChange(e.target.value)}
+        style={{ padding: "8px 10px" }} />
+      {vacio && value && (
+        <button onClick={() => onChange("")} aria-label="Sacar la fecha"
+          style={{ fontSize: 15, color: T.tenue, padding: "0 6px" }}>✕</button>
+      )}
+    </div>
+  );
+}
+
+function Campo({ label, children, nota }) {
+  return (
+    <div style={{ marginTop: 12, minWidth: 0 }}>
+      <label className="lbl">{label}</label>
+      {children}
+      {nota && <div style={{ fontSize: 11.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>{nota}</div>}
+    </div>
+  );
+}
+const Dos = ({ children }) => (
+  <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, alignItems: "end" }}>{children}</div>
+);
+
+function Seccion({ titulo, sub, children, abierta = false }) {
+  const [a, setA] = useState(abierta);
+  return (
+    <div className="card" style={{ marginTop: 10, overflow: "hidden" }}>
+      <button onClick={() => setA(!a)}
+        style={{ width: "100%", textAlign: "left", padding: "13px 15px", display: "flex",
+                 justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ display: "block", fontSize: 14.5, fontWeight: 620 }}>{titulo}</span>
+          {sub && <span style={{ display: "block", fontSize: 12, color: T.suave, marginTop: 2 }}>{sub}</span>}
+        </span>
+        <span style={{ color: T.tenue, fontSize: 18, flexShrink: 0 }}>{a ? "−" : "+"}</span>
+      </button>
+      {a && <div style={{ padding: "2px 15px 15px", borderTop: `1px solid ${T.linea}` }}>{children}</div>}
+    </div>
+  );
+}
+
+// El cartel que nunca te deja confundir un escenario con lo real
+const Ficticio = ({ chico }) => (
+  <span style={{ display: "inline-block", fontSize: chico ? 10 : 11, fontWeight: 700,
+                 letterSpacing: ".06em", color: "#7A4E06", background: T.ambarBg,
+                 border: "1px solid #E9C98A", borderRadius: 6,
+                 padding: chico ? "2px 6px" : "3px 8px", whiteSpace: "nowrap" }}>
+    ESCENARIO (ficticio)
+  </span>
+);
+
+function escenarioVacio() {
+  const hoy = mesDeHoy();
+  return {
+    id: "esc" + Date.now(), nombre: "Nuevo escenario", activo: true,
+    base: hoy, desde: sumaMes(hoy, 1), meses: 60, inicial: 0,
+    inflacion: INFL_BASE.map((x) => ({ ...x })),
+    uva: { mes: "2026-10", valor: 2150.5 },
+    sueldo: { activo: false, neto: 0, ajustes: [3, 9], ultimoCubierto: sumaMes(hoy, -3), rezago: 3,
+              meritoPct: 0, meritoMes: "", aguinaldo: 0.5, bono: 0, mesesAguinaldo: [6, 12], quitar: [] },
+    prestamo: null, quitar: [], items: [],
+    fondo: { inicial: 0, aporte: 0, aporteSube: true, desde: "", pctAguinaldo: 0, aguinaldoDesde: "",
+             instrumento: { tipo: "pfuva", tna: 0.01 }, extras: [] },
+  };
+}
+const prestamoVacio = (esc) => ({
+  nombre: "Préstamo", monto: 10000000, tna: 0.2, cuotas: 60, iva: 0.21, uva: true,
+  desembolso: sumaMes(esc.desde, -1), primera: esc.desde,
+  penalidad: 0.04, penalidadHasta: 14, cancelarDesde: 15, colchon: 1000000, autoCancelar: true,
+});
+
+const NOMBRE_INST = { pfuva: "PF UVA", pf: "Plazo fijo", fci: "FCI money market", mep: "Dólar MEP", ninguno: "No rinde" };
+
+/* ---------- Tabla mes a mes ---------- */
+function TablaEscenario({ filas, enHoy }) {
+  const v = (x, f) => (enHoy ? x / f.ix : x);
+  const cols = [
+    ["Te entra", (f) => f.entra],
+    ["Gastos", (f) => f.gastos],
+    ["Préstamos y cuotas", (f) => f.prest],
+    ["Cuota del préstamo", (f) => f.cuotaEsc],
+    ["Te queda en el mes", (f) => f.queda, true],
+    ["Separás para el fondo", (f) => f.separa],
+    ["Te queda libre", (f) => f.libre],
+    ["Fondo acumulado", (f) => f.fondo],
+    ["Libre acumulado", (f) => f.libreAc],
+  ];
+  const th = { padding: "9px 10px", fontSize: 11, fontWeight: 600, color: T.suave, textAlign: "right",
+               borderBottom: `1px solid ${T.linea}`, background: T.card, verticalAlign: "bottom",
+               lineHeight: 1.3, minWidth: 96 };
+  const pega = { position: "sticky", left: 0, zIndex: 1, textAlign: "left", minWidth: 70,
+                 borderRight: `1px solid ${T.linea}` };
+  return (
+    <div className="card" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", marginTop: 10 }}>
+      <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, ...pega }}>Mes</th>
+            {cols.map(([n, , fuerte]) => (
+              <th key={n} style={{ ...th, color: fuerte ? T.tinta : T.suave }}>{n}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((f) => {
+            const fondoFila = f.cancelacion ? T.verdeBg : f.queda < 0 ? "#FDF3F1" : T.card;
+            return (
+              <tr key={f.mk}>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${T.linea}`, background: fondoFila, ...pega }}>
+                  <div style={{ fontWeight: 600 }}>{etiqMes(f.mk)}</div>
+                  {f.cuotaK && <div style={{ fontSize: 10.5, color: T.tenue }}>cuota {f.cuotaK}</div>}
+                  {f.cancelacion > 0 && <div style={{ fontSize: 10.5, color: T.verde, fontWeight: 700 }}>cancelás</div>}
+                </td>
+                {cols.map(([n, get, fuerte]) => {
+                  const x = v(get(f), f);
+                  return (
+                    <td key={n} className="num"
+                      style={{ padding: "8px 10px", textAlign: "right", whiteSpace: "nowrap",
+                               borderBottom: `1px solid ${T.linea}`, background: fondoFila,
+                               fontWeight: fuerte ? 650 : 400,
+                               color: fuerte ? (x < 0 ? T.rojo : T.tinta) : x < 0 ? T.rojo : T.tinta }}>
+                      {Math.round(x) === 0 ? "—" : plataR(x)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ---------- Resultado de un escenario ---------- */
+const NOMBRE_CASO = { optimista: "Optimista", base: "Base", pesimista: "Pesimista" };
+const describirCaso = (c) => [
+  `inflación ×${String(+c.inflMult || 1).replace(".", ",")}`,
+  `el sueldo cubre ${Math.round((c.cobertura != null ? +c.cobertura : 1) * 100)}% de la inflación`,
+  c.shockMes && +c.shockPct ? `salto de ${pctTxt(c.shockPct, 1)} en ${etiqMes(c.shockMes)}` : "",
+].filter(Boolean).join(" · ");
+
+function CasosCard({ resCasos, casos, caso, setCaso, conPrestamo }) {
+  const m = {
+    optimista: metricasEscenario(resCasos.optimista),
+    base: metricasEscenario(resCasos.base),
+    pesimista: metricasEscenario(resCasos.pesimista),
+  };
+  const orden = ["optimista", "base", "pesimista"];
+  const fila = (label, get, color) => (
+    <>
+      <div style={{ gridColumn: "1 / -1", fontSize: 11, color: T.suave, marginTop: 9 }}>{label}</div>
+      {orden.map((k) => {
+        const [txt, sub, c] = get(m[k], k);
+        return (
+          <div key={k} className="num" style={{ textAlign: "center", fontSize: 13.5, fontWeight: 600,
+                color: c || (caso === k ? T.tinta : T.suave) }}>
+            {txt}
+            {sub && <div style={{ fontSize: 10.5, fontWeight: 400, color: T.tenue }}>{sub}</div>}
+          </div>
+        );
+      })}
+    </>
+  );
+  return (
+    <div className="card" style={{ padding: "13px 13px 14px", marginTop: 10 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 620 }}>¿Y si sale mejor o peor?</div>
+      <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3, lineHeight: 1.5 }}>
+        Todo en pesos de hoy. Tocá un caso para ver toda la pantalla con ese caso.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6, marginTop: 10 }}>
+        {orden.map((k) => (
+          <button key={k} className={"chip sm" + (caso === k ? " on" : "")} onClick={() => setCaso(k)}
+            style={{ padding: "7px 0", textAlign: "center" }}>{NOMBRE_CASO[k]}</button>
+        ))}
+        {conPrestamo && fila("Cancelás el préstamo", (x) => x.cancelado
+          ? [`cuota ${x.cancelado.k}`, etiqMes(x.cancelado.mk)] : ["no llegás", "antes del final", T.rojo])}
+        {conPrestamo && fila("Cuota más alta", (x) => [corta(x.cuotaMax), etiqMes(x.cuotaMaxMes)])}
+        {fila("Mes más flaco (te queda)", (x) => [corta(x.peorQueda), etiqMes(x.peorMes), x.peorQueda < 0 ? T.rojo : null])}
+        {fila("Meses en rojo", (x) => [String(x.enRojo), null, x.enRojo > 0 ? T.rojo : null])}
+        {conPrestamo && fila("Intereses + IVA", (x) => [corta(x.intIvaHoy)])}
+        {fila("Ahorro al final", (x) => [corta(x.ahorroFinal), null, x.ahorroFinal < 0 ? T.rojo : null])}
+      </div>
+      <div style={{ fontSize: 11, color: T.tenue, marginTop: 12, lineHeight: 1.5 }}>
+        Optimista: {describirCaso(casos.optimista)}.<br />
+        Pesimista: {describirCaso(casos.pesimista)}.<br />
+        Los cambiás en Editar → Casos.
+      </div>
+    </div>
+  );
+}
+
+function ResultadoEscenario({ esc, res, faltan, enHoy, setEnHoy, resCasos, casos, caso = "base", setCaso }) {
+  const c = res.cancelado;
+  const ultimo = res.filas[res.filas.length - 1];
+  const p = esc.prestamo;
+  return (
+    <>
+      {caso !== "base" && (
+        <div className="aviso" style={{ background: caso === "pesimista" ? T.rojoBg : T.verdeBg, marginTop: 12,
+              color: caso === "pesimista" ? T.rojo : T.verde }}>
+          <b>Viendo el caso {NOMBRE_CASO[caso].toLowerCase()}:</b> {describirCaso(casos[caso])}.{" "}
+          <button onClick={() => setCaso("base")} style={{ fontWeight: 700, textDecoration: "underline" }}>Volver al base</button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+        {[[false, "Pesos de cada mes"], [true, "Pesos de hoy"]].map(([val, n]) => (
+          <button key={n} className={"chip sm" + (enHoy === val ? " on" : "")}
+            onClick={() => setEnHoy(val)}>{n}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+        {enHoy ? `Todo deflactado por tu inflación supuesta, a pesos de ${etiqMesLargo(esc.base || mesDeHoy())}.`
+               : "Cada número en los pesos del mes en que pasa."}
+      </div>
+
+      <div className="cima" style={{ padding: "18px 18px 16px", marginTop: 12 }}>
+        <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)" }}>
+          {p ? "Cancelás el préstamo" : "Ahorro total al final"}
+        </div>
+        {p ? (c ? (
+          <>
+            <div className="plata" style={{ fontSize: 30, color: "#fff", marginTop: 4, letterSpacing: "-0.03em" }}>
+              Cuota {c.k} · {etiqMesLargo(c.mk)}
+            </div>
+            <div style={{ fontSize: 13, color: "rgba(234,240,236,.75)", marginTop: 8, lineHeight: 1.55 }}>
+              Pagás <b className="num" style={{ color: "#fff" }}>{plataR(enHoy ? c.monto / res.macro.idx(c.mk) : c.monto)}</b>
+              {c.penalidad > 0 ? " (con penalidad)" : ""} y te quedan{" "}
+              <b className="num" style={{ color: "#fff" }}>{plataR(enHoy ? c.colchonHoy : c.colchon)}</b> de colchón.
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 17, color: "#fff", marginTop: 6, lineHeight: 1.45 }}>
+            Con este fondo no llegás a cancelarlo antes. Lo pagás en {p.cuotas} cuotas.
+          </div>
+        )) : (
+          <div className="plata" style={{ fontSize: 30, color: "#fff", marginTop: 4 }}>
+            {plataR(enHoy ? ultimo.ahorro / ultimo.ix : ultimo.ahorro)}
+          </div>
+        )}
+        {p && (
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, paddingTop: 12,
+                        borderTop: "1px solid rgba(234,240,236,.14)", fontSize: 12.5 }}>
+            <span style={{ color: "rgba(234,240,236,.62)" }}>Intereses + IVA pagados (pesos de hoy)</span>
+            <span className="num" style={{ color: "#fff", fontWeight: 600 }}>{plataR(res.intIvaHoy)}</span>
+          </div>
+        )}
+      </div>
+
+      {resCasos && <CasosCard resCasos={resCasos} casos={casos} caso={caso} setCaso={setCaso} conPrestamo={!!p} />}
+
+      <div className="card" style={{ padding: "12px 15px", marginTop: 10 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 6 }}>Ahorro total a fin de cada año</div>
+        <div style={{ fontSize: 11.5, color: T.suave, marginBottom: 6 }}>Fondo + libre acumulado.</div>
+        {res.anual.map((a) => (
+          <div key={a.mk} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
+            <span style={{ color: T.suave }}>{a.mk.slice(5) === "12" ? "Dic " + a.anio : etiqMesLargo(a.mk)}</span>
+            <span className="num" style={{ color: a.ahorro < 0 ? T.rojo : T.tinta }}>
+              {plataR(enHoy ? a.ahorroHoy : a.ahorro)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {p && faltan.length > 0 && (
+        <div className="card" style={{ padding: "12px 15px", marginTop: 10 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 620 }}>¿Cuánto te falta para cancelar antes?</div>
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3, marginBottom: 6, lineHeight: 1.5 }}>
+            Plata extra que tendría que haber en el fondo ese mes (saldo + penalidad + colchón), sin la cancelación automática.
+          </div>
+          {faltan.map((x) => (
+            <div key={x.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                                    fontSize: 13, padding: "5px 0", borderTop: `1px solid ${T.linea}` }}>
+              <span>Cuota {x.k} <span style={{ color: T.tenue, fontSize: 11.5 }}>· {etiqMes(x.mk)}</span></span>
+              <span className="num" style={{ color: x.falta > 0 ? T.tinta : T.verde, fontWeight: 600 }}>
+                {x.falta > 0 ? plataR(enHoy ? x.faltaHoy : x.falta) : "te alcanza"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 15, fontWeight: 620, marginTop: 20 }}>Mes a mes</div>
+      <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>Deslizá la tabla para ver todas las columnas.</div>
+      <TablaEscenario filas={res.filas} enHoy={enHoy} />
+    </>
+  );
+}
+
+/* ---------- Comparar ---------- */
+function CompararEscenario({ esc, res, cfg, movs, medios, otros, enHoy }) {
+  const [contra, setContra] = useState("real");
+  const b = useMemo(() => {
+    if (contra === "real") {
+      const r = proyectar({ ...cfg, desdeMes: res.filas[0].mk, ajuste: 0, saldoHoy: 0, reservasUsd: 0 },
+                          movs, medios, res.filas.length, null);
+      let ac = 0;
+      return r.map((f, i) => { ac += f.resultado; return { mk: f.mk, queda: f.resultado, ahorro: ac, ix: res.filas[i].ix }; });
+    }
+    const e2 = otros.find((x) => x.id === contra);
+    if (!e2) return null;
+    const r2 = proyectarEscenario(e2, cfg, movs, medios);
+    const porMes = {}; r2.filas.forEach((f) => { porMes[f.mk] = f; });
+    return res.filas.map((f) => porMes[f.mk]
+      ? { mk: f.mk, queda: porMes[f.mk].queda, ahorro: porMes[f.mk].ahorro, ix: f.ix }
+      : { mk: f.mk, queda: 0, ahorro: 0, ix: f.ix, falta: true });
+  }, [contra, esc, res, cfg, movs, medios, otros]);
+  const v = (x, ix) => (enHoy ? x / ix : x);
+  const nombreB = contra === "real" ? "Real" : (otros.find((x) => x.id === contra) || {}).nombre;
+  const finA = res.filas[res.filas.length - 1];
+  const finB = b && b[b.length - 1];
+
+  return (
+    <>
+      <label className="lbl" style={{ marginTop: 14 }}>Comparar contra</label>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button className={"chip sm" + (contra === "real" ? " on" : "")} onClick={() => setContra("real")}>Lo real</button>
+        {otros.map((o) => (
+          <button key={o.id} className={"chip sm" + (contra === o.id ? " on" : "")}
+            onClick={() => setContra(o.id)}>{o.nombre}</button>
+        ))}
+      </div>
+      {contra === "real" && (
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+          "Lo real" es tu flujo tal cual lo tenés cargado: sin préstamo nuevo, sin bolsas y sin ajustar por inflación.
+        </div>
+      )}
+
+      {b && finB && (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginTop: 12 }}>
+          {[[esc.nombre, finA.ahorro, finA.ix, true], [nombreB, finB.ahorro, finB.ix, false]].map(([n, a, ix, esA]) => (
+            <div key={n + esA} className="card" style={{ padding: "12px 13px" }}>
+              {esA ? <Ficticio chico /> : contra !== "real" ? <Ficticio chico /> :
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".06em", color: T.verde }}>REAL</span>}
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 6, overflow: "hidden",
+                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</div>
+              <div style={{ fontSize: 11, color: T.suave, marginTop: 2 }}>Ahorro a {etiqMes(finA.mk)}</div>
+              <div className="num plata" style={{ fontSize: 17, marginTop: 4, color: a < 0 ? T.rojo : T.tinta }}>
+                {corta(v(a, ix))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {b && (
+        <div className="card" style={{ marginTop: 10, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "58px 1fr 1fr 1fr", gap: 6, padding: "9px 12px",
+                        fontSize: 11, color: T.suave, fontWeight: 600, borderBottom: `1px solid ${T.linea}` }}>
+            <span>Mes</span>
+            <span style={{ textAlign: "right" }}>Escenario</span>
+            <span style={{ textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nombreB}</span>
+            <span style={{ textAlign: "right" }}>Diferencia</span>
+          </div>
+          <div style={{ fontSize: 10.5, color: T.tenue, padding: "6px 12px 2px" }}>Te queda en el mes</div>
+          {res.filas.map((f, i) => {
+            const x = b[i]; if (!x) return null;
+            const d = v(f.queda, f.ix) - v(x.queda, x.ix);
+            return (
+              <div key={f.mk} className="num" style={{ display: "grid", gridTemplateColumns: "58px 1fr 1fr 1fr",
+                    gap: 6, padding: "6px 12px", fontSize: 12, borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+                <span style={{ color: T.suave }}>{etiqMes(f.mk)}</span>
+                <span style={{ textAlign: "right", color: f.queda < 0 ? T.rojo : T.tinta }}>{corta(v(f.queda, f.ix))}</span>
+                <span style={{ textAlign: "right", color: x.queda < 0 ? T.rojo : T.tinta }}>{x.falta ? "—" : corta(v(x.queda, x.ix))}</span>
+                <span style={{ textAlign: "right", color: d < 0 ? T.rojo : T.verde }}>{d > 0 ? "+" : ""}{corta(d)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------- Editor ---------- */
+function EditorEscenario({ esc, onCambiar, movs, macroCfg, medios }) {
+  const up = (patch) => onCambiar({ ...esc, ...patch });
+  const s = esc.sueldo || {};
+  const upS = (patch) => up({ sueldo: { ...s, ...patch } });
+  const p = esc.prestamo;
+  const upP = (patch) => up({ prestamo: { ...p, ...patch } });
+  const f = esc.fondo || {};
+  const upF = (patch) => up({ fondo: { ...f, ...patch } });
+  const [itemAbierto, setItemAbierto] = useState(null);
+  const [estApi, setEstApi] = useState("");
+  const macro = useMemo(() => macroDeEscenario(esc), [esc.inflacion, esc.base, esc.uva, esc.inflacionReal]);
+  const cs = casosDe(esc);
+  const upCaso = (k, patch) => up({ casos: { ...(esc.casos || {}), [k]: { ...cs[k], ...patch } } });
+  const real = esc.inflacionReal || {};
+  const mesesReales = Object.keys(real).sort();
+
+  const traerDatosOficiales = async () => {
+    setEstApi("Buscando…");
+    const partes = [];
+    let nuevo = { ...esc };
+    try {
+      const u = uvaDelDia10(await traerUva());
+      if (u) {
+        nuevo.uva = { mes: u.mes, valor: u.valor };
+        partes.push(`UVA del ${u.fecha.split("-").reverse().join("/")}: ${u.valor.toLocaleString("es-AR")}`);
+      }
+    } catch (e) { partes.push("no pude traer la UVA"); }
+    try {
+      const inf = await traerInflacion();
+      // Solo los meses que le importan al escenario: desde un año antes del mes base
+      const desde = sumaMes(esc.base || mesDeHoy(), -12);
+      const r = {};
+      Object.keys(inf).forEach((mk) => { if (mk >= desde) r[mk] = inf[mk]; });
+      nuevo.inflacionReal = r;
+      const ks = Object.keys(r).sort();
+      if (ks.length) partes.push(`inflación publicada hasta ${etiqMesLargo(ks[ks.length - 1])}`);
+    } catch (e) { partes.push("no pude traer la inflación"); }
+    onCambiar(nuevo);
+    setEstApi(partes.join(" · ") + ".");
+  };
+  const crono = useMemo(() => cronogramaPrestamo(p, macro), [p, macro]);
+  const medioCorto = (id) => ((medios || []).find((m) => m.id === id) || {}).corto || "";
+
+  const toggleEn = (lista, id) => (lista || []).includes(id) ? lista.filter((x) => x !== id) : [...(lista || []), id];
+  const realesGasto = (movs || []).filter((m) => m.tipo === "gasto" && (m.recurrente || m.categoria === "Préstamos"));
+  const realesIngreso = (movs || []).filter((m) => m.tipo === "ingreso");
+  const montoReal = (m) => m.moneda === "USD" ? `USD ${m.montoUsd}` : plataR(m.monto);
+
+  const updItem = (id, patch) => up({ items: (esc.items || []).map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+  const descItem = (it) => [
+    plataR(it.monto) + (it.tipo === "ingreso" ? " entra" : "") + "/mes",
+    it.desde ? "desde " + etiqMes(it.desde) : "",
+    it.hasta ? "hasta " + etiqMes(it.hasta) : "",
+    it.bolsa ? (it.modo === "acumula" ? "bolsa, se acumula" : "bolsa, se reinicia") : "",
+    it.ajuste === "inflacion" ? "sube con inflación" : it.ajuste === "periodico" ? `ajusta cada ${it.cada || 6} meses` : "fijo",
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <>
+      <Seccion titulo="General" sub={`${etiqMes(esc.desde)} → ${etiqMes(sumaMes(esc.desde, (+esc.meses || 60) - 1))}`}>
+        <Campo label="Nombre">
+          <input value={esc.nombre} onChange={(e) => up({ nombre: e.target.value })} />
+        </Campo>
+        <Dos>
+          <Campo label="Arranca en"><MesIn value={esc.desde} onChange={(v) => v && up({ desde: v })} /></Campo>
+          <Campo label="Cuántos meses"><NumIn modo="int" value={esc.meses} onChange={(v) => up({ meses: Math.max(1, Math.min(120, v)) })} /></Campo>
+        </Dos>
+        <Dos>
+          <Campo label="Pesos de hoy = pesos de"><MesIn value={esc.base} onChange={(v) => v && up({ base: v })} /></Campo>
+          <Campo label="Plata libre al arrancar"><NumIn value={esc.inicial} onChange={(v) => up({ inicial: v })} /></Campo>
+        </Dos>
+        {(() => {
+          const fc = configFijos(esc, movs);
+          const upFi = (patch) => up({ fijos: { modo: fc.modo, cada: fc.cada, prestamos: fc.prestamos, ...(esc.fijos || {}), ...patch } });
+          const prestamosReales = (movs || []).filter((m) => m.tipo === "gasto" && m.categoria === "Préstamos" && m.recurrente);
+          return (
+            <>
+              <Campo label="Tus gastos fijos reales (todo lo que no es cuota)">
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button className={"chip sm" + (fc.modo === "periodico" ? " on" : "")} onClick={() => upFi({ modo: "periodico" })}>Ajustan con la inflación</button>
+                  <button className={"chip sm" + (fc.modo !== "periodico" ? " on" : "")} onClick={() => upFi({ modo: "fijo" })}>Quedan como están</button>
+                </div>
+              </Campo>
+              {fc.modo === "periodico" && (
+                <>
+                  <Campo label="Cada cuántos meses"
+                    nota={`Ajustan en ${mesesDeAjuste(fc).join(", ")}, alineados con tu sueldo. Cada ajuste recupera la inflación acumulada desde el anterior.`}>
+                    <NumIn modo="int" value={fc.cada} onChange={(v) => upFi({ cada: Math.max(1, Math.min(12, v)) })} />
+                  </Campo>
+                  {prestamosReales.length > 0 && (
+                    <Campo label="Préstamos que también ajustan (ej. ANSES)">
+                      {prestamosReales.map((m) => {
+                        const on = fc.prestamos.includes(m.id);
+                        return (
+                          <button key={m.id} onClick={() => upFi({ prestamos: on ? fc.prestamos.filter((x) => x !== m.id) : [...fc.prestamos, m.id] })}
+                            style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10,
+                                     padding: "8px 0", borderTop: `1px solid ${T.linea}`, textAlign: "left" }}>
+                            <span style={{ fontSize: 13 }}>{m.detalle} <span className="num" style={{ color: T.tenue, fontSize: 11.5 }}>{plataR(m.monto)}</span></span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: on ? T.verde : T.tenue, flexShrink: 0 }}>{on ? "ajusta" : "cuota fija"}</span>
+                          </button>
+                        );
+                      })}
+                    </Campo>
+                  )}
+                </>
+              )}
+            </>
+          );
+        })()}
+      </Seccion>
+
+      <Seccion titulo="Inflación y UVA" sub="Cada tasa vale desde su mes hasta el próximo tramo">
+        {(esc.inflacion || []).map((t, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px 28px", gap: 8, marginTop: 8, alignItems: "center" }}>
+            <MesIn value={t.desde} onChange={(v) => up({ inflacion: esc.inflacion.map((x, j) => j === i ? { ...x, desde: v } : x) })} />
+            <NumIn modo="pct" value={t.tasa} onChange={(v) => up({ inflacion: esc.inflacion.map((x, j) => j === i ? { ...x, tasa: v } : x) })} />
+            <button onClick={() => up({ inflacion: esc.inflacion.filter((_, j) => j !== i) })}
+              aria-label="Borrar tramo" style={{ color: T.tenue, fontSize: 15 }}>✕</button>
+          </div>
+        ))}
+        <button className="chip sm" style={{ marginTop: 10 }}
+          onClick={() => up({ inflacion: [...(esc.inflacion || []), { desde: sumaMes(esc.desde, 12), tasa: 0.01 }] })}>
+          + Agregar tramo
+        </button>
+        <Dos>
+          <Campo label="UVA conocida: mes"><MesIn value={esc.uva && esc.uva.mes} onChange={(v) => up({ uva: { ...esc.uva, mes: v } })} /></Campo>
+          <Campo label="Valor"><NumIn modo="dec" value={esc.uva && esc.uva.valor} onChange={(v) => up({ uva: { ...esc.uva, valor: v } })} /></Campo>
+        </Dos>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+          La UVA de cada mes = la del mes anterior × (1 + inflación de 2 meses antes).
+        </div>
+
+        <button className="btn ghost" style={{ marginTop: 14, fontSize: 14, fontWeight: 600 }} onClick={traerDatosOficiales}>
+          Traer UVA (BCRA) e inflación (INDEC)
+        </button>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+          {estApi || "Toma la UVA del día 10 más nueva que publicó el BCRA y la inflación mensual ya publicada. Los meses publicados le ganan a tus supuestos; el resto sigue con tus tramos."}
+        </div>
+        {mesesReales.length > 0 && (
+          <div style={{ marginTop: 10, padding: "10px 12px", background: T.papel, borderRadius: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>Inflación publicada que se usa</span>
+              <button onClick={() => up({ inflacionReal: {} })} style={{ fontSize: 12, color: T.rojo, fontWeight: 600 }}>Olvidarla</button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", marginTop: 6 }}>
+              {mesesReales.map((mk) => (
+                <span key={mk} className="num" style={{ fontSize: 12 }}>
+                  <span style={{ color: T.tenue }}>{etiqMes(mk)}</span> {pctTxt(real[mk], 1)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </Seccion>
+
+      <Seccion titulo="Casos optimista y pesimista" sub="Para ver qué pasa si sale mejor o peor">
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 10, lineHeight: 1.5 }}>
+          Se aplican encima de tus supuestos, solo hacia adelante. El caso base es lo que cargaste arriba.
+        </div>
+        {["optimista", "pesimista"].map((k) => (
+          <div key={k} style={{ borderTop: `1px solid ${T.linea}`, marginTop: 12, paddingTop: 4 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 620, marginTop: 8, color: k === "pesimista" ? T.rojo : T.verde }}>
+              {NOMBRE_CASO[k]}
+            </div>
+            <Dos>
+              <Campo label="Inflación × (1 = igual)"><NumIn modo="dec" value={cs[k].inflMult} onChange={(v) => upCaso(k, { inflMult: v })} /></Campo>
+              <Campo label="El sueldo cubre (%)"><NumIn modo="pct" value={cs[k].cobertura} onChange={(v) => upCaso(k, { cobertura: v })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="Salto de precios en"><MesIn vacio value={cs[k].shockMes} onChange={(v) => upCaso(k, { shockMes: v })} /></Campo>
+              <Campo label="Salto (%)"><NumIn modo="pct" value={cs[k].shockPct} onChange={(v) => upCaso(k, { shockPct: v })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="Devaluación MEP ×"><NumIn modo="dec" value={cs[k].devMult} onChange={(v) => upCaso(k, { devMult: v })} /></Campo>
+              <Campo label="Tasas PF / FCI ×"><NumIn modo="dec" value={cs[k].tasaMult} onChange={(v) => upCaso(k, { tasaMult: v })} /></Campo>
+            </Dos>
+          </div>
+        ))}
+        <button onClick={() => up({ casos: undefined })}
+          style={{ marginTop: 14, fontSize: 12.5, color: T.ambar, fontWeight: 600 }}>Volver a los valores por defecto</button>
+      </Seccion>
+
+      <Seccion titulo="Sueldo y aguinaldo" sub={s.activo !== false && +s.neto ? `${plataR(s.neto)} neto · ajusta en ${(s.ajustes || []).map((m) => MESN[m - 1]).join(" y ")}` : "Usa tus ingresos reales"}>
+        <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+          <button className={"chip sm" + (s.activo !== false ? " on" : "")} onClick={() => upS({ activo: true })}>El escenario define el sueldo</button>
+          <button className={"chip sm" + (s.activo === false ? " on" : "")} onClick={() => upS({ activo: false })}>Usar lo real</button>
+        </div>
+        {s.activo !== false && (
+          <>
+            <Dos>
+              <Campo label="Neto de hoy"><NumIn value={s.neto} onChange={(v) => upS({ neto: v })} /></Campo>
+              <Campo label="Último mes de inflación cubierto"><MesIn value={s.ultimoCubierto} onChange={(v) => upS({ ultimoCubierto: v })} /></Campo>
+            </Dos>
+            <Campo label="Meses en que ajusta">
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {MESN.map((n, i) => (
+                  <button key={n} className={"chip sm" + ((s.ajustes || []).includes(i + 1) ? " on" : "")}
+                    onClick={() => upS({ ajustes: toggleEn(s.ajustes, i + 1).sort((a, b) => a - b) })}>{n}</button>
+                ))}
+              </div>
+            </Campo>
+            <Campo label="Cada ajuste cubre la inflación hasta… meses antes"
+              nota={`Con ${s.rezago || 3}, el ajuste de ${MESN[((s.ajustes || [3])[0] || 3) - 1]} cubre hasta ${MESN[(((((s.ajustes || [3])[0] || 3) - 1 - (s.rezago || 3)) % 12) + 12) % 12]}.`}>
+              <NumIn modo="int" value={s.rezago || 3} onChange={(v) => upS({ rezago: Math.max(1, Math.min(6, v)) })} />
+            </Campo>
+            <Campo label="Cada ajuste cubre (% de la inflación)"
+              nota="100% = el sueldo empata a los precios. Menos de 100%, perdés poder de compra.">
+              <NumIn modo="pct" value={s.cobertura != null ? s.cobertura : 1} onChange={(v) => upS({ cobertura: v })} />
+            </Campo>
+            <Dos>
+              <Campo label="Mérito (%)"><NumIn modo="dec" value={s.meritoPct} onChange={(v) => upS({ meritoPct: v })} /></Campo>
+              <Campo label="Mes del mérito"><MesIn vacio value={s.meritoMes} onChange={(v) => upS({ meritoMes: v })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="Aguinaldo (sueldos)"><NumIn modo="dec" value={s.aguinaldo} onChange={(v) => upS({ aguinaldo: v })} /></Campo>
+              <Campo label="Bono (sueldos)"><NumIn modo="dec" value={s.bono} onChange={(v) => upS({ bono: v })} /></Campo>
+            </Dos>
+            <Campo label="Meses en que cobrás aguinaldo + bono">
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {MESN.map((n, i) => (
+                  <button key={n} className={"chip sm" + ((s.mesesAguinaldo || []).includes(i + 1) ? " on" : "")}
+                    onClick={() => upS({ mesesAguinaldo: toggleEn(s.mesesAguinaldo, i + 1).sort((a, b) => a - b) })}>{n}</button>
+                ))}
+              </div>
+            </Campo>
+            <Campo label="Ingresos reales que este sueldo reemplaza"
+              nota="Los que marques no se cuentan en el escenario (siguen intactos en tu app).">
+              {realesIngreso.map((m) => {
+                const on = (s.quitar || []).includes(m.id);
+                return (
+                  <button key={m.id} onClick={() => upS({ quitar: toggleEn(s.quitar, m.id) })}
+                    style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10,
+                             padding: "8px 0", borderTop: `1px solid ${T.linea}`, textAlign: "left" }}>
+                    <span style={{ fontSize: 13, textDecoration: on ? "line-through" : "none", color: on ? T.tenue : T.tinta }}>
+                      {m.detalle} <span className="num" style={{ color: T.tenue, fontSize: 11.5 }}>{montoReal(m)}</span>
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: on ? T.rojo : T.tenue, flexShrink: 0 }}>
+                      {on ? "reemplazado" : "se cuenta"}
+                    </span>
+                  </button>
+                );
+              })}
+            </Campo>
+          </>
+        )}
+      </Seccion>
+
+      <Seccion titulo="Préstamo" sub={p ? `${p.nombre} · ${plataR(p.monto)} · ${p.cuotas} cuotas` : "Sin préstamo"}>
+        <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+          <button className={"chip sm" + (p ? " on" : "")} onClick={() => !p && up({ prestamo: prestamoVacio(esc) })}>Tiene préstamo</button>
+          <button className={"chip sm" + (!p ? " on" : "")} onClick={() => p && confirm("¿Sacar el préstamo de este escenario?") && up({ prestamo: null })}>Sin préstamo</button>
+        </div>
+        {p && (
+          <>
+            <Campo label="Nombre"><input value={p.nombre || ""} onChange={(e) => upP({ nombre: e.target.value })} /></Campo>
+            <Dos>
+              <Campo label="Monto"><NumIn value={p.monto} onChange={(v) => upP({ monto: v })} /></Campo>
+              <Campo label="Cuotas"><NumIn modo="int" value={p.cuotas} onChange={(v) => upP({ cuotas: Math.max(1, Math.min(120, v)) })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="TNA (%)"><NumIn modo="pct" value={p.tna} onChange={(v) => upP({ tna: v })} /></Campo>
+              <Campo label="IVA s/ intereses (%)"><NumIn modo="pct" value={p.iva} onChange={(v) => upP({ iva: v })} /></Campo>
+            </Dos>
+            <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+              <button className={"chip sm" + (p.uva !== false ? " on" : "")} onClick={() => upP({ uva: true })}>En UVA</button>
+              <button className={"chip sm" + (p.uva === false ? " on" : "")} onClick={() => upP({ uva: false })}>Tasa fija en pesos</button>
+            </div>
+            <Dos>
+              <Campo label="Desembolso"><MesIn value={p.desembolso} onChange={(v) => upP({ desembolso: v })} /></Campo>
+              <Campo label="Primera cuota"><MesIn value={p.primera} onChange={(v) => v && upP({ primera: v })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="Penalidad (%)"><NumIn modo="pct" value={p.penalidad} onChange={(v) => upP({ penalidad: v })} /></Campo>
+              <Campo label="…hasta la cuota"><NumIn modo="int" value={p.penalidadHasta} onChange={(v) => upP({ penalidadHasta: v })} /></Campo>
+            </Dos>
+            <Dos>
+              <Campo label="Cancelás desde la cuota"><NumIn modo="int" value={p.cancelarDesde} onChange={(v) => upP({ cancelarDesde: Math.max(1, v) })} /></Campo>
+              <Campo label="Colchón (pesos de hoy)"><NumIn value={p.colchon} onChange={(v) => upP({ colchon: v })} /></Campo>
+            </Dos>
+            <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+              <button className={"chip sm" + (p.autoCancelar !== false ? " on" : "")} onClick={() => upP({ autoCancelar: true })}>Cancelar solo cuando alcance</button>
+              <button className={"chip sm" + (p.autoCancelar === false ? " on" : "")} onClick={() => upP({ autoCancelar: false })}>No cancelar</button>
+            </div>
+            <div style={{ fontSize: 11.5, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+              Se cancela total el primer mes, desde la cuota {p.cancelarDesde || 1}, en que el fondo cubre el saldo
+              {+p.penalidad ? " (más la penalidad si corresponde)" : ""} y te queda el colchón.
+            </div>
+            {crono.length > 0 && (
+              <div style={{ marginTop: 12, padding: "10px 12px", background: T.papel, borderRadius: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Cuotas de control</div>
+                {[1, 12, 24].filter((k) => crono[k - 1]).map((k) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}>
+                    <span style={{ color: T.suave }}>Cuota {k} · {etiqMes(crono[k - 1].mk)}</span>
+                    <span className="num">{plataR(crono[k - 1].cuota)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Seccion>
+
+      <Seccion titulo="Qué sacás de lo real" sub={`${(esc.quitar || []).length} ítems reemplazados en este escenario`}>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 10, lineHeight: 1.5 }}>
+          Tocá para sacarlos del escenario. En tu app real no cambia nada.
+        </div>
+        {realesGasto.map((m) => {
+          const on = (esc.quitar || []).includes(m.id);
+          return (
+            <button key={m.id} onClick={() => up({ quitar: toggleEn(esc.quitar, m.id) })}
+              style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10,
+                       padding: "8px 0", borderTop: `1px solid ${T.linea}`, textAlign: "left", marginTop: 4 }}>
+              <span style={{ fontSize: 13, minWidth: 0, textDecoration: on ? "line-through" : "none", color: on ? T.tenue : T.tinta }}>
+                {m.detalle} <span className="num" style={{ color: T.tenue, fontSize: 11.5 }}>{montoReal(m)} · {medioCorto(m.medio)}</span>
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: on ? T.rojo : T.tenue, flexShrink: 0 }}>
+                {on ? "sacado" : "queda"}
+              </span>
+            </button>
+          );
+        })}
+      </Seccion>
+
+      <Seccion titulo="Ítems del escenario" sub={`${(esc.items || []).length} bolsas, gastos o ingresos`}>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 10, lineHeight: 1.5 }}>
+          Montos en pesos de hoy. "Se reinicia": lo que no gastás va al ahorro. "Se acumula": pasa al mes siguiente.
+          En la proyección las dos cuentan como gasto todos los meses.
+        </div>
+        {(esc.items || []).map((it) => {
+          const ab = itemAbierto === it.id;
+          return (
+            <div key={it.id} style={{ borderTop: `1px solid ${T.linea}`, marginTop: 6 }}>
+              <button onClick={() => setItemAbierto(ab ? null : it.id)}
+                style={{ width: "100%", textAlign: "left", padding: "9px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{it.nombre || "Sin nombre"}</span>
+                  <span style={{ color: T.tenue }}>{ab ? "−" : "+"}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: T.suave, marginTop: 2 }}>{descItem(it)}</div>
+              </button>
+              {ab && (
+                <div style={{ paddingBottom: 12 }}>
+                  <Campo label="Nombre"><input value={it.nombre || ""} onChange={(e) => updItem(it.id, { nombre: e.target.value })} /></Campo>
+                  <Campo label="Monto por mes (pesos de hoy)"><NumIn value={it.monto} onChange={(v) => updItem(it.id, { monto: v })} /></Campo>
+                  <Campo label="Tipo">
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[["gasto", "gasto", "Gasto"], ["gasto", "prestamo", "Préstamo o cuota"], ["ingreso", "", "Ingreso"]].map(([t, c, n]) => (
+                        <button key={n} className={"chip sm" + (it.tipo === t && (it.clase || "") === (c === "gasto" ? "" : c) ? " on" : "")}
+                          onClick={() => updItem(it.id, { tipo: t, clase: c === "prestamo" ? "prestamo" : "" })}>{n}</button>
+                      ))}
+                    </div>
+                  </Campo>
+                  <Dos>
+                    <Campo label="Desde"><MesIn value={it.desde} onChange={(v) => updItem(it.id, { desde: v })} /></Campo>
+                    <Campo label="Hasta (opcional)"><MesIn vacio value={it.hasta} onChange={(v) => updItem(it.id, { hasta: v })} /></Campo>
+                  </Dos>
+                  <Campo label="Cómo se ajusta">
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {[["inflacion", "Sube con la inflación"], ["periodico", "Cada N meses"], ["ninguno", "Fijo"]].map(([a, n]) => (
+                        <button key={a} className={"chip sm" + ((it.ajuste || "ninguno") === a ? " on" : "")}
+                          onClick={() => updItem(it.id, { ajuste: a, ...(a === "periodico" && !it.primerAjuste ? { cada: 6, primerAjuste: sumaMes(esc.desde, 5) } : {}) })}>{n}</button>
+                      ))}
+                    </div>
+                  </Campo>
+                  {it.ajuste === "periodico" && (
+                    <Dos>
+                      <Campo label="Cada cuántos meses"><NumIn modo="int" value={it.cada || 6} onChange={(v) => updItem(it.id, { cada: Math.max(1, v) })} /></Campo>
+                      <Campo label="Primer ajuste"><MesIn value={it.primerAjuste} onChange={(v) => updItem(it.id, { primerAjuste: v })} /></Campo>
+                    </Dos>
+                  )}
+                  {it.tipo === "gasto" && it.clase !== "prestamo" && (
+                    <Campo label="¿Es una bolsa?">
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {[["", "No"], ["reinicia", "Se reinicia"], ["acumula", "Se acumula"]].map(([m, n]) => (
+                          <button key={n} className={"chip sm" + ((it.bolsa ? it.modo : "") === m ? " on" : "")}
+                            onClick={() => updItem(it.id, { bolsa: !!m, modo: m || undefined })}>{n}</button>
+                        ))}
+                      </div>
+                    </Campo>
+                  )}
+                  <button onClick={() => { up({ items: esc.items.filter((x) => x.id !== it.id) }); setItemAbierto(null); }}
+                    style={{ marginTop: 12, fontSize: 13, color: T.rojo, fontWeight: 600 }}>Borrar este ítem</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button className="chip sm" style={{ marginTop: 10 }}
+          onClick={() => {
+            const nuevo = { id: "it" + Date.now(), tipo: "gasto", nombre: "Nuevo gasto", monto: 0,
+                            desde: esc.desde, ajuste: "inflacion" };
+            up({ items: [...(esc.items || []), nuevo] }); setItemAbierto(nuevo.id);
+          }}>+ Agregar ítem</button>
+      </Seccion>
+
+      <Seccion titulo="Fondo auto / emergencia" sub={`${NOMBRE_INST[(f.instrumento || {}).tipo] || "PF UVA"} · ${+f.aporte ? plataR(f.aporte) + "/mes" : "sin aporte fijo"}`}>
+        <Dos>
+          <Campo label="Aporte por mes (pesos de hoy)"><NumIn value={f.aporte} onChange={(v) => upF({ aporte: v })} /></Campo>
+          <Campo label="Desde"><MesIn vacio value={f.desde} onChange={(v) => upF({ desde: v })} /></Campo>
+        </Dos>
+        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          <button className={"chip sm" + (f.aporteSube !== false ? " on" : "")} onClick={() => upF({ aporteSube: true })}>Sube con la inflación</button>
+          <button className={"chip sm" + (f.aporteSube === false ? " on" : "")} onClick={() => upF({ aporteSube: false })}>Fijo</button>
+        </div>
+        <Dos>
+          <Campo label="% del aguinaldo + bono"><NumIn modo="pct" value={f.pctAguinaldo} onChange={(v) => upF({ pctAguinaldo: v })} /></Campo>
+          <Campo label="Desde"><MesIn vacio value={f.aguinaldoDesde} onChange={(v) => upF({ aguinaldoDesde: v })} /></Campo>
+        </Dos>
+        <Campo label="Plata en el fondo al arrancar"><NumIn value={f.inicial} onChange={(v) => upF({ inicial: v })} /></Campo>
+        <Campo label="Dónde rinde el fondo">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {["pfuva", "pf", "fci", "mep", "ninguno"].map((t) => (
+              <button key={t} className={"chip sm" + (((f.instrumento || {}).tipo || "pfuva") === t ? " on" : "")}
+                onClick={() => upF({ instrumento: { ...(f.instrumento || {}), tipo: t,
+                  ...(t === "mep" ? { dev: (f.instrumento || {}).dev != null ? f.instrumento.dev : 0.015 } : {}),
+                  ...(t !== "mep" && t !== "ninguno" && (f.instrumento || {}).tna == null ? { tna: t === "pfuva" ? 0.01 : 0.28 } : {}) } })}>
+                {NOMBRE_INST[t]}
+              </button>
+            ))}
+          </div>
+        </Campo>
+        {((f.instrumento || {}).tipo || "pfuva") === "mep" ? (
+          <Campo label="Devaluación mensual supuesta (%)"><NumIn modo="pct" value={(f.instrumento || {}).dev} onChange={(v) => upF({ instrumento: { ...f.instrumento, dev: v } })} /></Campo>
+        ) : ((f.instrumento || {}).tipo || "pfuva") !== "ninguno" && (
+          <Campo label={((f.instrumento || {}).tipo || "pfuva") === "pfuva" ? "TNA sobre UVA (%)" : "TNA (%)"}>
+            <NumIn modo="pct" value={(f.instrumento || {}).tna} onChange={(v) => upF({ instrumento: { ...(f.instrumento || { tipo: "pfuva" }), tna: v } })} />
+          </Campo>
+        )}
+        <Campo label="Ingresos extra (van enteros al fondo)" nota="Monto en pesos de hoy y el mes en que llegan.">
+          {(f.extras || []).map((x, i) => (
+            <div key={x.id || i} style={{ borderTop: `1px solid ${T.linea}`, paddingTop: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input value={x.nombre || ""} onChange={(e) => upF({ extras: f.extras.map((y, j) => j === i ? { ...y, nombre: e.target.value } : y) })} />
+                <button onClick={() => upF({ extras: f.extras.filter((_, j) => j !== i) })} aria-label="Borrar" style={{ color: T.tenue, fontSize: 15 }}>✕</button>
+              </div>
+              <Dos>
+                <Campo label="Monto"><NumIn value={x.monto} onChange={(v) => upF({ extras: f.extras.map((y, j) => j === i ? { ...y, monto: v } : y) })} /></Campo>
+                <Campo label="Mes"><MesIn value={x.mes} onChange={(v) => upF({ extras: f.extras.map((y, j) => j === i ? { ...y, mes: v } : y) })} /></Campo>
+              </Dos>
+            </div>
+          ))}
+          <button className="chip sm" style={{ marginTop: 10 }}
+            onClick={() => upF({ extras: [...(f.extras || []), { id: "x" + Date.now(), nombre: "Otro ingreso", monto: 0, mes: esc.desde }] })}>
+            + Agregar ingreso extra
+          </button>
+        </Campo>
+      </Seccion>
+    </>
+  );
+}
+
+/* ---------- Pantalla de escenarios ---------- */
+function Escenarios({ cfg, setCfg, movs, medios, abrirId, onAbierto }) {
+  const lista = cfg.escenarios || [];
+  const [sel, setSel] = useState(null);
+  const [modo, setModo] = useState("ver");
+  const [enHoy, setEnHoy] = useState(false);
+  useEffect(() => {
+    if (abrirId) { setSel(abrirId); setModo("ver"); if (onAbierto) onAbierto(); }
+  }, [abrirId]);
+
+  const guardar = (l) => setCfg({ ...cfg, escenarios: l });
+  const esc = lista.find((x) => x.id === sel);
+
+  const [caso, setCaso] = useState("base");
+  const casos = useMemo(() => casosDe(esc), [esc]);
+  // Base, optimista y pesimista comparten tu flujo real: se calcula una sola vez
+  const resCasos = useMemo(() => {
+    if (!esc) return null;
+    const base = proyectarEscenario(esc, cfg, movs, medios);
+    const o = { base: base.baseReal };
+    return {
+      base,
+      optimista: proyectarEscenario(aplicarCaso(esc, casos.optimista), cfg, movs, medios, o),
+      pesimista: proyectarEscenario(aplicarCaso(esc, casos.pesimista), cfg, movs, medios, o),
+    };
+  }, [esc, cfg, movs, medios, casos]);
+  const resBase = resCasos && resCasos.base;
+  const res = resCasos && resCasos[caso];
+  const faltan = useMemo(() => {
+    if (!esc || !esc.prestamo || !resBase) return [];
+    const e = caso === "base" ? esc : aplicarCaso(esc, casos[caso]);
+    return faltanteParaCancelar(e, cfg, movs, medios, null, resBase.baseReal);
+  }, [esc, cfg, movs, medios, caso, casos, resBase]);
+
+  if (esc && res) {
+    return (
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        <button onClick={() => setSel(null)} style={{ fontSize: 13.5, color: T.ambar, fontWeight: 600 }}>‹ Escenarios</button>
+        <div style={{ marginTop: 10 }}><Ficticio /></div>
+        <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginTop: 8 }}>{esc.nombre}</div>
+        <div style={{ fontSize: 12.5, color: T.suave, marginTop: 3 }}>
+          Tu flujo real + estos cambios · {etiqMes(esc.desde)} a {etiqMes(sumaMes(esc.desde, (+esc.meses || 60) - 1))}
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+          {[["ver", "Resultado"], ["editar", "Editar"], ["comparar", "Comparar"]].map(([m, n]) => (
+            <button key={m} className={"chip" + (modo === m ? " on" : "")} onClick={() => setModo(m)}>{n}</button>
+          ))}
+        </div>
+        {modo === "ver" && (
+          <ResultadoEscenario esc={esc} res={res} faltan={faltan} enHoy={enHoy} setEnHoy={setEnHoy}
+            resCasos={resCasos} casos={casos} caso={caso} setCaso={setCaso} />
+        )}
+        {modo === "editar" && (
+          <EditorEscenario esc={esc} movs={movs} medios={medios}
+            onCambiar={(e) => guardar(lista.map((x) => (x.id === e.id ? e : x)))} />
+        )}
+        {modo === "comparar" && (
+          <>
+            <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+              {[[false, "Pesos de cada mes"], [true, "Pesos de hoy"]].map(([val, n]) => (
+                <button key={n} className={"chip sm" + (enHoy === val ? " on" : "")} onClick={() => setEnHoy(val)}>{n}</button>
+              ))}
+            </div>
+            <CompararEscenario esc={esc} res={resBase} cfg={cfg} movs={movs} medios={medios} enHoy={enHoy}
+              otros={lista.filter((x) => x.id !== esc.id)} />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  const tieneTerritory = lista.some((x) => /territory/i.test(x.nombre || ""));
+  return (
+    <div style={{ padding: 16, paddingBottom: 40 }}>
+      <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.55 }}>
+        Un escenario es tu flujo real más los cambios que quieras probar: un préstamo, otro sueldo,
+        otros gastos. <b style={{ color: T.tinta }}>Nunca toca tus movimientos.</b>
+      </div>
+
+      {lista.map((e) => (
+        <div key={e.id} className="card" style={{ padding: "13px 15px", marginTop: 10, opacity: e.activo === false ? 0.7 : 1 }}>
+          <button onClick={() => { setSel(e.id); setModo("ver"); }} style={{ width: "100%", textAlign: "left" }}>
+            <Ficticio chico />
+            <div style={{ fontSize: 15, fontWeight: 620, marginTop: 6 }}>{e.nombre}</div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 2 }}>
+              {etiqMes(e.desde)} → {etiqMes(sumaMes(e.desde, (+e.meses || 60) - 1))}
+              {e.prestamo ? ` · préstamo ${corta(e.prestamo.monto)}` : ""}
+              {e.activo === false ? " · desactivado" : " · activo"}
+            </div>
+          </button>
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            <button className="chip sm" onClick={() => guardar(lista.map((x) => x.id === e.id ? { ...x, activo: x.activo === false } : x))}>
+              {e.activo === false ? "Activar" : "Desactivar"}
+            </button>
+            <button className="chip sm" onClick={() => {
+              const n = prompt("Nuevo nombre", e.nombre);
+              if (n && n.trim()) guardar(lista.map((x) => x.id === e.id ? { ...x, nombre: n.trim() } : x));
+            }}>Renombrar</button>
+            <button className="chip sm" onClick={() => {
+              const copia = JSON.parse(JSON.stringify(e));
+              copia.id = "esc" + Date.now(); copia.nombre = e.nombre + " (copia)";
+              guardar([...lista, copia]);
+            }}>Duplicar</button>
+            <button className="chip sm" style={{ color: T.rojo }} onClick={() => {
+              if (confirm(`¿Borrar el escenario "${e.nombre}"? Tus movimientos reales no se tocan.`))
+                guardar(lista.filter((x) => x.id !== e.id));
+            }}>Borrar</button>
+          </div>
+        </div>
+      ))}
+
+      {!tieneTerritory && (
+        <button className="btn" style={{ marginTop: 14 }} onClick={() => {
+          const e = escenarioTerritory(movs); guardar([...lista, e]); setSel(e.id); setModo("ver");
+        }}>Cargar "Territory Titanium 2023"</button>
+      )}
+      <button className="btn ghost" style={{ marginTop: 10, fontSize: 14.5, fontWeight: 500 }} onClick={() => {
+        const e = escenarioVacio(); guardar([...lista, e]); setSel(e.id); setModo("editar");
+      }}>Nuevo escenario vacío</button>
+    </div>
+  );
+}
+
+/* ---------- Tarjeta en Hoy: los escenarios activos, encima de lo real ---------- */
+function TarjetaEscenarios({ cfg, movs, medios, onVer }) {
+  const activos = (cfg.escenarios || []).filter((e) => e.activo !== false);
+  const datos = useMemo(() => activos.map((e) => {
+    const r = proyectarEscenario(e, cfg, movs, medios);
+    const real = proyectar({ ...cfg, desdeMes: e.desde, ajuste: 0, saldoHoy: 0, reservasUsd: 0 }, movs, medios, 3, null);
+    return { e, r, real };
+  }), [activos.map((e) => e.id).join(), cfg, movs, medios]);
+  if (!datos.length) return null;
+  return (
+    <div style={{ marginTop: 16 }}>
+      {datos.map(({ e, r, real }) => (
+        <button key={e.id} onClick={() => onVer(e.id)} className="card"
+          style={{ width: "100%", textAlign: "left", padding: "13px 15px", marginTop: 8,
+                   borderStyle: "dashed", borderColor: "#E9C98A" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <Ficticio chico />
+            <span style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600 }}>Ver ›</span>
+          </div>
+          <div style={{ fontSize: 14.5, fontWeight: 620, marginTop: 6 }}>{e.nombre}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr", gap: 6, fontSize: 11, color: T.tenue, marginTop: 8 }}>
+            <span />
+            <span style={{ textAlign: "right" }}>Escenario</span>
+            <span style={{ textAlign: "right" }}>Real</span>
+          </div>
+          {r.filas.slice(0, 3).map((f, i) => (
+            <div key={f.mk} className="num" style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr", gap: 6, fontSize: 12.5, padding: "3px 0" }}>
+              <span style={{ color: T.suave }}>{etiqMes(f.mk)}</span>
+              <span style={{ textAlign: "right", color: f.queda < 0 ? T.rojo : T.tinta }}>{corta(f.queda)}</span>
+              <span style={{ textAlign: "right", color: real[i] && real[i].resultado < 0 ? T.rojo : T.suave }}>
+                {real[i] ? corta(real[i].resultado) : "—"}
+              </span>
+            </div>
+          ))}
+          {r.cancelado && (
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 6 }}>
+              Cancelás el préstamo en la cuota {r.cancelado.k} ({etiqMes(r.cancelado.mk)}).
+            </div>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ===================== SIMULADOR DE INVERSIONES: PANTALLA ===================== */
+const COLOR_INST = { pf: "#2a78d6", pfuva: "#eb6834", fci: "#1baf7a", mep: "#eda100" };
+const ORDEN_INST = ["pf", "pfuva", "fci", "mep"];
+
+// Líneas con crosshair: tocás o arrastrás y ves los valores de ese mes.
+function GraficoLineas({ meses, series, referencia }) {
+  const [i, setI] = useState(null);
+  const ref = useRef(null);
+  const W = 340, H = 190, pl = 6, pr = 62, pt = 10, pb = 22;
+  const todos = [...series.flatMap((s) => s.valores), ...(referencia ? referencia.valores : [])].filter(isFinite);
+  const hi = Math.max(1, ...todos), lo = Math.min(0, ...todos);
+  const n = meses.length;
+  const x = (k) => pl + (n <= 1 ? 0 : (k * (W - pl - pr)) / (n - 1));
+  const y = (v) => pt + ((hi - v) / (hi - lo || 1)) * (H - pt - pb);
+  const linea = (vals) => vals.map((v, k) => `${k ? "L" : "M"}${x(k).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+
+  // Etiquetas al final de cada línea, corridas para que no se pisen
+  const fin = series.map((s) => ({ s, yy: y(s.valores[n - 1]) })).sort((a, b) => a.yy - b.yy);
+  for (let k = 1; k < fin.length; k++) if (fin[k].yy - fin[k - 1].yy < 12) fin[k].yy = fin[k - 1].yy + 12;
+
+  const mover = (ev) => {
+    const r = ref.current && ref.current.getBoundingClientRect();
+    if (!r) return;
+    const t = ev.touches ? ev.touches[0] : ev;
+    const px = ((t.clientX - r.left) / r.width) * W;
+    const k = Math.round(((px - pl) / (W - pl - pr)) * (n - 1));
+    setI(Math.max(0, Math.min(n - 1, k)));
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, color: T.suave, marginBottom: 6 }}>
+        {series.map((s) => (
+          <span key={s.nombre} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 14, height: 2, background: s.color, borderRadius: 2 }} />{s.nombre}
+          </span>
+        ))}
+        {referencia && (
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 14, height: 0, borderTop: `2px dashed ${T.tenue}` }} />{referencia.nombre}
+          </span>
+        )}
+      </div>
+      <svg ref={ref} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", touchAction: "pan-y" }}
+        role="img" aria-label="Cuánto gana cada inversión, en pesos de hoy"
+        onMouseMove={mover} onTouchStart={mover} onTouchMove={mover} onMouseLeave={() => setI(null)}>
+        <line x1={pl} x2={W - pr} y1={y(0)} y2={y(0)} stroke={T.eje} strokeWidth="1" />
+        {referencia && <path d={linea(referencia.valores)} fill="none" stroke={T.tenue} strokeWidth="1.5" strokeDasharray="4 3" />}
+        {series.map((s) => (
+          <path key={s.nombre} d={linea(s.valores)} fill="none" stroke={s.color} strokeWidth="2"
+                strokeLinejoin="round" strokeLinecap="round" />
+        ))}
+        {fin.map(({ s, yy }) => (
+          <text key={s.nombre} x={W - pr + 5} y={yy + 3.5} fontSize="9.5" fill={T.suave}>{s.corto || s.nombre}</text>
+        ))}
+        <text x={pl} y={H - 6} fontSize="9.5" fill={T.tenue}>{etiqMes(meses[0])}</text>
+        <text x={W - pr} y={H - 6} fontSize="9.5" fill={T.tenue} textAnchor="end">{etiqMes(meses[n - 1])}</text>
+        {i != null && (
+          <>
+            <line x1={x(i)} x2={x(i)} y1={pt} y2={H - pb} stroke={T.tinta} strokeWidth="1" opacity="0.35" />
+            {series.map((s) => (
+              <circle key={s.nombre} cx={x(i)} cy={y(s.valores[i])} r="4" fill={s.color} stroke={T.card} strokeWidth="2" />
+            ))}
+          </>
+        )}
+      </svg>
+      <div style={{ minHeight: 44, marginTop: 6, fontSize: 12 }}>
+        {i != null ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", alignItems: "baseline" }}>
+            <span style={{ color: T.suave, fontWeight: 600 }}>{etiqMesLargo(meses[i])}</span>
+            {series.map((s) => (
+              <span key={s.nombre} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 10, height: 2, background: s.color }} />
+                <b className="num">{corta(s.valores[i])}</b>
+                <span style={{ color: T.tenue }}>{s.corto || s.nombre}</span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span style={{ color: T.tenue }}>Tocá el gráfico para ver cada mes.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function simVacia(escs, tc) {
+  return {
+    id: "sim" + Date.now(), nombre: "Nueva simulación",
+    inicial: 1000000, aporte: 200000, aporteSube: true, meses: 24,
+    desde: sumaMes(mesDeHoy(), 1), escenarioId: escs[0] ? escs[0].id : "",
+    tna: { pf: 0.28, pfuva: 0.01, fci: 0.25 }, dev: 0.015, tcMep: Math.round(tc || 1500),
+    elegido: "pfuva",
+  };
+}
+
+function Inversiones({ cfg, setCfg }) {
+  const sims = cfg.simulaciones || [];
+  const escs = cfg.escenarios || [];
+  const [sel, setSel] = useState(sims[0] ? sims[0].id : null);
+  const [estadoTasa, setEstadoTasa] = useState("");
+  const [enviado, setEnviado] = useState("");
+  const sim = sims.find((s) => s.id === sel) || sims[0];
+  const upd = (patch) => setCfg({ ...cfg, simulaciones: sims.map((x) => (x.id === sim.id ? { ...x, ...patch } : x)) });
+  const esc = sim ? escs.find((e) => e.id === sim.escenarioId) : null;
+
+  const [caso, setCaso] = useState("base");
+  // Corre la simulación con un caso (base, optimista o pesimista)
+  const correr = (k) => {
+    const cs = casosDe(esc);
+    const c = k === "base" ? null : cs[k];
+    const escBase = esc || { inflacion: INFL_BASE, uva: { mes: "2026-10", valor: 2150.5 } };
+    const e = c ? aplicarCaso(escBase, c) : escBase;
+    const macro = macroDeEscenario(e, mesDeHoy());
+    const porInst = {};
+    ORDEN_INST.forEach((t) => {
+      const inst0 = { tipo: t, tna: t === "mep" ? 0 : (sim.tna || {})[t], dev: sim.dev };
+      porInst[t] = simularInstrumento({ ...sim, tcMep: sim.tcMep }, c ? instrumentoEnCaso(inst0, c) : inst0, macro);
+    });
+    const cancel = esc && esc.prestamo ? simularCancelacion(sim, e, macro) : null;
+    return { porInst, cancel, macro };
+  };
+  const todos = useMemo(() => (sim
+    ? { base: correr("base"), optimista: correr("optimista"), pesimista: correr("pesimista") }
+    : null), [sim, esc]);
+  const calc = todos && todos[caso];
+
+  if (!sim) {
+    return (
+      <div style={{ padding: 16 }}>
+        <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.55 }}>
+          Probá qué pasa con tu plata en plazo fijo, PF UVA, un money market o dólar MEP, y compará
+          contra cancelar antes el préstamo de un escenario. Nada de esto toca tus datos reales.
+        </div>
+        <button className="btn" style={{ marginTop: 14 }} onClick={() => {
+          const s = simVacia(escs, cfg.tc); setCfg({ ...cfg, simulaciones: [...sims, s] }); setSel(s.id);
+        }}>Nueva simulación</button>
+      </div>
+    );
+  }
+
+  const meses = calc.porInst.pf.map((f) => f.mk);
+  const finales = ORDEN_INST.map((t) => ({ t, f: calc.porInst[t][calc.porInst[t].length - 1] }));
+  const mejor = finales.reduce((a, b) => (b.f.gananciaHoy > a.f.gananciaHoy ? b : a));
+  const filasEl = calc.porInst[sim.elegido] || calc.porInst.pfuva;
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 40 }}>
+      <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 3 }}>
+        {sims.map((s) => (
+          <button key={s.id} className={"chip sm" + (s.id === sim.id ? " on" : "")} onClick={() => setSel(s.id)}>{s.nombre}</button>
+        ))}
+        <button className="chip sm" onClick={() => {
+          const s = simVacia(escs, cfg.tc); setCfg({ ...cfg, simulaciones: [...sims, s] }); setSel(s.id);
+        }}>+ Nueva</button>
+      </div>
+
+      <div className="card" style={{ padding: "4px 15px 15px", marginTop: 10 }}>
+        <Campo label="Nombre"><input value={sim.nombre} onChange={(e) => upd({ nombre: e.target.value })} /></Campo>
+        <Dos>
+          <Campo label="Monto inicial"><NumIn value={sim.inicial} onChange={(v) => upd({ inicial: v })} /></Campo>
+          <Campo label="Aporte por mes"><NumIn value={sim.aporte} onChange={(v) => upd({ aporte: v })} /></Campo>
+        </Dos>
+        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          <button className={"chip sm" + (sim.aporteSube ? " on" : "")} onClick={() => upd({ aporteSube: true })}>Aporte sube con inflación</button>
+          <button className={"chip sm" + (!sim.aporteSube ? " on" : "")} onClick={() => upd({ aporteSube: false })}>Aporte fijo</button>
+        </div>
+        <Dos>
+          <Campo label="Plazo (meses)"><NumIn modo="int" value={sim.meses} onChange={(v) => upd({ meses: Math.max(1, Math.min(120, v)) })} /></Campo>
+          <Campo label="Arranca en"><MesIn value={sim.desde} onChange={(v) => v && upd({ desde: v })} /></Campo>
+        </Dos>
+        <Campo label="Inflación y préstamo de" nota="De ese escenario sale la inflación supuesta (para la UVA y los pesos de hoy) y el préstamo a cancelar.">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {escs.length === 0 && <span style={{ fontSize: 12.5, color: T.suave }}>No tenés escenarios: uso la inflación por defecto.</span>}
+            {escs.map((e) => (
+              <button key={e.id} className={"chip sm" + (sim.escenarioId === e.id ? " on" : "")}
+                onClick={() => upd({ escenarioId: e.id })}>{e.nombre}</button>
+            ))}
+          </div>
+        </Campo>
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 16 }}>Supuestos de cada instrumento</div>
+        <Dos>
+          <Campo label="Plazo fijo · TNA %"><NumIn modo="pct" value={(sim.tna || {}).pf} onChange={(v) => upd({ tna: { ...sim.tna, pf: v } })} /></Campo>
+          <Campo label="PF UVA · TNA % s/ UVA"><NumIn modo="pct" value={(sim.tna || {}).pfuva} onChange={(v) => upd({ tna: { ...sim.tna, pfuva: v } })} /></Campo>
+        </Dos>
+        <Dos>
+          <Campo label="Money market · TNA %"><NumIn modo="pct" value={(sim.tna || {}).fci} onChange={(v) => upd({ tna: { ...sim.tna, fci: v } })} /></Campo>
+          <Campo label="MEP · devaluación/mes %"><NumIn modo="pct" value={sim.dev} onChange={(v) => upd({ dev: v })} /></Campo>
+        </Dos>
+        <Campo label="Dólar MEP inicial"><NumIn value={sim.tcMep} onChange={(v) => upd({ tcMep: v })} /></Campo>
+        <button onClick={async () => {
+          setEstadoTasa("Buscando…");
+          try {
+            const t = await traerTasas();
+            if (t.length) { upd({ tna: { ...sim.tna, pf: t[0].tna / 100 } }); setEstadoTasa(`Puse ${t[0].tna.toLocaleString("es-AR", { maximumFractionDigits: 2 })}% (${t[0].entidad}).`); }
+            else setEstadoTasa("No pude traer las tasas.");
+          } catch (e) { setEstadoTasa("No pude traer las tasas."); }
+        }} style={{ marginTop: 10, fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+          Usar la mejor tasa de plazo fijo de hoy
+        </button>
+        {estadoTasa && <div style={{ fontSize: 12, color: T.suave, marginTop: 5 }}>{estadoTasa}</div>}
+        <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 10, lineHeight: 1.5 }}>
+          Son supuestos tuyos, no cotizaciones. No es asesoramiento financiero.
+        </div>
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 620, marginTop: 20 }}>Cómo te va en {sim.meses} meses</div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        {["optimista", "base", "pesimista"].map((k) => (
+          <button key={k} className={"chip sm" + (caso === k ? " on" : "")} onClick={() => setCaso(k)}>{NOMBRE_CASO[k]}</button>
+        ))}
+      </div>
+      {caso !== "base" && (
+        <div style={{ fontSize: 11.5, color: caso === "pesimista" ? T.rojo : T.verde, marginTop: 6, lineHeight: 1.5 }}>
+          {describirCaso(casosDe(esc)[caso])}, devaluación ×{String(casosDe(esc)[caso].devMult).replace(".", ",")},
+          tasas ×{String(casosDe(esc)[caso].tasaMult).replace(".", ",")}.
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6 }}>Valores en pesos de hoy. Tocá uno para ver el detalle.</div>
+      {finales.map(({ t, f }) => (
+        <button key={t} onClick={() => upd({ elegido: t })} className="card"
+          style={{ width: "100%", textAlign: "left", padding: "12px 14px", marginTop: 8,
+                   borderColor: sim.elegido === t ? T.tinta : T.linea }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 14, fontWeight: 600 }}>
+              <span style={{ width: 14, height: 3, borderRadius: 2, background: COLOR_INST[t] }} />
+              {NOMBRE_INST[t]}{mejor.t === t ? <span style={{ fontSize: 11, color: T.verde }}>· el mejor</span> : null}
+            </span>
+            <span className="num plata" style={{ fontSize: 15 }}>{plataR(f.valorHoy)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: T.suave, marginTop: 4 }}>
+            <span>{plataR(f.valor)} en pesos de {etiqMes(f.mk)}{t === "mep" && f.usd ? ` · USD ${Math.round(f.usd).toLocaleString("es-AR")}` : ""}</span>
+            <span className="num" style={{ color: f.gananciaHoy < 0 ? T.rojo : T.verde, fontWeight: 600 }}>
+              {f.gananciaHoy >= 0 ? "+" : ""}{corta(f.gananciaHoy)}
+            </span>
+          </div>
+        </button>
+      ))}
+      {calc.cancel && (
+        <div className="card" style={{ padding: "12px 14px", marginTop: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Cancelar antes el préstamo</div>
+          <div style={{ fontSize: 12.5, color: T.suave, marginTop: 4, lineHeight: 1.5 }}>
+            {calc.cancel.k
+              ? <>Juntando esta plata cancelás en la cuota <b>{calc.cancel.k}</b> ({etiqMes(calc.cancel.mk)}) y te ahorrás{" "}
+                  <b className="num" style={{ color: T.verde }}>{plataR(calc.cancel.ahorroHoy)}</b> de intereses + IVA, en pesos de hoy.</>
+              : <>Con esta plata no llegás a cancelar el préstamo de "{esc.nombre}" en {sim.meses} meses.</>}
+          </div>
+        </div>
+      )}
+
+      <div className="card" style={{ padding: "12px 13px", marginTop: 14 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620 }}>¿Y si sale mejor o peor?</div>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3, marginBottom: 8 }}>Ganancia al final, en pesos de hoy.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.3fr) repeat(3, minmax(0,1fr))", gap: "6px 6px",
+                      fontSize: 12, alignItems: "baseline" }}>
+          <span />
+          {["optimista", "base", "pesimista"].map((k) => (
+            <span key={k} style={{ textAlign: "right", fontSize: 11, color: caso === k ? T.tinta : T.suave, fontWeight: 600 }}>{NOMBRE_CASO[k]}</span>
+          ))}
+          {ORDEN_INST.map((t) => (
+            <React.Fragment key={t}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", whiteSpace: "nowrap" }}>
+                <span style={{ width: 10, height: 2, background: COLOR_INST[t], flexShrink: 0 }} />
+                {{ pf: "PF", pfuva: "PF UVA", fci: "FCI", mep: "MEP" }[t]}
+              </span>
+              {["optimista", "base", "pesimista"].map((k) => {
+                const fs = todos[k].porInst[t]; const g = fs[fs.length - 1].gananciaHoy;
+                return <span key={k} className="num" style={{ textAlign: "right", color: g < 0 ? T.rojo : T.tinta }}>{corta(g)}</span>;
+              })}
+            </React.Fragment>
+          ))}
+          {todos.base.cancel && (
+            <>
+              <span style={{ whiteSpace: "nowrap" }}>Cancelar antes</span>
+              {["optimista", "base", "pesimista"].map((k) => {
+                const c = todos[k].cancel;
+                return <span key={k} className="num" style={{ textAlign: "right", color: c && c.k ? T.verde : T.tenue }}>
+                  {c && c.k ? corta(c.ahorroHoy) : "no llega"}</span>;
+              })}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: "14px 13px 8px", marginTop: 10 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620 }}>Cuánto ganás, en pesos de hoy</div>
+        <div style={{ fontSize: 11.5, color: T.suave, margin: "3px 0 10px", lineHeight: 1.5 }}>
+          Lo que vale tu plata menos lo que pusiste, sacándole la inflación. Abajo de cero, perdés contra la inflación.
+        </div>
+        <GraficoLineas meses={meses}
+          series={ORDEN_INST.map((t) => ({ nombre: NOMBRE_INST[t], corto: { pf: "PF", pfuva: "PF UVA", fci: "FCI", mep: "MEP" }[t],
+                                           color: COLOR_INST[t], valores: calc.porInst[t].map((f) => f.gananciaHoy) }))} />
+      </div>
+
+      {sim.elegido && (
+        <>
+          <div style={{ fontSize: 15, fontWeight: 620, marginTop: 20 }}>{NOMBRE_INST[sim.elegido]} mes a mes</div>
+          <div className="card" style={{ marginTop: 8, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr 1fr", gap: 6, padding: "9px 12px",
+                          fontSize: 11, color: T.suave, fontWeight: 600, borderBottom: `1px solid ${T.linea}` }}>
+              <span>Mes</span><span style={{ textAlign: "right" }}>Valor</span>
+              <span style={{ textAlign: "right" }}>Pesos de hoy</span><span style={{ textAlign: "right" }}>Ganancia</span>
+            </div>
+            {filasEl.map((f, i) => (
+              <div key={f.mk} className="num" style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr 1fr", gap: 6,
+                    padding: "6px 12px", fontSize: 12, borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+                <span style={{ color: T.suave }}>{etiqMes(f.mk)}</span>
+                <span style={{ textAlign: "right" }}>{corta(f.valor)}</span>
+                <span style={{ textAlign: "right" }}>{corta(f.valorHoy)}</span>
+                <span style={{ textAlign: "right", color: f.gananciaHoy < 0 ? T.rojo : T.verde }}>{corta(f.gananciaHoy)}</span>
+              </div>
+            ))}
+          </div>
+
+          {escs.length > 0 && (
+            <>
+              <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 18 }}>
+                Usar {NOMBRE_INST[sim.elegido]} para el fondo de un escenario
+              </div>
+              <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3, lineHeight: 1.5 }}>
+                El fondo del escenario pasa a rendir con este instrumento y esta tasa, en lugar de lo que tenía.
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                {escs.map((e) => (
+                  <button key={e.id} className="chip sm" onClick={() => {
+                    const t = sim.elegido;
+                    const inst = t === "mep" ? { tipo: "mep", dev: sim.dev } : { tipo: t, tna: (sim.tna || {})[t] };
+                    setCfg({ ...cfg, escenarios: escs.map((x) => x.id === e.id
+                      ? { ...x, fondo: { ...(x.fondo || {}), instrumento: inst } } : x) });
+                    setEnviado(`Listo: el fondo de "${e.nombre}" ahora rinde con ${NOMBRE_INST[t]}.`);
+                  }}>{e.nombre}</button>
+                ))}
+              </div>
+              {enviado && <div style={{ fontSize: 12.5, color: T.verde, marginTop: 8 }}>{enviado}</div>}
+            </>
+          )}
+        </>
+      )}
+
+      <button onClick={() => {
+        if (!confirm(`¿Borrar "${sim.nombre}"?`)) return;
+        const resto = sims.filter((x) => x.id !== sim.id);
+        setCfg({ ...cfg, simulaciones: resto }); setSel(resto[0] ? resto[0].id : null);
+      }} style={{ marginTop: 22, fontSize: 13, color: T.rojo, fontWeight: 600 }}>Borrar esta simulación</button>
+    </div>
+  );
+}
+
+/* ---------- Simular con solapas ---------- */
+function SimularWrap({ cfg, setCfg, cfgVista, movs, medios, esDueno, vista, setVista, abrirEsc, onAbierto }) {
+  if (!esDueno) return <Simular cfg={cfgVista} movs={movs} medios={medios} />;
+  return (
+    <>
+      <div className="scroll" style={{ display: "flex", gap: 6, padding: "14px 16px 0", overflowX: "auto" }}>
+        {[["compra", "Compra"], ["esc", "Escenarios"], ["inv", "Inversiones"]].map(([v, n]) => (
+          <button key={v} className={"chip" + (vista === v ? " on" : "")} onClick={() => setVista(v)}>{n}</button>
+        ))}
+      </div>
+      {vista === "compra" && <Simular cfg={cfgVista} movs={movs} medios={medios} />}
+      {vista === "esc" && <Escenarios cfg={cfg} setCfg={setCfg} movs={movs} medios={medios} abrirId={abrirEsc} onAbierto={onAbierto} />}
+      {vista === "inv" && <Inversiones cfg={cfg} setCfg={setCfg} />}
+    </>
+  );
+}
+
 /* ===================== SHELL ===================== */
 // Icono + etiqueta chica: con 5 pestañas el texto solo ya no entra en un teléfono
 const ICONOS = {
@@ -4785,7 +6751,7 @@ const ICONOS = {
 const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {} };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [] };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -4807,6 +6773,9 @@ export default function App() {
   const [verFinanciar, setVerFinanciar] = useState(false);
   const [verReporte, setVerReporte] = useState(false);
   const [verCompartir, setVerCompartir] = useState(false);
+  const [undo, setUndo] = useState(null);
+  const [simVista, setSimVista] = useState("compra");
+  const [abrirEsc, setAbrirEsc] = useState(null);
   const [deudas, setDeudas] = useState([]);
   const [perfiles, setPerfiles] = useState({});
   const [cargandoDeudas, setCargandoDeudas] = useState(false);
@@ -4837,6 +6806,8 @@ export default function App() {
   }, [refrescarDeudas]);
 
   const pendientes = sesion && sesion.user ? requierenAccion(deudas, sesion.user.id).length : 0;
+  // Escenarios e Inversiones son, por ahora, solo para el dueño de la app
+  const esDueno = !!(perfil && perfil.usuario === DUENO);
   // Si la cuenta nunca definió medios, dependemos de si trae la semilla o arrancó vacía
   const medios = (cfg.medios && cfg.medios.length) ? cfg.medios
                : (movs.length ? MEDIOS_INI : MEDIOS_NUEVO);
@@ -4991,12 +6962,25 @@ export default function App() {
   };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
 
+  // Foto del estado anterior. Una sola: alcanza para arrepentirse del último toque.
+  const marcarUndo = (que) => setUndo({ cfg, movs, que });
+  const deshacer = () => {
+    if (!undo) return;
+    if (!undo.movs.length) vaciadoPedido.current = true;
+    setCfgRaw(undo.cfg); setMovs(undo.movs); persistir(undo.cfg, undo.movs);
+    setUndo(null); setEditando(null);
+  };
+
   const guardarMov = (mv) => {
     const existe = movs.some((x) => x.id === mv.id);
+    marcarUndo((existe ? "la edición de " : "la carga de ") + (mv.detalle || "un movimiento"));
     setM(existe ? movs.map((x) => (x.id === mv.id ? mv : x)) : [mv, ...movs]);
     setEditando(null);
   };
   const borrarVarios = (idsBase) => {
+    marcarUndo(idsBase.length === 1
+      ? "el borrado de " + ((movs.find((x) => x.id === idsBase[0]) || {}).detalle || "un movimiento")
+      : `el borrado de ${idsBase.length} movimientos`);
     // Al borrar un gasto se va también la marca de su reintegro
     const ids = [...idsBase, ...idsBase.map((x) => "dev|" + x)];
     // Al borrar hay que revertir lo que ese movimiento ya habia movido y limpiar sus ajustes,
@@ -5062,6 +7046,9 @@ export default function App() {
     return c;
   };
   const ajustar = (mk, id, monto, mover) => {
+    const base = String(id).replace(/^dev\|/, "");
+    const nom = (movs.find((x) => x.id === base) || {}).detalle || "un movimiento";
+    marcarUndo("el cambio en " + nom);
     const a = { ...(cfg.ajustes || {}) };
     const delMes = { ...(a[mk] || {}) };
     if (monto === null) delete delMes[id];
@@ -5188,7 +7175,15 @@ export default function App() {
           onFinanciar={() => setVerFinanciar(true)}
           pendientesDeuda={pendientes}
           onVerPersonas={() => setTab("rep")}
+          undo={undo} onDeshacer={deshacer}
+          escenariosCard={esDueno && (cfg.escenarios || []).some((e) => e.activo !== false) ? (
+            <TarjetaEscenarios cfg={cfgTC} movs={movs} medios={medios}
+              onVer={(id) => { setSimVista("esc"); setAbrirEsc(id); setTab("sim"); }} />
+          ) : null}
           onConfirmarAuto={(mk, ids) => {
+            marcarUndo(ids.length === 1
+              ? "la confirmación de " + ((movs.find((x) => x.id === ids[0]) || {}).detalle || "un gasto")
+              : `la confirmación de ${ids.length} gastos`);
             const c = { ...(cfg.confirmados || {}) };
             c[mk] = { ...(c[mk] || {}) };
             ids.forEach((id) => { c[mk][id] = true; });
@@ -5200,7 +7195,12 @@ export default function App() {
         />
       )}
       {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
-      {tab === "sim" && <Simular cfg={{ ...cfgTC, desdeMes: desde }} movs={movs} medios={medios} />}
+      {tab === "sim" && (
+        <SimularWrap cfg={cfgTC} setCfg={setCfg} cfgVista={{ ...cfgTC, desdeMes: desde }}
+          movs={movs} medios={medios} esDueno={esDueno}
+          vista={simVista} setVista={setSimVista}
+          abrirEsc={abrirEsc} onAbierto={() => setAbrirEsc(null)} />
+      )}
       {tab === "inv" && <Invertido cfg={cfg} setCfg={setCfg} tc={cfgTC.tc} />}
       {tab === "rep" && (
         <PersonasNube sesion={sesion} deudas={deudas} perfiles={perfiles}
@@ -5312,7 +7312,7 @@ export default function App() {
       )}
       {verRapido && (
         <Rapido medios={medios} movs={movs} cfg={cfgTC}
-          onGuardar={(m) => setM([...movs, m])}
+          onGuardar={(m) => { marcarUndo("la carga de " + (m.detalle || "un gasto")); setM([...movs, m]); }}
           onDetallado={() => { setVerRapido(false); setEditando({}); }}
           onImportar={() => { setVerRapido(false); setVerImportar(true); }}
           onCerrar={() => setVerRapido(false)} />
