@@ -1618,6 +1618,227 @@ function simularCancelacion(sim, esc, macro) {
   return { k: null, falta: true };
 }
 
+/* ===================== PLAN DE AHORRO CON LICITACIÓN (capa ficticia) ===================== */
+// Un plan de ahorro (tipo Plan Óvalo) simulado encima de tu flujo. Igual que los escenarios,
+// NUNCA toca tus movimientos: vive en cfg.planes. t = número de cuota; t = 1 es el mes "inicio".
+const MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                      "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+function planVacio() {
+  return {
+    id: "plan" + Date.now(), nombre: "Plan Ford → Territory", activo: true,
+    inicio: "2026-10",
+    vm: 64137920, pctFin: 0.8, cuotasPlan: 120, admin: 0.121,
+    vida: 58860, vidaModo: "saldo",
+    admision: 38803, admisionCuotas: 99,
+    cuotaFija: 448711, fijaHasta: 13,
+    integracion: 12827584, cuotasPagas: 98,
+    ipc: 0.02, autoSuba: 0.02, inflModo: "fija",
+    mAdj: 1, oferta: 16250000, sobrante: "baja",
+    cronosVenta: 19000000, cronosPatente: 2500000, cronosEntrega: "acto", cronosSuba: 0,
+    mesesRetiro: 2, gastosRetiro: 3000000,
+    seguroNuevo: 150000, seguroViejo: 136918, naftaExtra: 20000, patenteNueva: 0,
+    tope: 700000,
+    rinde: "inflacion", inicialModo: "auto", inicial: 0,
+    escenarioId: "",
+  };
+}
+
+// Los tres casos de licitación que querés tener a mano
+const PRESETS_PLAN = [
+  { id: "A", mAdj: 1, oferta: 16250000 },
+  { id: "B", mAdj: 4, oferta: 18000000 },
+  { id: "C", mAdj: 10, oferta: 19000000 },
+];
+const nombrePreset = (p, pr) => "Gano en " + MESES_LARGOS[+sumaMes(p.inicio, pr.mAdj - 1).slice(5, 7) - 1];
+
+// El escenario del que sale tu flujo sin el plan: el que elegiste, o el primero, o los
+// supuestos por defecto. Sin su préstamo, y con la inflación del plan (así todo está en la misma moneda).
+function escenarioBasePlan(p, cfg, movs) {
+  const lista = cfg.escenarios || [];
+  const e0 = lista.find((x) => x.id === p.escenarioId) || lista[0] || escenarioTerritory(movs);
+  const e = { ...e0, prestamo: null, ajusteMacro: null };
+  if (p.inflModo !== "escenario") {
+    e.inflacion = [{ desde: "2000-01", tasa: +p.ipc || 0 }];
+    // Lo ya publicado sigue valiendo para el pasado; del plan en adelante manda tu supuesto
+    const real = {};
+    Object.entries(e0.inflacionReal || {}).forEach(([mk, v]) => { if (mk < p.inicio) real[mk] = v; });
+    e.inflacionReal = real;
+  }
+  return e;
+}
+
+// Índices del plan con t = 1 → 1. ipc: precios en general. auto: valor móvil del auto.
+function indicesPlan(p, macro) {
+  if (p.inflModo === "escenario" && macro) {
+    const m0 = macro.idx(p.inicio);
+    const f = (t) => macro.idx(sumaMes(p.inicio, t - 1)) / m0;
+    return { ipc: f, auto: f };
+  }
+  const i = +p.ipc || 0, a = +p.autoSuba || 0;
+  return { ipc: (t) => Math.pow(1 + i, t - 1), auto: (t) => Math.pow(1 + a, t - 1) };
+}
+
+// Las cuotas del plan y todo lo que mueve el escenario mes a mes (sin tu flujo).
+function calcularPlan(p, ix) {
+  const N = Math.max(1, Math.round(+p.cuotasPagas || 1));
+  const C = Math.max(1, Math.round(+p.cuotasPlan || 120));
+  const pura = ((+p.vm || 0) * (+p.pctFin || 0)) / C;
+  const admin = pura * (+p.admin || 0);
+  const fijaHasta = Math.max(1, Math.round(+p.fijaHasta || 13));
+  const mAdj = Math.max(1, Math.min(N, Math.round(+p.mAdj || 1)));
+  // Las cuotas que adelantás se reparten entre las que quedan después de la fija (o del acto)
+  const libres = Math.max(0, N - Math.max(mAdj, fijaHasta));
+  let E = pura > 0 ? Math.floor(((+p.oferta || 0) - (+p.integracion || 0)) / pura + 1e-9) : 0;
+  E = Math.max(0, Math.min(E, libres));
+  const acorta = p.sobrante === "acorta";
+  const factor = !acorta && libres > 0 ? 1 - E / libres : 1;
+  const ultima = acorta ? N - E : N;
+  const tRet = mAdj + Math.max(0, Math.round(+p.mesesRetiro || 0));
+  const tCron = p.cronosEntrega === "retiro" ? tRet : mAdj;
+  const H = Math.max(ultima, tRet, tCron);
+  const ofertaNom = ((+p.integracion || 0) + E * pura) * ix.auto(mAdj);
+  const cronosVenta = (+p.cronosVenta || 0) * Math.pow(1 + (+p.cronosSuba || 0), tCron - 1);
+  const cronosNeto = cronosVenta - (+p.cronosPatente || 0);
+  const vida0 = +p.vida || 0, adm0 = +p.admision || 0, admN = +p.admisionCuotas || 0;
+
+  const filas = [];
+  for (let t = 1; t <= H; t++) {
+    const ia = ix.auto(t), ii = ix.ipc(t);
+    let cuota = 0, det = null;
+    if (t <= ultima && t > 1) {
+      if (t <= fijaHasta) cuota = +p.cuotaFija || 0;
+      else {
+        const fx = t > mAdj ? factor : 1;
+        const pu = pura * ia * fx;
+        const ad = admin * ia;
+        let vi;
+        if (p.vidaModo === "constante") vi = vida0 * ia;
+        else {
+          // El seguro de vida se calcula sobre lo que te falta pagar
+          const rem = t < mAdj ? C - t + 1 : (ultima - t + 1) * fx;
+          vi = (vida0 * ia * rem) / C;
+        }
+        const am = t <= 1 + admN ? adm0 * ia : 0;
+        cuota = pu + ad + vi + am;
+        det = { pura: pu, admin: ad, vida: vi, admision: am };
+      }
+    }
+    const oferta = t === mAdj ? ofertaNom : 0;
+    const cronos = t === tCron ? cronosNeto : 0;
+    const retiro = t === tRet ? (+p.gastosRetiro || 0) * ii : 0;
+    const seguroNuevo = t >= tRet ? (+p.seguroNuevo || 0) * ii : 0;
+    const seguroViejo = t >= tCron ? (+p.seguroViejo || 0) * ii : 0;
+    const nafta = t >= tRet ? (+p.naftaExtra || 0) * ii : 0;
+    const patente = t >= tRet ? (+p.patenteNueva || 0) * ii : 0;
+    const neto = -cuota - oferta + cronos - retiro - seguroNuevo + seguroViejo - nafta - patente;
+    const cuotaSegHoy = (cuota + seguroNuevo) / ii;
+    filas.push({
+      t, mk: sumaMes(p.inicio, t - 1), ia, ii, cuota, det, oferta, cronos, retiro,
+      seguroNuevo, seguroViejo, nafta, patente, neto, cuotaSegHoy,
+      pasaTope: +p.tope > 0 && cuotaSegHoy > +p.tope + 0.5,
+      nro: t <= ultima ? t : null, esActo: t === mAdj, esRetiro: t === tRet,
+    });
+  }
+  return { filas, pura, admin, E, factor, ultima, mAdj, tRet, tCron, H, N,
+           ofertaNom, cronosVenta, cronosNeto, fijaHasta };
+}
+
+// Tu flujo SIN el plan, mes a mes, desde el mes de la cuota 1.
+// Mientras dure el horizonte de Hoy, sale de Hoy (lo que tenés cargado, tal cual lo ves ahí).
+// Después, del motor de escenarios (sueldo con aumentos, aguinaldo, fijos y bolsas que
+// ajustan), sin su préstamo. Devuelve también el saldo con el que arrancás.
+function flujoBasePlan(p, cfg, movs, medios, esc, meses) {
+  const hoy = cfg.desdeMes || mesDeHoy();
+  const ini = p.inicio;
+  const fin = sumaMes(ini, meses - 1);
+  const desdeEsc = esc.desde || sumaMes(hoy, 1);
+  const trasHoy = sumaMes(hoy, Math.max(1, +cfg.horizonte || 6));      // primer mes que Hoy no muestra
+  const corte = desdeEsc > trasHoy ? desdeEsc : trasHoy;                 // primer mes del escenario
+  const out = {};
+
+  // 1) Lo de Hoy, y hasta el mes previo al plan para saber con cuánto arrancás
+  const realDesde = ini < hoy ? ini : hoy;
+  const topeReal = corte <= fin ? sumaMes(corte, -1) : fin;
+  const realHasta = topeReal > sumaMes(ini, -1) ? topeReal : sumaMes(ini, -1);
+  let saldoAuto = +cfg.saldoHoy || 0;
+  if (realHasta >= realDesde) {
+    const n = distMes(realDesde, realHasta) + 1;
+    const r = proyectar({ ...cfg, desdeMes: realDesde }, movs, medios, n, null);
+    r.forEach((f) => {
+      if (f.mk >= ini && f.mk < corte) out[f.mk] = { v: f.resultado, de: "hoy" };
+      if (ini > hoy && f.mk === sumaMes(ini, -1)) saldoAuto = f.saldo;
+    });
+  }
+
+  // 2) El escenario base
+  if (corte <= fin) {
+    const n = Math.min(120, distMes(desdeEsc, fin) + 1);
+    const res = proyectarEscenario({ ...esc, meses: n }, cfg, movs, medios);
+    let ult = null;
+    res.filas.forEach((f) => { if (f.mk >= ini && f.mk >= corte) { out[f.mk] = { v: f.queda, de: "esc" }; ult = f; } });
+    // Si el plan pasa los 120 meses del motor, estiramos el último mes con la inflación
+    if (ult) for (let mk = sumaMes(ult.mk, 1); mk <= fin; mk = sumaMes(mk, 1))
+      out[mk] = { v: ult.queda * (res.macro.idx(mk) / ult.ix), de: "esc" };
+  }
+  return { porMes: out, saldoAuto, corte };
+}
+
+// Lo pesado (tu flujo sin el plan) aparte, para no recalcularlo cada vez que tocás un número del plan.
+function basePlan(p, cfg, movs, medios, meses) {
+  const esc = escenarioBasePlan(p, cfg, movs);
+  const n = meses || Math.min(120, Math.max(1, Math.round(+p.cuotasPagas || 1)) +
+                                   Math.max(0, Math.round(+p.mesesRetiro || 0)));
+  return { esc, macro: macroDeEscenario(esc), meses: n, ...flujoBasePlan(p, cfg, movs, medios, esc, n) };
+}
+
+// Todo junto: el plan, tu flujo y los dos saldos (con y sin el plan).
+function simularPlan(p, base) {
+  const ix = indicesPlan(p, base.macro);
+  const plan = calcularPlan(p, ix);
+  const saldoIni = p.inicialModo === "manual" ? +p.inicial || 0 : base.saldoAuto;
+  let sin = saldoIni, con = saldoIni;
+  plan.filas.forEach((f) => {
+    // Tu ahorro rinde lo mismo que la inflación (PF UVA) o se queda quieto
+    const r = p.rinde === "nada" ? 1 : ix.ipc(f.t) / ix.ipc(f.t - 1);
+    const b = (base.porMes[f.mk] || {}).v || 0;
+    sin = sin * r + b;
+    con = con * r + b + f.neto;
+    f.base = b; f.deBase = (base.porMes[f.mk] || {}).de || "";
+    f.saldoSin = sin; f.saldoCon = con;
+  });
+
+  // Resumen
+  const F = plan.filas;
+  const acto = F[plan.mAdj - 1], ret = F[plan.tRet - 1], ult = F[plan.ultima - 1];
+  const mismoMes = plan.tCron === plan.mAdj;
+  const saleAhorro = mismoMes ? Math.max(0, plan.ofertaNom - plan.cronosNeto) : plan.ofertaNom;
+  const sobra = mismoMes ? Math.max(0, plan.cronosNeto - plan.ofertaNom) : 0;
+  const hasta = F.slice(0, Math.max(plan.tRet, plan.tCron));
+  const faltaEn = hasta.find((f) => f.saldoCon < 0) || null;
+  const faltaActo = acto.saldoCon < 0 ? acto : null;
+  // Si quedás en rojo, ¿cuándo volvés a positivo?
+  const recupera = faltaEn ? F.slice(faltaEn.t).find((f) => f.saldoCon >= 0) || null : null;
+  const despues = F.slice(plan.tRet - 1);
+  const minCon = despues.reduce((a, f) => (f.saldoCon / f.ii < a.saldoCon / a.ii ? f : a), despues[0]);
+  const maxCS = F.reduce((a, f) => (f.cuotaSegHoy > a.cuotaSegHoy ? f : a), F[0]);
+  const totalCuotasHoy = F.reduce((a, f) => a + f.cuota / f.ii, 0);
+  const ofertaHoy = plan.ofertaNom / acto.ii;
+  const fin = F[F.length - 1];
+  return {
+    ...plan, esc: base.esc, ix, saldoIni,
+    resumen: {
+      acto, ret, ult, saleAhorro, sobra, mismoMes, faltaEn, faltaActo, recupera,
+      colchon: ret.saldoCon, colchonHoy: ret.saldoCon / ret.ii,
+      minCon, minConHoy: minCon.saldoCon / minCon.ii,
+      maxCS, sobreTope: F.filter((f) => f.pasaTope),
+      totalCuotasHoy, ofertaHoy, retiroHoy: +p.gastosRetiro || 0,
+      totalHoy: totalCuotasHoy + ofertaHoy,
+      fin, finSinHoy: fin.saldoSin / fin.ii, finConHoy: fin.saldoCon / fin.ii,
+    },
+  };
+}
+
 /* ===================== SUPABASE ===================== */
 const SUPABASE_URL = "https://xlgiwplfirizzmjgayzh.supabase.co";
 const SUPABASE_KEY = "sb_publishable_0EJv3nmLutzCuosws_husg_lVLyBnVX";
@@ -6379,7 +6600,7 @@ const COLOR_INST = { pf: "#2a78d6", pfuva: "#eb6834", fci: "#1baf7a", mep: "#eda
 const ORDEN_INST = ["pf", "pfuva", "fci", "mep"];
 
 // Líneas con crosshair: tocás o arrastrás y ves los valores de ese mes.
-function GraficoLineas({ meses, series, referencia }) {
+function GraficoLineas({ meses, series, referencia, aria }) {
   const [i, setI] = useState(null);
   const ref = useRef(null);
   const W = 340, H = 190, pl = 6, pr = 62, pt = 10, pb = 22;
@@ -6418,7 +6639,7 @@ function GraficoLineas({ meses, series, referencia }) {
         )}
       </div>
       <svg ref={ref} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", touchAction: "pan-y" }}
-        role="img" aria-label="Cuánto gana cada inversión, en pesos de hoy"
+        role="img" aria-label={aria || "Cuánto gana cada inversión, en pesos de hoy"}
         onMouseMove={mover} onTouchStart={mover} onTouchMove={mover} onMouseLeave={() => setI(null)}>
         <line x1={pl} x2={W - pr} y1={y(0)} y2={y(0)} stroke={T.eje} strokeWidth="1" />
         {referencia && <path d={linea(referencia.valores)} fill="none" stroke={T.tenue} strokeWidth="1.5" strokeDasharray="4 3" />}
@@ -6722,18 +6943,522 @@ function Inversiones({ cfg, setCfg }) {
   );
 }
 
+/* ===================== PLAN DE AHORRO: PANTALLA ===================== */
+const COLOR_SIN = "#2a78d6", COLOR_CON = "#eb6834";
+// $16,25M: para montos grandes donde el redondeo de "corta" confunde
+const millones = (n) => (n < 0 ? "-$" : "$") + (Math.abs(n) / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 2 }) + "M";
+
+// Si solo cambió cfg.planes, devuelve el cfg anterior: así tu flujo no se recalcula
+// cada vez que tocás un número del plan.
+function useCfgSinPlanes(cfg) {
+  const ref = useRef(null);
+  const prev = ref.current;
+  const igual = prev && Object.keys({ ...prev, ...cfg }).every((k) => k === "planes" || prev[k] === cfg[k]);
+  if (!igual) ref.current = cfg;
+  return ref.current;
+}
+
+function Tile({ titulo, valor, sub, color, ancho, children }) {
+  return (
+    <div className="card" style={{ padding: "12px 13px", gridColumn: ancho ? "1 / -1" : undefined, minWidth: 0 }}>
+      <div style={{ fontSize: 11.5, color: T.suave, lineHeight: 1.35 }}>{titulo}</div>
+      <div className="num plata" style={{ fontSize: 18, marginTop: 5, color: color || T.tinta }}>{valor}</div>
+      {sub && <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 4, lineHeight: 1.45 }}>{sub}</div>}
+      {children}
+    </div>
+  );
+}
+
+function Opciones({ valor, opciones, onCambiar }) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {opciones.map(([v, n]) => (
+        <button key={String(v)} className={"chip sm" + (valor === v ? " on" : "")} onClick={() => onCambiar(v)}>{n}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Tabla mes a mes del plan ---------- */
+function TablaPlan({ s, enHoy }) {
+  const v = (x, f) => (enHoy ? x / f.ii : x);
+  const cols = [
+    ["Cuota del plan", (f) => f.cuota, "gasto"],
+    ["Oferta / integración", (f) => f.oferta, "gasto"],
+    ["Cronos (venta − patente)", (f) => f.cronos, "entra"],
+    ["Gastos de retiro", (f) => f.retiro, "gasto"],
+    ["Seguro Territory", (f) => f.seguroNuevo, "gasto"],
+    ["Seguro Cronos que dejás de pagar", (f) => f.seguroViejo, "entra"],
+    ["Nafta extra + patente", (f) => f.nafta + f.patente, "gasto"],
+    ["Neto del plan", (f) => f.neto, "neto"],
+    ["Cuota + seguro (pesos de hoy)", (f) => f.cuotaSegHoy, "tope"],
+    ["Tu flujo del mes (sin plan)", (f) => f.base, "neto"],
+    ["Saldo sin el plan", (f) => f.saldoSin, "saldo"],
+    ["Saldo con el plan", (f) => f.saldoCon, "fuerte"],
+  ];
+  const th = { padding: "9px 10px", fontSize: 11, fontWeight: 600, color: T.suave, textAlign: "right",
+               borderBottom: `1px solid ${T.linea}`, background: T.card, verticalAlign: "bottom",
+               lineHeight: 1.3, minWidth: 98 };
+  const pega = { position: "sticky", left: 0, zIndex: 1, textAlign: "left", minWidth: 74,
+                 borderRight: `1px solid ${T.linea}` };
+  const etiqueta = (txt, c, bg) => (
+    <span style={{ display: "inline-block", fontSize: 9.5, fontWeight: 700, letterSpacing: ".04em", color: c,
+                   background: bg, borderRadius: 5, padding: "1px 5px", marginTop: 3, marginRight: 3 }}>{txt}</span>
+  );
+  return (
+    <div className="card" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", marginTop: 10 }}>
+      <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, ...pega }}>Mes</th>
+            {cols.map(([n, , k]) => (
+              <th key={n} style={{ ...th, color: k === "fuerte" ? T.tinta : T.suave }}>{n}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {s.filas.map((f) => {
+            const bg = f.pasaTope ? "#FDF3F1" : f.esActo ? T.ambarBg : f.esRetiro ? T.verdeBg : T.card;
+            return (
+              <tr key={f.mk}>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${T.linea}`, background: bg, ...pega }}>
+                  <div style={{ fontWeight: 600 }}>{etiqMes(f.mk)}</div>
+                  <div style={{ fontSize: 10.5, color: T.tenue }}>{f.nro ? `cuota ${f.nro}` : "sin cuota"}</div>
+                  {f.esActo && etiqueta("ACTO", "#7A4E06", "#F3DDAE")}
+                  {f.esRetiro && etiqueta("RETIRO", T.verde, "#CFE6DA")}
+                  {f.deBase === "hoy" && etiqueta("HOY", T.suave, T.papel)}
+                </td>
+                {cols.map(([n, get, k]) => {
+                  const x = k === "tope" ? get(f) : v(get(f), f);
+                  const cero = Math.round(x) === 0;
+                  let color = T.tinta, peso = 400, txt = cero ? "—" : plataR(x);
+                  if (k === "entra" && !cero) { color = T.verde; txt = "+" + plataR(x); }
+                  if ((k === "neto" || k === "saldo" || k === "fuerte") && x < 0) color = T.rojo;
+                  if (k === "neto" && x > 0 && !cero) txt = "+" + plataR(x);
+                  if (k === "fuerte") peso = 650;
+                  if (k === "tope" && f.pasaTope) { color = T.rojo; peso = 700; }
+                  if (n === "Cuota del plan" && f.pasaTope) { color = T.rojo; peso = 650; }
+                  return (
+                    <td key={n} className="num"
+                      style={{ padding: "8px 10px", textAlign: "right", whiteSpace: "nowrap",
+                               borderBottom: `1px solid ${T.linea}`, background: bg, fontWeight: peso, color }}>
+                      {txt}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ---------- Editor de parámetros ---------- */
+function EditorPlan({ plan, upd, s, escs, saldoAuto }) {
+  const mesCuota = (t) => etiqMes(sumaMes(plan.inicio, t - 1));
+  return (
+    <>
+      <Seccion titulo="El plan" sub={`Valor móvil ${millones(plan.vm)} · ${plan.cuotasPagas} cuotas · última ${mesCuota(s.ultima)}`}>
+        <Campo label="Nombre"><input value={plan.nombre} onChange={(e) => upd({ nombre: e.target.value })} /></Campo>
+        <Dos>
+          <Campo label="Mes de la cuota 1"><MesIn value={plan.inicio} onChange={(v) => v && upd({ inicio: v })} /></Campo>
+          <Campo label="Cuotas que pagás"><NumIn modo="int" value={plan.cuotasPagas} onChange={(v) => upd({ cuotasPagas: Math.max(1, Math.min(119, v)) })} /></Campo>
+        </Dos>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+          La cuota 1 está bonificada: $0. La última cae en {etiqMesLargo(sumaMes(plan.inicio, s.ultima - 1))}.
+        </div>
+        <Dos>
+          <Campo label="Valor móvil hoy"><NumIn value={plan.vm} onChange={(v) => upd({ vm: v })} /></Campo>
+          <Campo label="% financiado"><NumIn modo="pct" value={plan.pctFin} onChange={(v) => upd({ pctFin: v })} /></Campo>
+        </Dos>
+        <Dos>
+          <Campo label="Cuotas del plan"><NumIn modo="int" value={plan.cuotasPlan} onChange={(v) => upd({ cuotasPlan: Math.max(1, v) })} /></Campo>
+          <Campo label="Administrativos %"><NumIn modo="pct" value={plan.admin} onChange={(v) => upd({ admin: v })} /></Campo>
+        </Dos>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 5 }}>
+          Administrativos sobre la cuota pura. Pura hoy {plataR(s.pura)} · administrativos {plataR(s.admin)}
+        </div>
+        <Dos>
+          <Campo label="Cuota fija"><NumIn value={plan.cuotaFija} onChange={(v) => upd({ cuotaFija: v })} /></Campo>
+          <Campo label="Fija de la 2 hasta la"><NumIn modo="int" value={plan.fijaHasta} onChange={(v) => upd({ fijaHasta: Math.max(1, v) })} /></Campo>
+        </Dos>
+        <Campo label="Integración (20%) hoy"><NumIn value={plan.integracion} onChange={(v) => upd({ integracion: v })} /></Campo>
+        <Campo label="Seguro de vida (por cuota, hoy)"><NumIn value={plan.vida} onChange={(v) => upd({ vida: v })} /></Campo>
+        <div style={{ marginTop: 8 }}>
+          <Opciones valor={plan.vidaModo} onCambiar={(v) => upd({ vidaModo: v })}
+            opciones={[["saldo", "Baja con el saldo"], ["constante", "Constante"]]} />
+        </div>
+        <Campo label="Derecho de admisión (por cuota, hoy)"><NumIn value={plan.admision} onChange={(v) => upd({ admision: v })} /></Campo>
+        <div style={{ marginTop: 8 }}>
+          <Opciones valor={+plan.admisionCuotas} onCambiar={(v) => upd({ admisionCuotas: v })}
+            opciones={[[99, "En 99 cuotas"], [12, "En 12 cuotas"]]} />
+        </div>
+      </Seccion>
+
+      <Seccion titulo="Licitación" sub={`Acto en ${mesCuota(s.mAdj)} · oferta ${millones(plan.oferta)} de hoy`}>
+        <Dos>
+          <Campo label="Acto en la cuota n°"><NumIn modo="int" value={plan.mAdj} onChange={(v) => upd({ mAdj: Math.max(1, v) })} /></Campo>
+          <Campo label="Oferta en $ de hoy"><NumIn value={plan.oferta} onChange={(v) => upd({ oferta: v })} /></Campo>
+        </Dos>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+          1 = {etiqMes(plan.inicio)}. El acto cae en {etiqMesLargo(sumaMes(plan.inicio, s.mAdj - 1))}. La oferta incluye la integración.
+        </div>
+        <Campo label="Lo que ofertás de más">
+          <Opciones valor={plan.sobrante} onCambiar={(v) => upd({ sobrante: v })}
+            opciones={[["baja", "Baja la cuota"], ["acorta", "Acorta el plan"]]} />
+        </Campo>
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+          Adelantás <b style={{ color: T.tinta }}>{s.E} cuotas</b>
+          {s.E > 0 ? (plan.sobrante === "acorta"
+            ? <>: terminás en la cuota {s.ultima}.</>
+            : <>: la cuota pura baja {pctTxt(1 - s.factor, 1)} (factor {s.factor.toLocaleString("es-AR", { maximumFractionDigits: 5 })}).</>) : "."}
+        </div>
+      </Seccion>
+
+      <Seccion titulo="Cronos y retiro" sub={`Cronos neto ${millones(s.cronosNeto)} · retiro ${plan.mesesRetiro} meses después del acto`}>
+        <Dos>
+          <Campo label="Venta del Cronos"><NumIn value={plan.cronosVenta} onChange={(v) => upd({ cronosVenta: v })} /></Campo>
+          <Campo label="Patente adeudada"><NumIn value={plan.cronosPatente} onChange={(v) => upd({ cronosPatente: v })} /></Campo>
+        </Dos>
+        <Dos>
+          <Campo label="Suba Cronos % / mes"><NumIn modo="pct" value={plan.cronosSuba} onChange={(v) => upd({ cronosSuba: v })} /></Campo>
+          <Campo label="Meses del acto al retiro"><NumIn modo="int" value={plan.mesesRetiro} onChange={(v) => upd({ mesesRetiro: Math.max(0, Math.min(12, v)) })} /></Campo>
+        </Dos>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 5 }}>Suba 0 = lo vendés al precio de hoy aunque sea más adelante.</div>
+        <Campo label="El Cronos se entrega en">
+          <Opciones valor={plan.cronosEntrega} onCambiar={(v) => upd({ cronosEntrega: v })}
+            opciones={[["acto", "El mes del acto"], ["retiro", "El mes del retiro"]]} />
+        </Campo>
+        <Campo label="Gastos de retiro en $ de hoy" nota="Se pagan el mes del retiro, ajustados por inflación.">
+          <NumIn value={plan.gastosRetiro} onChange={(v) => upd({ gastosRetiro: v })} />
+        </Campo>
+      </Seccion>
+
+      <Seccion titulo="Costos del auto nuevo" sub={`Seguro ${corta(plan.seguroNuevo)} · tope ${corta(plan.tope)} de hoy`}>
+        <Dos>
+          <Campo label="Seguro Territory / mes"><NumIn value={plan.seguroNuevo} onChange={(v) => upd({ seguroNuevo: v })} /></Campo>
+          <Campo label="Seguro Cronos (dejás)"><NumIn value={plan.seguroViejo} onChange={(v) => upd({ seguroViejo: v })} /></Campo>
+        </Dos>
+        <Dos>
+          <Campo label="Nafta extra / mes"><NumIn value={plan.naftaExtra} onChange={(v) => upd({ naftaExtra: v })} /></Campo>
+          <Campo label="Patente Territory / mes"><NumIn value={plan.patenteNueva} onChange={(v) => upd({ patenteNueva: v })} /></Campo>
+        </Dos>
+        <Campo label="Tope de cuota + seguro (en $ de hoy)"><NumIn value={plan.tope} onChange={(v) => upd({ tope: v })} /></Campo>
+        <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+          Todo en pesos de hoy: ajusta por inflación mes a mes. El seguro, la nafta y la patente de la Territory
+          arrancan con el retiro; el seguro del Cronos se deja de pagar desde que lo entregás (se lo resto a tu flujo, no lo borro).
+        </div>
+      </Seccion>
+
+      <Seccion titulo="Inflación y tu flujo" sub={plan.inflModo === "escenario" ? "Inflación del escenario base" : `Inflación ${pctTxt(plan.ipc, 2)} · auto ${pctTxt(plan.autoSuba, 2)} por mes`}>
+        <Campo label="Inflación">
+          <Opciones valor={plan.inflModo} onCambiar={(v) => upd({ inflModo: v })}
+            opciones={[["fija", "Fija"], ["escenario", "La del escenario base"]]} />
+        </Campo>
+        {plan.inflModo === "escenario" ? (
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+            Usa los tramos de inflación del escenario base, y el valor del auto acompaña esa inflación.
+          </div>
+        ) : (
+          <Dos>
+            <Campo label="Inflación mensual"><NumIn modo="pct" value={plan.ipc} onChange={(v) => upd({ ipc: v })} /></Campo>
+            <Campo label="Suba del auto mensual"><NumIn modo="pct" value={plan.autoSuba} onChange={(v) => upd({ autoSuba: v })} /></Campo>
+          </Dos>
+        )}
+        <Campo label="Tu flujo sin el plan sale de"
+          nota="Mientras dura el horizonte de Hoy uso lo que tenés cargado, tal cual lo ves ahí. Después, ese escenario: sueldo con aumentos, aguinaldo, gastos fijos y bolsas que ajustan; su préstamo no.">
+          {escs.length ? (
+            <Opciones valor={plan.escenarioId || escs[0].id} onCambiar={(v) => upd({ escenarioId: v })}
+              opciones={escs.map((e) => [e.id, e.nombre])} />
+          ) : (
+            <div style={{ fontSize: 12.5, color: T.suave, lineHeight: 1.5 }}>
+              No tenés escenarios guardados: uso tus supuestos por defecto (los de "Territory Titanium 2023", sin el préstamo).
+            </div>
+          )}
+        </Campo>
+        <Campo label="Tu ahorro">
+          <Opciones valor={plan.rinde} onCambiar={(v) => upd({ rinde: v })}
+            opciones={[["inflacion", "Rinde como la inflación (PF UVA)"], ["nada", "No rinde"]]} />
+        </Campo>
+        <Campo label="Ahorro con el que arrancás"
+          nota={plan.inicialModo === "manual" ? null : `${plataR(saldoAuto)}: lo que proyecta Hoy a fin de ${etiqMesLargo(sumaMes(plan.inicio, -1))}.`}>
+          <Opciones valor={plan.inicialModo} onCambiar={(v) => upd({ inicialModo: v })}
+            opciones={[["auto", "El de Hoy"], ["manual", "Lo pongo yo"]]} />
+          {plan.inicialModo === "manual" && (
+            <div style={{ marginTop: 8 }}><NumIn value={plan.inicial} onChange={(v) => upd({ inicial: v })} /></div>
+          )}
+        </Campo>
+      </Seccion>
+    </>
+  );
+}
+
+/* ---------- Pantalla ---------- */
+function Planes({ cfg, setCfg, movs, medios, abrirId, onAbierto }) {
+  const planes = cfg.planes || [];
+  const escs = cfg.escenarios || [];
+  const [sel, setSel] = useState(abrirId || (planes[0] ? planes[0].id : null));
+  const [enHoy, setEnHoy] = useState(false);
+  useEffect(() => { if (abrirId) { setSel(abrirId); if (onAbierto) onAbierto(); } }, [abrirId]);
+  const plan = planes.find((x) => x.id === sel) || planes[0];
+  const guardar = (l) => setCfg({ ...cfg, planes: l });
+  const upd = (patch) => guardar(planes.map((x) => (x.id === plan.id ? { ...x, ...patch } : x)));
+  const nuevo = () => { const p = planVacio(); guardar([...planes, p]); setSel(p.id); };
+
+  // Tu flujo sin el plan: lo pesado. Solo se recalcula si cambia algo que lo afecta.
+  const cfgBase = useCfgSinPlanes(cfg);
+  const kBase = plan ? [plan.id, plan.inicio, plan.escenarioId, plan.inflModo, plan.ipc, plan.cuotasPagas, plan.mesesRetiro].join("|") : "";
+  const base = useMemo(() => (plan ? basePlan(plan, cfgBase, movs, medios) : null), [kBase, cfgBase, movs, medios]);
+  const s = useMemo(() => (plan && base ? simularPlan(plan, base) : null), [plan, base]);
+
+  if (!plan || !s) {
+    return (
+      <div style={{ padding: 16, paddingBottom: 40 }}>
+        <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.55 }}>
+          Simulá un plan de ahorro con licitación encima de tu flujo: cuotas, oferta, venta del Cronos,
+          retiro y lo que te cuesta el auto nuevo. <b style={{ color: T.tinta }}>Nunca toca tus movimientos.</b>
+        </div>
+        <button className="btn" style={{ marginTop: 14 }} onClick={nuevo}>Crear "Plan Ford → Territory"</button>
+      </div>
+    );
+  }
+
+  const r = s.resumen;
+  const mesT = (t) => etiqMes(sumaMes(plan.inicio, t - 1));
+  const esPreset = (pr) => +plan.mAdj === pr.mAdj && Math.round(+plan.oferta) === pr.oferta;
+  const meses = s.filas.map((f) => f.mk);
+  const nombreBase = (s.esc && s.esc.nombre) || "tus supuestos";
+  const primerEsc = s.filas.find((f) => f.deBase === "esc");
+  const deHoy = s.filas.filter((f) => f.deBase === "hoy");
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 40 }}>
+      <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 3 }}>
+        {planes.map((x) => (
+          <button key={x.id} className={"chip sm" + (x.id === plan.id ? " on" : "")} onClick={() => setSel(x.id)}>{x.nombre}</button>
+        ))}
+        <button className="chip sm" onClick={nuevo}>+ Nuevo</button>
+      </div>
+
+      <div style={{ marginTop: 14 }}><Ficticio /></div>
+      <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginTop: 8 }}>{plan.nombre}</div>
+      <div style={{ fontSize: 12.5, color: T.suave, marginTop: 3 }}>
+        Cuota 1 en {etiqMes(plan.inicio)} · última en {mesT(s.ultima)} · {plan.activo === false ? "apagado" : "se ve en Hoy"}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        <button className={"chip sm" + (plan.activo !== false ? " on" : "")} onClick={() => upd({ activo: plan.activo === false })}>
+          {plan.activo === false ? "Prender" : "Prendido"}
+        </button>
+        <button className="chip sm" onClick={() => {
+          const copia = JSON.parse(JSON.stringify(plan));
+          copia.id = "plan" + Date.now(); copia.nombre = plan.nombre + " (copia)";
+          guardar([...planes, copia]); setSel(copia.id);
+        }}>Duplicar</button>
+        <button className="chip sm" style={{ color: T.rojo }} onClick={() => {
+          if (!confirm(`¿Borrar "${plan.nombre}"? Tus movimientos reales no se tocan.`)) return;
+          const resto = planes.filter((x) => x.id !== plan.id);
+          guardar(resto); setSel(resto[0] ? resto[0].id : null);
+        }}>Borrar</button>
+      </div>
+
+      <label className="lbl" style={{ marginTop: 16 }}>Casos de licitación</label>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6 }}>
+        {PRESETS_PLAN.map((pr) => (
+          <button key={pr.id} className="card" onClick={() => upd({ mAdj: pr.mAdj, oferta: pr.oferta })}
+            style={{ padding: "9px 8px", textAlign: "left", minWidth: 0,
+                     background: esPreset(pr) ? T.tinta : T.card, color: esPreset(pr) ? "#fff" : T.tinta,
+                     borderColor: esPreset(pr) ? T.tinta : T.linea }}>
+            <div style={{ fontSize: 12.5, fontWeight: 650 }}>{pr.id} · {nombrePreset(plan, pr).replace("Gano en ", "")}</div>
+            <div className="num" style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>oferta {millones(pr.oferta)}</div>
+          </button>
+        ))}
+      </div>
+
+      <div className="cima" style={{ padding: "18px 18px 16px", marginTop: 14 }}>
+        <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)" }}>Retirás la Territory en</div>
+        <div className="plata" style={{ fontSize: 30, color: "#fff", marginTop: 4, letterSpacing: "-0.03em" }}>
+          {etiqMesLargo(r.ret.mk)}
+        </div>
+        <div style={{ fontSize: 13, color: "rgba(234,240,236,.75)", marginTop: 6, lineHeight: 1.5 }}>
+          Acto en {etiqMes(r.acto.mk)} (cuota {s.mAdj}) y retiro {plan.mesesRetiro} {+plan.mesesRetiro === 1 ? "mes" : "meses"} después.
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginTop: 14,
+                      paddingTop: 12, borderTop: "1px solid rgba(234,240,236,.14)", fontSize: 12.5 }}>
+          <span style={{ color: "rgba(234,240,236,.62)" }}>Colchón después del retiro</span>
+          <span className="num" style={{ color: r.colchon < 0 ? "#FFB4A6" : "#fff", fontWeight: 650, fontSize: 15 }}>
+            {plataR(r.colchon)}
+          </span>
+        </div>
+        <div style={{ fontSize: 11.5, color: "rgba(234,240,236,.55)", textAlign: "right", marginTop: 2 }}>
+          {plataR(r.colchonHoy)} de hoy · saldo a fin de {etiqMes(r.ret.mk)}
+        </div>
+      </div>
+
+      {r.faltaEn && (
+        <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginTop: 10 }}>
+          <b>No te alcanza {r.faltaActo ? "para la oferta" : "para el retiro"}:</b> en {etiqMesLargo(r.faltaEn.mk)} tu
+          saldo con el plan queda en {plataR(r.faltaEn.saldoCon)}.
+          {r.recupera ? ` Volvés a positivo en ${etiqMesLargo(r.recupera.mk)}.` : " No volvés a positivo en todo el plan."}
+        </div>
+      )}
+      {!r.faltaEn && r.minCon.saldoCon < 0 && (
+        <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginTop: 10 }}>
+          <b>Quedás en rojo:</b> en {etiqMesLargo(r.minCon.mk)} tu saldo con el plan llega a {plataR(r.minCon.saldoCon)} ({plataR(r.minConHoy)} de hoy).
+        </div>
+      )}
+      {r.sobreTope.length > 0 && (
+        <div className="aviso" style={{ background: T.rojoBg, color: T.rojo, marginTop: 10 }}>
+          <b>Pasás tu tope en {r.sobreTope.length} {r.sobreTope.length === 1 ? "mes" : "meses"}:</b> la cuota + el seguro supera
+          {" "}{plataR(plan.tope)} de hoy. El primero es {etiqMesLargo(r.sobreTope[0].mk)}, con {plataR(r.sobreTope[0].cuotaSegHoy)}.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 8, marginTop: 10 }}>
+        <Tile ancho titulo={`Oferta contra Cronos · ${etiqMes(r.acto.mk)}`}
+          valor={r.saleAhorro > 0 ? `Sale del ahorro ${plataR(r.saleAhorro)}` : `No toca tu ahorro`}
+          color={r.faltaActo ? T.rojo : T.tinta}
+          sub={<>
+            Oferta {plataR(s.ofertaNom)}: integración {plataR(+plan.integracion * s.ix.auto(s.mAdj))} + {s.E} cuotas
+            adelantadas {plataR(s.E * s.pura * s.ix.auto(s.mAdj))}.<br />
+            Cronos neto {plataR(s.cronosNeto)} (venta {plataR(s.cronosVenta)} − patente {plataR(plan.cronosPatente)})
+            {r.mismoMes ? "" : `, que entra en ${etiqMes(sumaMes(plan.inicio, s.tCron - 1))}`}.
+            {r.sobra > 0 && <b style={{ color: T.verde }}> Te sobran {plataR(r.sobra)}.</b>}
+          </>} />
+        <Tile titulo="Gastos de retiro" valor={plataR(r.ret.retiro)}
+          sub={`${plataR(r.retiroHoy)} de hoy · ${etiqMes(r.ret.mk)}`} />
+        <Tile titulo="Cuota + seguro máxima (hoy)" valor={plataR(r.maxCS.cuotaSegHoy)}
+          color={r.maxCS.pasaTope ? T.rojo : T.tinta}
+          sub={`${etiqMes(r.maxCS.mk)} · tope ${corta(plan.tope)}`} />
+        <Tile titulo="Total pagado (hoy)" valor={corta(r.totalHoy)}
+          sub={`cuotas ${corta(r.totalCuotasHoy)} + oferta ${corta(r.ofertaHoy)} · más ${corta(r.retiroHoy)} de retiro · el auto hoy vale ${corta(plan.vm)}`} />
+        <Tile titulo="Última cuota" valor={etiqMesLargo(r.ult.mk)}
+          sub={`cuota ${s.ultima} · ${plataR(r.ult.cuota)} (${plataR(r.ult.cuota / r.ult.ii)} de hoy)`} />
+        <Tile titulo={`Ahorro en ${etiqMes(r.fin.mk)} (hoy)`} valor={corta(r.finConHoy)}
+          color={r.finConHoy < 0 ? T.rojo : T.tinta}
+          sub={`sin el plan: ${corta(r.finSinHoy)}`} />
+        <Tile titulo="Mes más flaco después del retiro" valor={corta(r.minConHoy)}
+          color={r.minConHoy < 0 ? T.rojo : T.tinta}
+          sub={`saldo con el plan en ${etiqMes(r.minCon.mk)}, en pesos de hoy`} />
+      </div>
+
+      <div className="card" style={{ padding: "14px 13px 8px", marginTop: 10 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620 }}>Tu saldo, con y sin el plan</div>
+        <div style={{ fontSize: 11.5, color: T.suave, margin: "3px 0 10px", lineHeight: 1.5 }}>
+          En pesos de hoy. La distancia entre las dos líneas es lo que te cuesta el plan.
+        </div>
+        <GraficoLineas meses={meses} aria="Saldo con y sin el plan, en pesos de hoy"
+          series={[
+            { nombre: "Sin el plan", corto: "Sin plan", color: COLOR_SIN, valores: s.filas.map((f) => f.saldoSin / f.ii) },
+            { nombre: "Con el plan", corto: "Con plan", color: COLOR_CON, valores: s.filas.map((f) => f.saldoCon / f.ii) },
+          ]} />
+      </div>
+
+      <div className="card" style={{ padding: "14px 13px 8px", marginTop: 10 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 620 }}>Cuota + seguro contra tu tope</div>
+        <div style={{ fontSize: 11.5, color: T.suave, margin: "3px 0 10px", lineHeight: 1.5 }}>
+          En pesos de hoy. Si la línea pasa la punteada, te pasás del tope.
+        </div>
+        <GraficoLineas meses={meses} aria="Cuota más seguro contra el tope, en pesos de hoy"
+          series={[{ nombre: "Cuota + seguro", corto: "Cuota+seg", color: COLOR_CON, valores: s.filas.map((f) => f.cuotaSegHoy) }]}
+          referencia={{ nombre: `Tope ${corta(plan.tope)}`, valores: s.filas.map(() => +plan.tope || 0) }} />
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 620, marginTop: 20 }}>Supuestos</div>
+      <EditorPlan plan={plan} upd={upd} s={s} escs={escs} saldoAuto={base.saldoAuto} />
+
+      <div style={{ fontSize: 15, fontWeight: 620, marginTop: 22 }}>Mes a mes</div>
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        {[[false, "Pesos de cada mes"], [true, "Pesos de hoy"]].map(([val, n]) => (
+          <button key={n} className={"chip sm" + (enHoy === val ? " on" : "")} onClick={() => setEnHoy(val)}>{n}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+        {enHoy ? `Todo deflactado por la inflación del plan, a pesos de ${etiqMesLargo(plan.inicio)}.` : "Cada número en los pesos del mes en que pasa."}
+        {" "}Deslizá la tabla para ver todas las columnas.
+      </div>
+      <TablaPlan s={s} enHoy={enHoy} />
+      <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 10, lineHeight: 1.55 }}>
+        Tu flujo sin el plan: {deHoy.length ? `${deHoy.length === 1 ? etiqMes(deHoy[0].mk) : `${etiqMes(deHoy[0].mk)} a ${etiqMes(deHoy[deHoy.length - 1].mk)}`} sale de Hoy (lo que tenés cargado, sin aumentos)` : ""}
+        {deHoy.length && primerEsc ? "; " : ""}
+        {primerEsc ? `desde ${etiqMes(primerEsc.mk)}, del escenario "${nombreBase}" sin su préstamo` : ""}.
+        {" "}Arrancás con {plataR(s.saldoIni)}{plan.rinde === "nada" ? " y tu ahorro no rinde" : " y tu ahorro rinde como la inflación"}. Son supuestos tuyos, no es asesoramiento financiero.
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Tarjeta en Hoy: los planes prendidos ---------- */
+// Tu saldo de Hoy, tal cual, más lo que movería el plan desde este mes.
+function TarjetaPlanes({ cfg, movs, filas, onVer }) {
+  const activos = (cfg.planes || []).filter((p) => p.activo !== false);
+  if (!activos.length || !filas || !filas.length) return null;
+  const desde = filas[0].mk;
+  return (
+    <div style={{ marginTop: 16 }}>
+      {activos.map((p) => {
+        const ix = indicesPlan(p, macroDeEscenario(escenarioBasePlan(p, cfg, movs)));
+        const pl = calcularPlan(p, ix);
+        const neto = {}; pl.filas.forEach((f) => { neto[f.mk] = f.neto; });
+        let ac = 0;
+        const conPlan = filas.map((f) => { ac += neto[f.mk] || 0; return { mk: f.mk, sin: f.saldo, con: f.saldo + ac }; });
+        const ver = conPlan.filter((f) => f.mk >= p.inicio).slice(0, 3);
+        const mkRet = sumaMes(p.inicio, pl.tRet - 1);
+        const enRet = conPlan.find((f) => f.mk === mkRet);
+        return (
+          <button key={p.id} onClick={() => onVer(p.id)} className="card"
+            style={{ width: "100%", textAlign: "left", padding: "13px 15px", marginTop: 8,
+                     borderStyle: "dashed", borderColor: "#E9C98A" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <Ficticio chico />
+              <span style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600 }}>Ver ›</span>
+            </div>
+            <div style={{ fontSize: 14.5, fontWeight: 620, marginTop: 6 }}>{p.nombre}</div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 2, lineHeight: 1.5 }}>
+              Acto en {etiqMes(sumaMes(p.inicio, pl.mAdj - 1))} · retirás en {etiqMes(mkRet)}
+              {enRet && <> · te quedan{" "}
+                <b className="num" style={{ color: enRet.con < 0 ? T.rojo : T.tinta }}>{corta(enRet.con)}</b></>}
+            </div>
+            {ver.length > 0 ? (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr", gap: 6, fontSize: 11, color: T.tenue, marginTop: 8 }}>
+                  <span />
+                  <span style={{ textAlign: "right" }}>Saldo con plan</span>
+                  <span style={{ textAlign: "right" }}>Hoy</span>
+                </div>
+                {ver.map((f) => (
+                  <div key={f.mk} className="num" style={{ display: "grid", gridTemplateColumns: "54px 1fr 1fr", gap: 6, fontSize: 12.5, padding: "3px 0" }}>
+                    <span style={{ color: T.suave }}>{etiqMes(f.mk)}</span>
+                    <span style={{ textAlign: "right", color: f.con < 0 ? T.rojo : T.tinta }}>{corta(f.con)}</span>
+                    <span style={{ textAlign: "right", color: f.sin < 0 ? T.rojo : T.suave }}>{corta(f.sin)}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 6 }}>Arranca en {etiqMesLargo(p.inicio)}.</div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------- Simular con solapas ---------- */
-function SimularWrap({ cfg, setCfg, cfgVista, movs, medios, esDueno, vista, setVista, abrirEsc, onAbierto }) {
+function SimularWrap({ cfg, setCfg, cfgVista, movs, medios, esDueno, vista, setVista, abrirEsc, onAbierto,
+                      abrirPlan, onPlanAbierto }) {
   if (!esDueno) return <Simular cfg={cfgVista} movs={movs} medios={medios} />;
   return (
     <>
       <div className="scroll" style={{ display: "flex", gap: 6, padding: "14px 16px 0", overflowX: "auto" }}>
-        {[["compra", "Compra"], ["esc", "Escenarios"], ["inv", "Inversiones"]].map(([v, n]) => (
+        {[["compra", "Compra"], ["esc", "Escenarios"], ["plan", "Plan de ahorro"], ["inv", "Inversiones"]].map(([v, n]) => (
           <button key={v} className={"chip" + (vista === v ? " on" : "")} onClick={() => setVista(v)}>{n}</button>
         ))}
       </div>
       {vista === "compra" && <Simular cfg={cfgVista} movs={movs} medios={medios} />}
       {vista === "esc" && <Escenarios cfg={cfg} setCfg={setCfg} movs={movs} medios={medios} abrirId={abrirEsc} onAbierto={onAbierto} />}
+      {vista === "plan" && <Planes cfg={cfg} setCfg={setCfg} movs={movs} medios={medios} abrirId={abrirPlan} onAbierto={onPlanAbierto} />}
       {vista === "inv" && <Inversiones cfg={cfg} setCfg={setCfg} />}
     </>
   );
@@ -6751,7 +7476,7 @@ const ICONOS = {
 const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [] };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [] };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -6776,6 +7501,7 @@ export default function App() {
   const [undo, setUndo] = useState(null);
   const [simVista, setSimVista] = useState("compra");
   const [abrirEsc, setAbrirEsc] = useState(null);
+  const [abrirPlan, setAbrirPlan] = useState(null);
   const [deudas, setDeudas] = useState([]);
   const [perfiles, setPerfiles] = useState({});
   const [cargandoDeudas, setCargandoDeudas] = useState(false);
@@ -7176,9 +7902,14 @@ export default function App() {
           pendientesDeuda={pendientes}
           onVerPersonas={() => setTab("rep")}
           undo={undo} onDeshacer={deshacer}
-          escenariosCard={esDueno && (cfg.escenarios || []).some((e) => e.activo !== false) ? (
-            <TarjetaEscenarios cfg={cfgTC} movs={movs} medios={medios}
-              onVer={(id) => { setSimVista("esc"); setAbrirEsc(id); setTab("sim"); }} />
+          escenariosCard={esDueno && ((cfg.escenarios || []).some((e) => e.activo !== false) ||
+                                      (cfg.planes || []).some((p) => p.activo !== false)) ? (
+            <>
+              <TarjetaEscenarios cfg={cfgTC} movs={movs} medios={medios}
+                onVer={(id) => { setSimVista("esc"); setAbrirEsc(id); setTab("sim"); }} />
+              <TarjetaPlanes cfg={cfgTC} movs={movs} filas={filas}
+                onVer={(id) => { setSimVista("plan"); setAbrirPlan(id); setTab("sim"); }} />
+            </>
           ) : null}
           onConfirmarAuto={(mk, ids) => {
             marcarUndo(ids.length === 1
@@ -7199,7 +7930,8 @@ export default function App() {
         <SimularWrap cfg={cfgTC} setCfg={setCfg} cfgVista={{ ...cfgTC, desdeMes: desde }}
           movs={movs} medios={medios} esDueno={esDueno}
           vista={simVista} setVista={setSimVista}
-          abrirEsc={abrirEsc} onAbierto={() => setAbrirEsc(null)} />
+          abrirEsc={abrirEsc} onAbierto={() => setAbrirEsc(null)}
+          abrirPlan={abrirPlan} onPlanAbierto={() => setAbrirPlan(null)} />
       )}
       {tab === "inv" && <Invertido cfg={cfg} setCfg={setCfg} tc={cfgTC.tc} />}
       {tab === "rep" && (
