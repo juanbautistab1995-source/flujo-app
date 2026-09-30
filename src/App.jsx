@@ -514,6 +514,8 @@ async function traerTasas() {
   cacheGuardar("tasas", lista);
   return lista;
 }
+// Para buscar sin importar mayúsculas ni tildes
+const normBusca = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 const normTna = (v) => { const n = +v || 0; return n > 0 && n < 3 ? n * 100 : n; };
 
 async function traerPrecios(tipo) {
@@ -3644,12 +3646,15 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
   const cae = f.recurrente ? null : mesDePago(f.fecha || hoyISO(), f.medio, medios);
   const noAlcanza = disponible != null && cae === mesDeHoy() && saleAhora > disponible;
 
+  const esIngreso = f.tipo === "ingreso";
   const mesPago = useMemo(() => {
     if (f.recurrente) return null;
     if (f.mesInicio && !f.fecha) return f.mesInicio;
+    // Un ingreso entra el día que lo cobrás: no tiene tarjeta ni ciclo
+    if (f.tipo === "ingreso") return (f.fecha || hoyISO()).slice(0, 7);
     if (f.pagadoPor === "otro") return (f.fecha || hoyISO()).slice(0, 7);
     return mesDePago(f.fecha, f.medio, medios);
-  }, [f.fecha, f.medio, f.recurrente, f.mesInicio, f.pagadoPor, medios]);
+  }, [f.fecha, f.medio, f.recurrente, f.mesInicio, f.pagadoPor, f.tipo, medios]);
 
   // Estimados variables de ese mes que este gasto podría estar cubriendo
   const candidatos = useMemo(() => {
@@ -3685,7 +3690,12 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
       mv.fecha = f.fecha;
     }
     if (f.tipo === "ingreso" && f.paraMes === "siguiente") mv.paraMes = "siguiente";
-    if (f.persona) { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
+    // Un ingreso siempre entra a tu caja, en un solo pago y sin repartir con nadie
+    if (f.tipo === "ingreso") {
+      mv.medio = "efectivo";
+      if (!f.recurrente) mv.cuotas = 1;
+    }
+    if (f.persona && f.tipo !== "ingreso") { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
     if (f.tipo === "gasto" && f.categoria) mv.categoria = f.categoria;
     if (f.recurrente && +f.cuotasRestantes > 0)
       mv.hasta = sumaMes(mesDeHoy(), +f.cuotasRestantes - 1);
@@ -3733,7 +3743,12 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
         <div style={{ display: "flex", gap: 7, marginBottom: 16, flexWrap: "wrap" }}>
           {[["gasto", "Gasto"], ["ingreso", "Ingreso"], ["ahorro", "Compra de dólares"]].map(([v, n]) => (
             <button key={v} className={"chip" + (f.tipo === v ? " on" : "")}
-              onClick={() => { set("tipo", v); if (v === "ahorro") { set("moneda", "USD"); set("medio", "efectivo"); } }}>
+              onClick={() => {
+                set("tipo", v);
+                if (v === "ahorro") { set("moneda", "USD"); set("medio", "efectivo"); }
+                if (v === "ingreso") { set("medio", "efectivo"); set("cuotas", 1); set("persona", "");
+                                       set("pagadoPor", "yo"); set("consume", ""); }
+              }}>
               {n}
             </button>
           ))}
@@ -3829,7 +3844,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         )}
 
-        {f.pagadoPor === "yo" && (
+        {f.pagadoPor === "yo" && !esIngreso && (
           <>
             <label className="lbl" style={{ marginTop: 16 }}>Medio de pago</label>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
@@ -3862,7 +3877,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
         <label className="lbl" style={{ marginTop: 18 }}>Frecuencia</label>
         <div style={{ display: "flex", gap: 7 }}>
           <button className={"chip" + (!f.recurrente ? " on" : "")} onClick={() => set("recurrente", false)}>
-            Una compra
+            {esIngreso ? "Una vez" : "Una compra"}
           </button>
           <button className={"chip" + (f.recurrente ? " on" : "")} onClick={() => set("recurrente", true)}>
             Todos los meses
@@ -3879,12 +3894,16 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                 onClick={() => set("auto", false)}>Varía cada mes</button>
             </div>
             <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.55 }}>
-              {f.auto === false
+              {esIngreso
+                ? (f.auto === false
+                    ? "Como horas extra o ventas: el monto cambia mes a mes. Cuando lo cobres, poné el importe real."
+                    : "Como el sueldo o un alquiler que cobrás: entra todos los meses por el mismo monto.")
+                : f.auto === false
                 ? "Como la nafta o el súper: el monto cambia mes a mes, así que es una apuesta hasta que pasa."
                 : "Como Netflix o un seguro: se debita solo y casi nunca cambia, así que lo vas a poder confirmar de a varios con un toque."}
             </div>
 
-            {f.auto === false && (
+            {f.auto === false && !esIngreso && (
               <>
                 <label className="lbl" style={{ marginTop: 16 }}>¿Cargás estos gastos a mano?</label>
                 <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
@@ -3906,10 +3925,19 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
         {!f.recurrente ? (
           <>
             <label className="lbl" style={{ marginTop: 16 }}>
-              {f.pagadoPor === "otro" ? "Cuándo empezás a pagarle" : "Fecha de la compra"}
+              {esIngreso ? "¿Cuándo la cobrás?" : f.pagadoPor === "otro" ? "Cuándo empezás a pagarle" : "Fecha de la compra"}
             </label>
             <input type="date" value={f.fecha || hoyISO()} onChange={(e) => set("fecha", e.target.value)} />
 
+            {esIngreso && mesPago && (
+              <div style={{ marginTop: 14, padding: "11px 13px", background: T.verdeBg, borderRadius: 11,
+                            fontSize: 13.5, lineHeight: 1.5 }}>
+                Entra en tu caja en <b>{etiqMesLargo(mesPago)}</b>
+                {f.paraMes === "siguiente" && <> y se usa para pagar <b>{etiqMesLargo(sumaMes(mesPago, 1))}</b></>}.
+              </div>
+            )}
+
+            {!esIngreso && (<>
             <label className="lbl" style={{ marginTop: 16 }}>Cuotas</label>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
               {[1, 3, 6, 9, 12, 18].map((n) => (
@@ -3936,10 +3964,13 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                 )}
               </div>
             )}
+            </>)}
           </>
         ) : (
           <>
-            <label className="lbl" style={{ marginTop: 16 }}>¿Cuántas cuotas le quedan? (vacío = no termina)</label>
+            <label className="lbl" style={{ marginTop: 16 }}>
+              {esIngreso ? "¿Por cuántos meses más? (vacío = no termina)" : "¿Cuántas cuotas le quedan? (vacío = no termina)"}
+            </label>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
               {[6, 12, 24, 36].map((n) => (
                 <button key={n} className={"chip" + (+f.cuotasRestantes === n ? " on" : "")}
@@ -3952,7 +3983,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             {+f.cuotasRestantes > 0 && (
               <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
                 Última en <b>{etiqMesLargo(sumaMes(mesDeHoy(), +f.cuotasRestantes - 1))}</b>.
-                Sirve para préstamos: así la app sabe cuándo dejás de pagarlo.
+                {esIngreso ? "Así la app sabe hasta cuándo lo cobrás." : "Sirve para préstamos: así la app sabe cuándo dejás de pagarlo."}
               </div>
             )}
 
@@ -4008,6 +4039,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         )}
 
+        {!esIngreso && (<>
         <label className="lbl" style={{ marginTop: 18 }}>
           {f.pagadoPor === "otro" ? "Se lo debo a" : "Lo comparto con"}
         </label>
@@ -4064,6 +4096,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             </>
           );
         })()}
+        </>)}
 
         {f.tipo === "gasto" && f.pagadoPor === "yo" && f.persona && (
           <>
@@ -4158,10 +4191,12 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           onClick={() => set("excepcional", !f.excepcional)}
           style={{ marginTop: 18 }}
         >
-          {f.excepcional ? "✓ " : ""}Gasto excepcional
+          {f.excepcional ? "✓ " : ""}{esIngreso ? "Ingreso extraordinario" : "Gasto excepcional"}
         </button>
         <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-          Marcalo si no se repite (un viaje, algo puntual). Sirve para no confundirlo con tu base de gastos normales.
+          {esIngreso
+            ? "Marcalo si no se repite (un bono, una venta, un regalo). Sirve para no confundirlo con tu ingreso normal."
+            : "Marcalo si no se repite (un viaje, algo puntual). Sirve para no confundirlo con tu base de gastos normales."}
         </div>
 
         {!esNuevo && (
@@ -4310,6 +4345,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
   const [valor, setValor] = useState("");
   const [verSaldados, setVerSaldados] = useState(null);
   const [agrupar, setAgrupar] = useState("medio");
+  const [busca, setBusca] = useState("");
+  const [tipoVer, setTipoVer] = useState("todo");   // todo | fijos | cuotas | consumos
+  // Salta a una sección del resumen del mes (y vuelve al índice)
+  const ir = (id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const [verHistorial, setVerHistorial] = useState(false);
   const fin = filas[filas.length - 1];
   const mesAct = mesDeHoy();
@@ -4419,9 +4461,20 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                   )}
 
                   {(() => {
-                    const pend = f.items.filter((i) => !i.saldado);
-                    const sald = f.items.filter((i) => i.saldado);
-                    const verS = verSaldados === f.mk;
+                    // Buscador: filtra por detalle, categoría, persona o tarjeta
+                    const q = normBusca(busca);
+                    // Filtro rápido por tipo: gastos fijos, cuotas o consumos en un pago
+                    const esTipo = (i) => tipoVer === "todo" ||
+                      (tipoVer === "fijos" && !!i.mv.recurrente && !i.ingreso) ||
+                      (tipoVer === "cuotas" && !i.mv.recurrente && (i.mv.cuotas || 1) > 1) ||
+                      (tipoVer === "consumos" && !i.mv.recurrente && (i.mv.cuotas || 1) === 1 && !i.ingreso);
+                    const coincide = (i) => esTipo(i) && (!q || normBusca([i.mv.detalle, i.mv.categoria, i.mv.persona,
+                      (medios.find((m) => m.id === i.mv.medio) || {}).nombre].join(" ")).includes(q));
+                    const filtrando = !!q || tipoVer !== "todo";
+                    const pendTodo = f.items.filter((i) => !i.saldado);
+                    const pend = pendTodo.filter(coincide);
+                    const sald = f.items.filter((i) => i.saldado).filter(coincide);
+                    const verS = verSaldados === f.mk || filtrando;
 
                     const fila = (it, enPersona) => {
                       const { mv, monto, cuota, ingreso, saldado, base, estimado, desvio } = it;
@@ -4591,10 +4644,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       if (!fb) return 1;
                       return fa < fb ? 1 : fa > fb ? -1 : 0;
                     });
-                    const meter = (titulo, sub, arrIn, color, totalFijo, persona) => {
+                    const meter = (titulo, sub, arrIn, color, totalFijo, persona, corto) => {
                       const arr = ordenar(arrIn);
+                      // Buscando: solo las secciones que tienen algo que coincide
+                      if (filtrando && !arr.length) return;
                       if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color, persona,
-                        total: totalFijo != null ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
+                        corto: corto || titulo,
+                        total: totalFijo != null && !filtrando ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
                     };
                     if (agrupar === "categoria") {
                       meter("Por cobrar", "", pend.filter((i) => i.ingreso), T.verde);
@@ -4617,38 +4673,77 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           return dia + (sinConf ? ` · ${sinConf} sin confirmar` : " · todo confirmado");
                         })(),
                               pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.devolucion
-                                                 && i.mv.medio === m.id)));
+                                                 && i.mv.medio === m.id), undefined, undefined, undefined, m.corto));
                       meter("Efectivo y débito", "",
                             pend.filter((i) => !i.ingreso && !i.deuda && !i.soloDeuda && !i.devolucion
-                                               && !i.ahorro && i.mv.medio === "efectivo"));
-                      meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar);
+                                               && !i.ahorro && i.mv.medio === "efectivo"),
+                            undefined, undefined, undefined, "Efectivo");
+                      meter("Compra de dólares", "no es gasto", pend.filter((i) => i.ahorro), T.ambar,
+                            undefined, undefined, "Dólares");
                       // Lo que te acredita el banco por promos, ya descontado de cada resumen
                       if (f.totalDev > 0)
                         meter("Reintegros del banco", "promos y devoluciones",
-                              pend.filter((i) => i.devolucion), T.verde);
+                              pend.filter((i) => i.devolucion), T.verde, undefined, undefined, "Reintegros");
                       // Una sola línea por persona: las dos puntas ya están cruzadas.
                       (f.netos || []).forEach((x) => {
                         const arr = pend.filter((i) => i.mv.persona === x.persona
                           && (i.deuda || i.soloDeuda || (i.credito || 0) > 0));
                         meter(x.neto < 0 ? "Le transferís a " + x.persona : "Te devuelve " + x.persona,
                               "neto, ya cruzado con lo que " + (x.neto < 0 ? "te debe" : "le debés"),
-                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto), x.persona);
+                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto), x.persona, x.persona);
                       });
                     }
 
                     return (
                       <>
-                        {pend.length > 0 && (
-                          <div style={{ borderTop: `1px solid ${T.linea}`, padding: "10px 15px",
-                                        display: "flex", gap: 7, alignItems: "center" }}>
-                            <span style={{ fontSize: 11.5, color: T.tenue }}>Ver por</span>
-                            {[["medio", "medio de pago"], ["categoria", "categoría"]].map(([v, n]) => (
-                              <button key={v} className={"chip sm" + (agrupar === v ? " on" : "")}
-                                onClick={() => setAgrupar(v)}>{n}</button>
-                            ))}
+                        {pendTodo.length > 0 && (
+                          <div id={"idx-" + f.mk} style={{ borderTop: `1px solid ${T.linea}`, padding: "10px 15px",
+                                                          scrollMarginTop: 12 }}>
+                            <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+                              <span style={{ fontSize: 11.5, color: T.tenue }}>Ver por</span>
+                              {[["medio", "medio de pago"], ["categoria", "categoría"]].map(([v, n]) => (
+                                <button key={v} className={"chip sm" + (agrupar === v ? " on" : "")}
+                                  onClick={() => setAgrupar(v)}>{n}</button>
+                              ))}
+                            </div>
+                            <div style={{ position: "relative", marginTop: 9 }}>
+                              <input value={busca} onChange={(e) => setBusca(e.target.value)}
+                                placeholder="Buscar: Uber, nafta, Sol, Visa…"
+                                style={{ paddingRight: 38 }} />
+                              {busca && (
+                                <button onClick={() => setBusca("")} aria-label="Borrar búsqueda"
+                                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                                           fontSize: 17, color: T.tenue, padding: "4px 8px" }}>×</button>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
+                              {[["todo", "Todo"], ["fijos", "Fijos"], ["cuotas", "Cuotas"], ["consumos", "Consumos"]].map(([v, n]) => (
+                                <button key={v} className={"chip sm" + (tipoVer === v ? " on" : "")}
+                                  onClick={() => setTipoVer(v)}>{n}</button>
+                              ))}
+                            </div>
+                            {filtrando && (
+                              <div style={{ fontSize: 12, color: T.suave, marginTop: 7 }}>
+                                {pend.length + sald.length === 0
+                                  ? (q ? `Nada que coincida con "${busca.trim()}" en este mes.` : "No hay movimientos de ese tipo en este mes.")
+                                  : `${pend.length + sald.length} ${pend.length + sald.length === 1 ? "movimiento" : "movimientos"} · ` +
+                                    plata(pend.concat(sald).reduce((a, b) => a + (b.monto || 0), 0))}
+                              </div>
+                            )}
+                            {grupos.length > 1 && (
+                              <div style={{ display: "flex", gap: 6, marginTop: 9, overflowX: "auto",
+                                            paddingBottom: 3, WebkitOverflowScrolling: "touch" }}>
+                                {grupos.map((g, gi) => (
+                                  <button key={g.titulo} className="chip sm" style={{ flexShrink: 0 }}
+                                    onClick={() => ir("g-" + f.mk + "-" + gi)}>
+                                    {g.corto} · {corta(g.total)}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
-                        {pend.some((i) => i.estimado && i.auto) && (
+                        {!filtrando && pend.some((i) => i.estimado && i.auto) && (
                           <div style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
                             <button
                               onClick={() => onConfirmarAuto && onConfirmarAuto(f.mk,
@@ -4663,16 +4758,23 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           </div>
                         )}
 
-                        {grupos.map((g) => (
-                          <div key={g.titulo} style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px" }}>
+                        {grupos.map((g, gi) => (
+                          <div key={g.titulo} id={"g-" + f.mk + "-" + gi}
+                            style={{ borderTop: `1px solid ${T.linea}`, padding: "11px 15px", scrollMarginTop: 12 }}>
                             <div style={{ display: "flex", justifyContent: "space-between",
-                                          alignItems: "baseline", marginBottom: 4 }}>
+                                          alignItems: "baseline", marginBottom: 4, gap: 8 }}>
                               <span style={{ fontSize: 11.5, letterSpacing: ".03em", color: T.tenue,
                                              textTransform: "uppercase" }}>
                                 {g.titulo}{g.sub ? " · " + g.sub : ""}
                               </span>
-                              <span className="num" style={{ fontSize: 13, fontWeight: 620,
-                                    color: g.color || T.tinta }}>{plata(g.total)}</span>
+                              <span style={{ display: "flex", alignItems: "baseline", gap: 6, flexShrink: 0 }}>
+                                <span className="num" style={{ fontSize: 13, fontWeight: 620,
+                                      color: g.color || T.tinta }}>{plata(g.total)}</span>
+                                {grupos.length > 2 && (
+                                  <button onClick={() => ir("idx-" + f.mk)} aria-label="Volver al índice"
+                                    style={{ fontSize: 12, color: T.tenue, padding: "0 2px" }}>↑</button>
+                                )}
+                              </span>
                             </div>
                             {g.arr.map((it) => fila(it, g.persona))}
                           </div>
@@ -4692,7 +4794,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           </div>
                         )}
 
-                        {!pend.length && (
+                        {!pendTodo.length && (
                           <div style={{ padding: "0 15px 14px", fontSize: 12.5, color: T.suave, lineHeight: 1.5 }}>
                             No queda nada por pagar ni por cobrar en este mes.
                           </div>
