@@ -262,6 +262,7 @@ const RRUIDO = /IMPUESTO DE SELLOS|IIBB|IVA RG|DB\.RG|DEV\.?IMP|PERCEP|SU PAGO|S
 
 function rMovs(t, molde) {
   const out = [];
+  const creditos = [];   // anulaciones y bonificaciones dentro de los consumos
   let mesCtx = null, anioCtx = null;
 
   for (const raw of t.split("\n")) {
@@ -269,8 +270,14 @@ function rMovs(t, molde) {
     if (!l.trim() || RRUIDO.test(l)) continue;
 
     // ICBC agrupa por mes: "26 Enero 07 006463 * DESPEGAR C.08/12  3.158,83"
-    const cab = l.match(/^\s*(\d{2})\s+(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Setiembre|Octubre|Noviembre|Diciembre)\s+/i);
-    if (cab) { anioCtx = 2000 + +cab[1]; mesCtx = RMESL[cab[2].toLowerCase()]; }
+    // A veces el mes viene abreviado: "26 Setiem. 01 ..." / "26 Agosto 21 ..."
+    let cab = l.match(/^\s*(\d{2})\s+([A-Za-z]{3,10})\.?\s+/);
+    if (cab) {
+      const w = cab[2].toLowerCase();
+      const esMes = RMESES[w.slice(0, 3)] && Object.keys(RMESL).some((n) => n.startsWith(w));
+      if (esMes) { anioCtx = 2000 + +cab[1]; mesCtx = RMESES[w.slice(0, 3)]; }
+      else cab = null;
+    }
 
     // Cuotas: "C.08/12" | "Cuota 18/18" | "16/18"
     // "C.08/12" | "Cuota 18/18" | "16/18" suelto (Mastercard) — con o sin comprobante en el medio
@@ -296,7 +303,7 @@ function rMovs(t, molde) {
 
     // Detalle: sin fecha, sin comprobante, sin cuotas, sin importes
     let det = l
-      .replace(/^\s*\d{2}\s+[A-Za-zÁ-ú]+\s+/i, "")
+      .replace(/^\s*\d{2}\s+[A-Za-zÁ-ú]+\.?\s+/i, "")
       .replace(/^\s*[\d\-.\/A-Za-z]{6,14}\s+/, "")
       .replace(/^\s*\d{4,7}\s*[*K]?\s+/, "")
       .replace(/(?:C\.|Cuota\s+)?\b\d{1,2}\s*\/\s*\d{1,2}\b/i, "")
@@ -312,7 +319,13 @@ function rMovs(t, molde) {
     let monto = rnum(imps[imps.length - 1]), usd = null;
     if (imps.length >= 2 && /USD|U\$S/i.test(l)) { usd = rnum(imps[imps.length - 1]); monto = 0; }
     else if (/USD/i.test(det) && monto < 1000) { usd = monto; monto = 0; }
-    if (monto < 0) continue;               // devoluciones y pagos
+    if (monto < 0) {
+      // Los pagos y la devolución de impuestos no son consumos. Las anulaciones y
+      // bonificaciones de un comercio sí: las cruzamos con su compra más abajo.
+      // Ojo: "MERPAGO*..." contiene PAGO; los pagos de verdad dicen "SU PAGO"
+      if (!/SU PAGO|PAGO EN|DEV\.?\s*IMP|SALDO|PERCEP/i.test(l)) creditos.push({ det, monto: -monto });
+      continue;
+    }
     if (!monto && !usd) continue;
 
     out.push({
@@ -324,7 +337,21 @@ function rMovs(t, molde) {
       cuotas: cuo ? +cuo[2] : 1,
     });
   }
-  return out;
+  // Cruce de créditos: "MERCADOLIBRE 9.990 / MERCADOLIBRE 9.990-" se anulan;
+  // "BONIF. CONSUMO DIMAWOL 4.960-" le baja el importe a la compra de DIMAWOL.
+  const pal = (x) => x.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+    .filter((w) => w.length >= 4 && !/^(bonif|consumo|merpago|anulacion|devol)/.test(w));
+  creditos.forEach((c) => {
+    const pc = pal(c.det);
+    const cand = out.filter((m) => !m._anulado && m.monto > 0 && pal(m.detalle).some((w) => pc.includes(w)));
+    if (!cand.length) return;
+    const igual = cand.find((m) => Math.abs(m.monto - c.monto) < 1);
+    if (igual) { igual._anulado = true; return; }
+    const m = cand[cand.length - 1];
+    if (m.cuotas > 1) m.bonif = (m.bonif || 0) + c.monto;   // en cuotas: va como reintegro único
+    else if (m.monto > c.monto) m.monto = Math.round((m.monto - c.monto) * 100) / 100;
+  });
+  return out.filter((m) => !m._anulado);
 }
 
 // El resumen declara su propio total: lo usamos para autoverificar
@@ -374,7 +401,7 @@ function leerResumen(texto) {
   const em = rEmisor(texto);
   const movs = rMovs(texto, em.molde);
   const dec = rTotal(texto);
-  const suma = movs.reduce((a, m) => a + m.monto, 0);
+  const suma = movs.reduce((a, m) => a + m.monto - (m.bonif || 0), 0);
   return {
     ...em, ciclos: rCiclos(texto), movs, fin: rFinanciero(texto),
     control: { declarado: dec, sumado: Math.round(suma * 100) / 100,
@@ -960,6 +987,61 @@ function estimadosDelMes(movs, cfg, medios, mk) {
     .filter((x) => x.base > 0);
 }
 
+// Lo que un mes deja con cada persona (+ te deben, − les debés), con la misma
+// lógica que la proyección. Se usa para arrastrar lo que no se saldó en meses
+// que ya pasaron y no aparecen en la proyección.
+function saldosPersonasMes(arr, mk, cfg, medios) {
+  const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
+  const apl = (cfg.aplicados && cfg.aplicados[mk]) || {};
+  const conResumen = cfg.resumenes || {};
+  const saldos = {};
+  (arr || []).forEach((mv) => {
+    if (!mv.persona || mv.tipo === "ingreso" || mv.tipo === "ahorro") return;
+    if (mv.recurrente && mv.medio && mv.medio !== "efectivo" && conResumen[mv.medio + "|" + mk]) return;
+    const base = montoEnMes(mv, mk, cfg.tc, medios);
+    const tocado = Object.prototype.hasOwnProperty.call(aj, mv.id);
+    if (esEstimacion(mv) && !tocado && mesCerradoOEnCurso(mk)) return;
+    let m = tocado ? aj[mv.id] : base;
+    if (mv.pagadoPor === "otro") {
+      if (!m) return;
+      const pct = mv.pct != null && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 1;
+      saldos[mv.persona] = (saldos[mv.persona] || 0) - m * pct;
+      return;
+    }
+    // Pagado de tu caja: la parte de la otra persona te la sigue debiendo
+    if (!m && tocado && apl[mv.id]) m = base;
+    const p = isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+    if (m > 0 && p > 0) saldos[mv.persona] = (saldos[mv.persona] || 0) + m * p;
+  });
+  return saldos;
+}
+
+// Lo que se liquidó con cada persona en un mes ("Ya me lo pasó" / "Ya se lo pasé").
+// + = te lo pasaron, − = se lo pasaste.
+function liquidadoPersonas(cfg, mk) {
+  const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
+  const r = {};
+  Object.keys(aj).forEach((k) => { if (k.startsWith("per|")) r[k.slice(4)] = +aj[k] || 0; });
+  return r;
+}
+
+// Lo que quedó sin saldar con cada persona desde que la app lleva la cuenta
+// (cfg.personasDesde) hasta el mes anterior a "hasta".
+function arrastrePersonas(arr, cfg, medios, hasta) {
+  const ini = cfg.personasDesde;
+  const r = {};
+  if (!ini || !/^\d{4}-\d{2}$/.test(ini) || ini >= hasta) return r;
+  for (let mk = ini, g = 0; mk < hasta && g < 240; mk = sumaMes(mk, 1), g++) {
+    const s = saldosPersonasMes(arr, mk, cfg, medios);
+    const l = liquidadoPersonas(cfg, mk);
+    new Set([...Object.keys(s), ...Object.keys(l)]).forEach((p) => {
+      r[p] = (r[p] || 0) + (s[p] || 0) - (l[p] || 0);
+    });
+  }
+  Object.keys(r).forEach((p) => { if (Math.abs(r[p]) < 1) delete r[p]; });
+  return r;
+}
+
 function proyectar(cfg, movs, medios, meses, extra) {
   const arr = extra ? [...movs, extra] : movs;
   // Meses de los que YA tenemos el resumen real de una tarjeta. Para esos, los
@@ -967,6 +1049,10 @@ function proyectar(cfg, movs, medios, meses, extra) {
   const conResumen = cfg.resumenes || {};
   const desde = cfg.desdeMes || mesDeHoy();
   const filas = [];
+  // Lo que quedó sin saldar con cada persona en meses que ya pasaron: entra en el
+  // primer mes de la proyección. En los meses que vienen se supone que se salda
+  // en el mismo mes.
+  const arrastre = arrastrePersonas(arr, cfg, medios, desde);
   for (let i = 0; i < meses; i++) {
     const mk = sumaMes(desde, i);
     const infl = Math.pow(1 + (cfg.ajuste || 0), i);
@@ -980,6 +1066,7 @@ function proyectar(cfg, movs, medios, meses, extra) {
     let ingresos = 0, excepcional = 0, ahorro = 0, usdComprados = 0;
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
+    const apl = (cfg.aplicados && cfg.aplicados[mk]) || {};
     // Gastos reales cargados a mano que se comen la estimación de un recurrente
     // variable. Los juntamos antes para poder descontárselos abajo.
     const consumido = {};
@@ -1004,6 +1091,16 @@ function proyectar(cfg, movs, medios, meses, extra) {
       const usado = consumido[mv.id] || 0;
       if (usado > 0 && m > 0) m = Math.max(0, m - usado);
       if (!m) {
+        // Lo pagaste de tu caja y era compartido: la parte de la otra persona
+        // te la sigue debiendo aunque el gasto ya esté saldado.
+        if (tocado && apl[mv.id] && mv.pagadoPor !== "otro" && mv.persona && base > 0
+            && mv.tipo !== "ingreso" && mv.tipo !== "ahorro") {
+          const pp = isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+          if (pp > 0) {
+            saldos[mv.persona] = (saldos[mv.persona] || 0) + base * pp;
+            reint.push({ persona: mv.persona, monto: base * pp, detalle: mv.detalle });
+          }
+        }
         // Lo dejamos visible para poder revertirlo o ver que quedó cubierto.
         if (usado > 0 && base > 0)
           items.push({ mv, monto: 0, base, usado, saldado: true, cubierto: true, cuota: nroCuota(mv, mk) });
@@ -1092,9 +1189,17 @@ function proyectar(cfg, movs, medios, meses, extra) {
 
     // Se cruzan las dos puntas y queda UN número por persona.
     // Negativo = le transferís. Positivo = te transfiere.
-    const netos = Object.keys(saldos)
-      .map((persona) => ({ persona, neto: Math.round(saldos[persona]) }))
-      .filter((x) => x.neto !== 0)
+    // A eso se le suma lo que viene sin saldar de antes (solo el primer mes) y se
+    // le resta lo que ya se liquidó este mes. neto = lo que FALTA mover.
+    const liq = liquidadoPersonas(cfg, mk);
+    const arr0 = i === 0 ? arrastre : {};
+    const netos = [...new Set([...Object.keys(saldos), ...Object.keys(arr0), ...Object.keys(liq)])]
+      .map((persona) => {
+        const mes = saldos[persona] || 0, vieneDe = arr0[persona] || 0, ya = liq[persona] || 0;
+        return { persona, neto: Math.round(mes + vieneDe - ya), mes: Math.round(mes),
+                 arrastre: Math.round(vieneDe), liquidado: Math.round(ya) };
+      })
+      .filter((x) => x.neto !== 0 || x.liquidado !== 0)
       .sort((a, b) => Math.abs(b.neto) - Math.abs(a.neto));
     netos.forEach((x) => {
       if (x.neto < 0) porMedio.efectivo = (porMedio.efectivo || 0) - x.neto;
@@ -1331,10 +1436,21 @@ function configFijos(esc, movs) {
   const modo = f.modo || (esc.fijosConInflacion === false ? "fijo" : "periodico");
   const cada = Math.max(1, Math.min(12, +f.cada || 3));
   const ancla = +(((esc.sueldo || {}).ajustes || [3])[0] || 3);
-  const prestamos = Array.isArray(f.prestamos) ? f.prestamos
-    : (movs || []).filter((m) => m.tipo === "gasto" && m.categoria === "Préstamos" &&
-        m.recurrente && /anses|personal/i.test(m.detalle || "")).map((m) => m.id);
-  return { modo, cada, ancla, prestamos };
+  // Cómo ajusta cada préstamo: lo que elegiste en este escenario manda; si no,
+  // lo que dice el préstamo; si no, la lista vieja (o por el nombre, como ANSES).
+  const reales = (movs || []).filter((m) => m.tipo === "gasto" && m.categoria === "Préstamos" && m.recurrente);
+  const porEsc = f.ajustes || {};
+  const tipoDe = {};
+  reales.forEach((m) => {
+    let t = porEsc[m.id];
+    if (!t) t = m.ajustaPor;
+    if (!t) t = Array.isArray(f.prestamos) ? (f.prestamos.includes(m.id) ? "inflacion" : "fija")
+      : (/anses|personal/i.test(m.detalle || "") ? "inflacion" : "fija");
+    tipoDe[m.id] = t;
+  });
+  const prestamos = reales.filter((m) => tipoDe[m.id] === "inflacion").map((m) => m.id);
+  const hogar = reales.filter((m) => tipoDe[m.id] === "sueldo").map((m) => m.id);
+  return { modo, cada, ancla, prestamos, hogar, tipoDe };
 }
 const mesesDeAjuste = (fc) =>
   MESN.map((n, i) => ((((i + 1 - fc.ancla) % fc.cada) + fc.cada) % fc.cada === 0 ? n : null)).filter(Boolean);
@@ -1390,13 +1506,14 @@ function proyectarEscenario(esc, cfg, movs, medios, opts) {
     const ix = macro.idx(mk);
 
     // Préstamos y cuotas reales (con sellos si son de tarjeta), y tus fijos reales
-    let prest = 0, fijos = 0, prestAj = 0;
+    let prest = 0, fijos = 0, prestAj = 0, prestSue = 0;
     r.items.forEach((it) => {
       if (it.ingreso || it.ahorro || it.devolucion || it.deuda || it.soloDeuda || !it.monto) return;
       const conSellos = it.monto * (it.mv.medio && it.mv.medio !== "efectivo" ? 1 + sellos : 1);
       if (esPrestamoOCuota(it.mv)) {
         prest += conSellos;
         if (fc.prestamos.includes(it.mv.id)) prestAj += conSellos;
+        else if (fc.hogar.includes(it.mv.id)) prestSue += conSellos;
       } else if (it.mv.recurrente) {
         // Lo que te devuelve otra persona (Betty, etc.) sube igual, así que ajustamos solo tu parte
         fijos += conSellos - (it.credito || 0);
@@ -1418,6 +1535,14 @@ function proyectarEscenario(esc, cfg, movs, medios, opts) {
     let gastos = r.egresos - prest;
     gastos += fijos * (facFijos - 1);
     prest += prestAj * (facFijos - 1);
+    // HogAr: la cuota acompaña a los sueldos, mes a mes. Si el escenario no
+    // simula tu sueldo, sigue a la inflación.
+    if (prestSue) {
+      // La cuota de hoy va con el sueldo de hoy: sube lo mismo que sube tu sueldo desde acá
+      const s0 = s.activo !== false ? +s.neto || 0 : 0;
+      const facSue = s0 > 0 && sueldo[mk] > 0 ? sueldo[mk] / s0 : ix;
+      prest += prestSue * (facSue - 1);
+    }
     let prestEsc = 0;
     const det = [];
     (esc.items || []).forEach((it) => {
@@ -1644,6 +1769,34 @@ function planVacio() {
     rinde: "inflacion", inicialModo: "auto", inicial: 0,
     escenarioId: "",
   };
+}
+
+// Tu plan real: Territory SEL 70/30 en 84 cuotas con entrega pactada en cuota 3 (VIEL),
+// retirando la Trend Híbrida. Tres planes iguales que solo cambian cuánto sube el auto
+// por mes después de las cuotas fijas (y el Cronos acompaña esa suba).
+function planesTerritoryVIEL() {
+  const base = {
+    inicio: "2026-10",
+    vm: 48861930, pctFin: 0.7, cuotasPlan: 84, admin: 0.121,       // 0,0833% + IVA sobre la pura
+    vida: 20000, vidaModo: "saldo",
+    admision: 29561, admisionCuotas: 60,                              // 0,05% + IVA, cuotas 2 a 61
+    cuotaFija: 409000, fijaHasta: 12,                                 // $409k final, fija hasta la 12 (se mantiene post swap)
+    integracion: 14658579, cuotasPagas: 84,                           // 30% complementaria
+    ipc: 0.017, inflModo: "fija",
+    mAdj: 3, oferta: 19544772, sobrante: "baja",                      // 40% en cuota 3 (swap VIEL)
+    // El Cronos lo toma VIEL como el 40%: cuenta en el mismo mes del acto
+    cronosVenta: 23000000, cronosPatente: 0, cronosEntrega: "acto",
+    mesesRetiro: 1,                                                   // pedido en dic, retiro en ene
+    gastosRetiro: 3300000,                                            // cambio SEL → Híbrida
+    seguroNuevo: 191918, seguroViejo: 136918, naftaExtra: 0, patenteNueva: 0,
+    tope: 700000, rinde: "inflacion", inicialModo: "auto", inicial: 0, escenarioId: "",
+  };
+  return [["baja", 0.012], ["media", 0.017], ["alta", 0.025]].map(([n, a], k) => ({
+    ...base, id: "plan" + Date.now() + k,
+    nombre: "Territory Híbrida · auto +" + (a * 100).toFixed(1).replace(".", ",") + "%/mes",
+    autoSuba: a, cronosSuba: a,
+    activo: n === "media",   // solo uno prendido para que Hoy no lo cuente tres veces
+  }));
 }
 
 // Los tres casos de licitación que querés tener a mano
@@ -2463,6 +2616,67 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
 
   const yaEsta = (m) => movs.some((x) =>
     x.detalleOrig === m.detalle && Math.round(x.montoCuota || 0) === Math.round(m.monto) && x.fechaCompra === m.fecha);
+  const [reemplazar, setReemplazar] = useState(true);
+  const [accion, setAccion] = useState({});   // id del gasto sin match -> "mover" | "borrar" | "dejar"
+
+  // El resumen es la verdad de ese mes para esa tarjeta. Buscamos lo que ya
+  // tenías cargado a mano en ese mes y tarjeta, y lo emparejamos con las líneas del
+  // resumen para no contarlo dos veces (y no perder con quién lo compartiste).
+  const mesRes = res && res.ciclos && res.ciclos.vto ? res.ciclos.vto.slice(0, 7) : null;
+  const plan = useMemo(() => {
+    const vacio = { match: {}, sinMatch: [] };
+    if (!res || !medio || !mesRes) return vacio;
+    const porCuota = (x) => x.moneda === "USD"
+      ? (+x.montoUsd || 0) / Math.max(1, x.cuotas || 1)
+      : (+x.montoCuota || (+x.monto || 0) / Math.max(1, x.cuotas || 1));
+    const cands = movs.filter((x) => x.tipo === "gasto" && !x.recurrente && x.medio === medio
+      && x.pagadoPor !== "otro" && x.mesInicio && distMes(x.mesInicio, mesRes) >= 0
+      && distMes(x.mesInicio, mesRes) < Math.max(1, x.cuotas || 1));
+    const dias = (a, b) => (a && b) ? Math.abs((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000) : 99;
+    const palabras = (t) => normBusca(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+    // Todos los pares posibles con su puntaje; después se asignan de mejor a peor,
+    // así un gasto que no cargaste no le "roba" la pareja a otro parecido.
+    const pares = [];
+    res.movs.forEach((m, i) => {
+      if (yaEsta(m)) return;
+      const usd = !!m.montoUsd, val = usd ? +m.montoUsd : +m.monto;
+      const pa = palabras(m.detalle + " " + limpiarComercio(m.detalle));
+      cands.forEach((x) => {
+        if ((x.moneda === "USD") !== usd) return;
+        const v = porCuota(x);
+        const dif = Math.abs(v - val);
+        const d = dias(x.fechaCompra || x.fecha, m.fecha);
+        const nombre = palabras((x.detalleOrig || "") + " " + (x.detalle || "")).some((w) =>
+          pa.some((q) => q.includes(w) || w.includes(q)));
+        const exacto = dif <= (usd ? 0.01 : 1);
+        const cerca = dif <= val * 0.005;
+        // Importe distinto solo si el nombre coincide y la fecha es casi la misma
+        const tolerable = nombre && d <= 3 && dif <= val * 0.05;
+        if (!exacto && !cerca && !tolerable) return;
+        if (d > 5 && !nombre) return;
+        // Sin fecha cargada (gastos viejos en cuotas): alcanza con nombre + importe
+        if (d > 45 && !(d === 99 && nombre && (exacto || cerca))) return;
+        const p = (exacto ? 4 : cerca ? 2 : 0) + (d === 0 ? 4 : d <= 1 ? 3 : d <= 3 ? 2 : d <= 5 ? 1 : 0)
+                + (nombre ? 2 : 0);
+        pares.push({ i, x, p, d, dif });
+      });
+    });
+    pares.sort((a, b) => b.p - a.p || a.d - b.d || a.dif - b.dif);
+    const usados = new Set(), match = {};
+    pares.forEach(({ i, x }) => {
+      if (match[i] || usados.has(x.id)) return;
+      match[i] = x; usados.add(x.id);
+    });
+    // Lo que cargaste para ese resumen pero el banco no trae
+    const cierre = res.ciclos && res.ciclos.cierre;
+    const sinMatch = cands.filter((x) => !usados.has(x.id) && !x.detalleOrig).map((x) => {
+      const fx = x.fechaCompra || x.fecha;
+      // Si es posterior al cierre, va al próximo resumen. Si es anterior, debería estar
+      // en este: seguramente figura con otro importe.
+      return { ...x, _dentro: !!(fx && cierre && fx <= cierre) };
+    });
+    return { match, sinMatch };
+  }, [res, medio, movs, mesRes]);
 
   const procesar = async (file, clave) => {
     setEtapa("leyendo"); setError("");
@@ -2472,12 +2686,13 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
       if (!r.movs.length) throw new Error("No encontré movimientos. ¿Es el resumen completo?");
       // Un banco puede tener varias tarjetas: hay que mirar banco Y marca, si no
       // un resumen de Mastercard cae en la Visa del mismo banco.
-      const clave = (r.banco || "").split(" ").pop().toLowerCase();   // "icbc", "nación", "provincia"
+      // Ojo: no llamarla "clave", que es el parámetro con la contraseña del PDF
+      const claveBanco = (r.banco || "").split(" ").pop().toLowerCase();   // "icbc", "nación", "provincia"
       const esMaster = (t) => /master|mc\b/i.test(t);
       const puntaje = (x) => {
         const n = ((x.nombre || "") + " " + (x.corto || "") + " " + (x.banco || "")).toLowerCase();
         let p = 0;
-        if (clave && clave !== "desconocido" && n.includes(clave)) p += 2;
+        if (claveBanco && claveBanco !== "desconocido" && n.includes(claveBanco)) p += 2;
         if (esMaster(n) === (r.marca === "Mastercard")) p += 3;       // la marca pesa más
         return p;
       };
@@ -2488,6 +2703,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
       setDudoso(!auto);
       const s = {};
       r.movs.forEach((m, i) => { s[i] = !yaEsta(m); });
+      setAccion({});
       setRes(r); setSel(s); setEtapa("revisar"); setPidePass(false);
     } catch (e) {
       const msg = String(e && e.message);
@@ -2498,9 +2714,27 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
 
   const importar = () => {
     const mesPago = res.ciclos.vto ? res.ciclos.vto.slice(0, 7) : mesDeHoy();
-    const nuevos = res.movs.filter((_, i) => sel[i]).map((m, k) => {
+    const cambios = [];   // { id, accion: "borrar" | "truncar" | "mover", cuotas? }
+    const nuevos = res.movs.map((m, i) => [m, i]).filter(([, i]) => sel[i]).map(([m, i], k) => {
       // El resumen muestra el valor de UNA cuota; la app guarda el total y lo reparte.
       const restantes = Math.max(1, m.cuotas - m.cuota + 1);
+      const viejo = reemplazar ? plan.match[i] : null;
+      if (viejo) {
+        // El viejo queda solo con los meses anteriores a este resumen
+        const antes = distMes(viejo.mesInicio, mesPago);
+        cambios.push(antes > 0 ? { id: viejo.id, accion: "truncar", cuotas: antes } : { id: viejo.id, accion: "borrar" });
+      }
+      const hereda = viejo ? {
+        ...(viejo.persona ? { persona: viejo.persona, pct: viejo.pct } : {}),
+        ...(viejo.categoria ? { categoria: viejo.categoria } : {}),
+        ...(viejo.excepcional ? { excepcional: true } : {}),
+        ...(viejo.soloDeuda ? { soloDeuda: true } : {}),
+        ...(viejo.consume && restantes === 1 ? { consume: viejo.consume } : {}),
+        ...(viejo.devPct || viejo.devTope ? { devPct: viejo.devPct, devTope: viejo.devTope,
+                                               devMes: viejo.devMes, devDestino: viejo.devDestino } : {}),
+        // Si le pusiste un nombre propio, lo respetamos
+        ...(viejo.detalle && !viejo.detalleOrig ? { detalle: viejo.detalle } : {}),
+      } : {};
       return {
         id: "imp" + Date.now() + "_" + k,
         tipo: "gasto",
@@ -2515,10 +2749,18 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         mesInicio: mesPago,
         categoria: adivinarCategoria(limpiarComercio(m.detalle) + " " + m.detalle),
         recurrente: false, pagadoPor: "yo",
+        // Bonificación del comercio sobre una compra en cuotas: reintegro único en este resumen
+        ...(m.bonif ? { devTope: Math.round(m.bonif), devDestino: "tarjeta", devMes: "mismo" } : {}),
+        ...hereda,
       };
     });
+    if (reemplazar) plan.sinMatch.forEach((x) => {
+      const a = accion[x.id] || (x._dentro ? "dejar" : "mover");
+      if (a === "borrar") cambios.push({ id: x.id, accion: "borrar" });
+      if (a === "mover") cambios.push({ id: x.id, accion: "mover", mes: sumaMes(mesPago, 1) });
+    });
     // Si el resumen trae fechas de ciclo, las guardamos: se acaba tener que cargarlas a mano
-    onImportar(nuevos, res.ciclos, medio, res.fin);
+    onImportar(nuevos, res.ciclos, medio, res.fin, cambios);
     onCerrar();
   };
 
@@ -2615,6 +2857,55 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
               ))}
             </div>
 
+            {medio && mesRes && (Object.keys(plan.match).length > 0 || plan.sinMatch.length > 0) && (
+              <div className="card" style={{ padding: 15, marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 620 }}>
+                    Reemplazar lo cargado en {etiqMesLargo(mesRes)}
+                  </span>
+                  <button className={"chip sm" + (reemplazar ? " on" : "")}
+                    onClick={() => setReemplazar(!reemplazar)}>{reemplazar ? "Sí" : "No"}</button>
+                </div>
+                <div style={{ fontSize: 12.5, color: T.suave, marginTop: 6, lineHeight: 1.55 }}>
+                  {reemplazar
+                    ? "El resumen pasa a ser lo real de esta tarjeta en ese mes. Lo que cargaste a mano se reemplaza por la línea del banco, y se mantiene con quién lo compartiste, la categoría y el nombre que le pusiste."
+                    : "Se agregan las líneas marcadas y no se toca nada de lo que ya cargaste. Ojo que puede quedar duplicado."}
+                </div>
+                {reemplazar && Object.keys(plan.match).length > 0 && (
+                  <div style={{ fontSize: 12.5, marginTop: 10, lineHeight: 1.6 }}>
+                    <b>{Object.keys(plan.match).length}</b> {Object.keys(plan.match).length === 1 ? "gasto cargado a mano coincide" : "gastos cargados a mano coinciden"} con el resumen
+                    y {Object.keys(plan.match).length === 1 ? "se reemplaza" : "se reemplazan"} (los ves marcados abajo).
+                  </div>
+                )}
+                {reemplazar && plan.sinMatch.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 12.5, marginTop: 12, lineHeight: 1.55 }}>
+                      <b>No los encontré en el resumen</b> ({plan.sinMatch.length}). ¿Qué hago con cada uno?
+                    </div>
+                    {plan.sinMatch.map((x) => (
+                      <div key={x.id} style={{ borderTop: `1px solid ${T.linea}`, marginTop: 9, paddingTop: 9 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                          <span>{x.detalle}{x.persona ? ` · con ${x.persona}` : ""}</span>
+                          <span className="num">{x.moneda === "USD" ? `USD ${x.montoUsd}` : plata(x.montoCuota || (x.monto || 0) / Math.max(1, x.cuotas || 1))}</span>
+                        </div>
+                        {x._dentro && (
+                          <div style={{ fontSize: 11.5, color: T.ambar, marginTop: 4, lineHeight: 1.45 }}>
+                            Es de antes del cierre: si figura en el resumen con otro importe, borralo.
+                          </div>
+                        )}
+                        <div style={{ display: "flex", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                          {[["mover", "Al próximo resumen"], ["dejar", "Dejarlo"], ["borrar", "Borrarlo"]].map(([v, n]) => (
+                            <button key={v} className={"chip sm" + ((accion[x.id] || (x._dentro ? "dejar" : "mover")) === v ? " on" : "")}
+                              onClick={() => setAccion({ ...accion, [x.id]: v })}>{n}</button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
                           marginBottom: 9 }}>
               <span style={{ fontSize: 14.5, fontWeight: 620 }}>{marcados} de {res.movs.length}</span>
@@ -2647,6 +2938,11 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
                         {m.fecha.split("-").reverse().join("/")}
                         {m.cuotas > 1 && ` · cuota ${m.cuota} de ${m.cuotas} · quedan ${rest}`}
                         {rep && " · ya lo tenés cargado"}
+                        {!rep && reemplazar && plan.match[i] && (
+                          <span style={{ color: T.verde }}>
+                            {` · reemplaza "${plan.match[i].detalle}"`}{plan.match[i].persona ? ` (con ${plan.match[i].persona})` : ""}
+                          </span>
+                        )}
                       </span>
                     </span>
                     <span className="num" style={{ fontSize: 13.5, whiteSpace: "nowrap" }}>
@@ -3697,6 +3993,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     }
     if (f.persona && f.tipo !== "ingreso") { mv.persona = f.persona; mv.pct = (+f.pct || 0) / 100; }
     if (f.tipo === "gasto" && f.categoria) mv.categoria = f.categoria;
+    // Cómo se ajusta la cuota de un préstamo (para proyectar en Simular)
+    if (f.tipo === "gasto" && f.recurrente && f.categoria === "Préstamos" &&
+        ["fija", "inflacion", "sueldo"].includes(f.ajustaPor)) mv.ajustaPor = f.ajustaPor;
     if (f.recurrente && +f.cuotasRestantes > 0)
       mv.hasta = sumaMes(mesDeHoy(), +f.cuotasRestantes - 1);
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
@@ -4013,6 +4312,26 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                   onClick={() => set("categoria", f.categoria === c ? "" : c)}>{c}</button>
               ))}
             </div>
+            {f.recurrente && f.categoria === "Préstamos" && (
+              <>
+                <label className="lbl" style={{ marginTop: 16 }}>¿Cómo se ajusta la cuota?</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {[["fija", "Fija"], ["inflacion", "Con la inflación (UVA, ANSES)"], ["sueldo", "Con los sueldos (HogAr)"]].map(([v, n]) => (
+                    <button key={v} className={"chip sm" + ((f.ajustaPor || "") === v ? " on" : "")}
+                      onClick={() => set("ajustaPor", f.ajustaPor === v ? "" : v)}>{n}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+                  {f.ajustaPor === "sueldo"
+                    ? "Procrear 2020/21: la cuota sube todos los meses con los salarios. En Simular sube lo mismo que tu sueldo."
+                    : f.ajustaPor === "inflacion"
+                    ? "En Simular sube con la inflación, cada vez que ajustan tus fijos."
+                    : f.ajustaPor === "fija"
+                    ? "La cuota no cambia."
+                    : "Sirve para proyectar en Simular. Cada mes podés poner el importe real tocándolo en Hoy."}
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -4333,7 +4652,7 @@ function Vencimientos({ medios }) {
   );
 }
 
-function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti, estadoCoti, onRefrescar, tcVivo,
+function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLiquidar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar,
@@ -4344,6 +4663,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
   const [editItem, setEditItem] = useState(null);
   const [valor, setValor] = useState("");
   const [verSaldados, setVerSaldados] = useState(null);
+  // Liquidar con una persona: qué grupo tiene abierto el "parcial" y cuánto
+  const [liqAbierta, setLiqAbierta] = useState(null);
+  const [liqValor, setLiqValor] = useState("");
   const [agrupar, setAgrupar] = useState("medio");
   const [busca, setBusca] = useState("");
   const [tipoVer, setTipoVer] = useState("todo");   // todo | fijos | cuotas | consumos
@@ -4422,7 +4744,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       ["Tarjetas", -f.tarjetas],
                       ["Efectivo y débito", -(f.efvo - f.totalDeudas - f.ahorro)],
                       ...(f.totalDev > 0 ? [["Reintegros del banco", f.totalDev]] : []),
-                      ...(f.netos || []).map((x) => [
+                      ...(f.netos || []).filter((x) => x.neto).map((x) => [
                         (x.neto > 0 ? "Te devuelve " : "Le transferís a ") + x.persona, x.neto]),
                       ["Compra de dólares", -f.ahorro]]
                       .filter(([, v]) => v)
@@ -4644,11 +4966,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       if (!fb) return 1;
                       return fa < fb ? 1 : fa > fb ? -1 : 0;
                     });
-                    const meter = (titulo, sub, arrIn, color, totalFijo, persona, corto) => {
+                    const meter = (titulo, sub, arrIn, color, totalFijo, persona, corto, per) => {
                       const arr = ordenar(arrIn);
                       // Buscando: solo las secciones que tienen algo que coincide
                       if (filtrando && !arr.length) return;
-                      if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color, persona,
+                      if (arr.length || totalFijo != null) grupos.push({ titulo, sub, arr, color, persona, per,
                         corto: corto || titulo,
                         total: totalFijo != null && !filtrando ? totalFijo : arr.reduce((a, b) => a + b.monto, 0) });
                     };
@@ -4688,9 +5010,18 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                       (f.netos || []).forEach((x) => {
                         const arr = pend.filter((i) => i.mv.persona === x.persona
                           && (i.deuda || i.soloDeuda || (i.credito || 0) > 0));
+                        const notas = [];
+                        if (x.arrastre) notas.push("incluye " + corta(Math.abs(x.arrastre)) +
+                          (x.arrastre > 0 ? " que te debía de antes" : " que le debías de antes"));
+                        if (x.liquidado) notas.push((x.liquidado > 0 ? "ya te pasó " : "ya le pasaste ") + corta(Math.abs(x.liquidado)));
+                        if (!x.neto) {
+                          meter(x.persona + " · saldado", notas.join(" · "), arr, T.tenue, 0, x.persona, x.persona, x);
+                          return;
+                        }
                         meter(x.neto < 0 ? "Le transferís a " + x.persona : "Te devuelve " + x.persona,
-                              "neto, ya cruzado con lo que " + (x.neto < 0 ? "te debe" : "le debés"),
-                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto), x.persona, x.persona);
+                              notas.length ? notas.join(" · ")
+                                : "neto, ya cruzado con lo que " + (x.neto < 0 ? "te debe" : "le debés"),
+                              arr, x.neto < 0 ? T.tinta : T.verde, Math.abs(x.neto), x.persona, x.persona, x);
                       });
                     }
 
@@ -4777,6 +5108,60 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                               </span>
                             </div>
                             {g.arr.map((it) => fila(it, g.persona))}
+                            {g.per && onLiquidar && f.mk === mesAct && !filtrando && (() => {
+                              const x = g.per;
+                              const clave = f.mk + "|" + x.persona;
+                              const abierta = liqAbierta === clave;
+                              const recibo = x.neto > 0;
+                              const falta = Math.abs(x.neto);
+                              // Guardamos lo liquidado en el mes, acumulado y con signo
+                              const registrar = (monto) => {
+                                const m = Math.min(Math.abs(monto), falta);
+                                if (!m) return;
+                                onLiquidar(f.mk, x.persona, (x.liquidado || 0) + (recibo ? m : -m));
+                                setLiqAbierta(null); setLiqValor("");
+                              };
+                              return (
+                                <div style={{ marginTop: 8 }}>
+                                  {falta > 0 && (
+                                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                                      <button className="chip sm" onClick={() => registrar(falta)}>
+                                        {recibo ? "Ya me lo pasó" : "Ya se lo pasé"} · {corta(falta)}
+                                      </button>
+                                      <button className={"chip sm" + (abierta ? " on" : "")}
+                                        onClick={() => { setLiqAbierta(abierta ? null : clave); setLiqValor(""); }}>
+                                        Una parte
+                                      </button>
+                                    </div>
+                                  )}
+                                  {abierta && falta > 0 && (
+                                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                                      <input className="num" inputMode="numeric" value={liqValor} autoFocus
+                                        placeholder={recibo ? "¿Cuánto te pasó?" : "¿Cuánto le pasaste?"}
+                                        onChange={(e) => setLiqValor(e.target.value.replace(/[^\d]/g, ""))}
+                                        style={{ textAlign: "right", padding: "9px 11px" }} />
+                                      <button onClick={() => registrar(+liqValor || 0)}
+                                        style={{ padding: "10px 15px", borderRadius: 9, background: T.tinta,
+                                                 color: "#fff", fontSize: 13.5, fontWeight: 600, flexShrink: 0 }}>
+                                        Guardar
+                                      </button>
+                                    </div>
+                                  )}
+                                  <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 7, lineHeight: 1.5 }}>
+                                    {falta > 0
+                                      ? (recibo ? `Al marcarlo sumo lo que te pasó a tu caja. ` : `Al marcarlo descuento lo que le pasaste de tu caja. `) +
+                                        "Lo que no se salde este mes pasa al que viene."
+                                      : "Está todo saldado este mes."}
+                                    {x.liquidado ? (
+                                      <button onClick={() => onLiquidar(f.mk, x.persona, null)}
+                                        style={{ marginLeft: 6, fontSize: 11.5, color: T.ambar, fontWeight: 600 }}>
+                                        Deshacer lo registrado
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))}
 
@@ -4794,7 +5179,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, coti
                           </div>
                         )}
 
-                        {!pendTodo.length && (
+                        {!pendTodo.length && !(f.netos || []).some((x) => x.neto) && (
                           <div style={{ padding: "0 15px 14px", fontSize: 12.5, color: T.suave, lineHeight: 1.5 }}>
                             No queda nada por pagar ni por cobrar en este mes.
                           </div>
@@ -6151,7 +6536,7 @@ function EditorEscenario({ esc, onCambiar, movs, macroCfg, medios }) {
         </Dos>
         {(() => {
           const fc = configFijos(esc, movs);
-          const upFi = (patch) => up({ fijos: { modo: fc.modo, cada: fc.cada, prestamos: fc.prestamos, ...(esc.fijos || {}), ...patch } });
+          const upFi = (patch) => up({ fijos: { modo: fc.modo, cada: fc.cada, ...(esc.fijos || {}), ...patch } });
           const prestamosReales = (movs || []).filter((m) => m.tipo === "gasto" && m.categoria === "Préstamos" && m.recurrente);
           return (
             <>
@@ -6167,22 +6552,27 @@ function EditorEscenario({ esc, onCambiar, movs, macroCfg, medios }) {
                     nota={`Ajustan en ${mesesDeAjuste(fc).join(", ")}, alineados con tu sueldo. Cada ajuste recupera la inflación acumulada desde el anterior.`}>
                     <NumIn modo="int" value={fc.cada} onChange={(v) => upFi({ cada: Math.max(1, Math.min(12, v)) })} />
                   </Campo>
-                  {prestamosReales.length > 0 && (
-                    <Campo label="Préstamos que también ajustan (ej. ANSES)">
-                      {prestamosReales.map((m) => {
-                        const on = fc.prestamos.includes(m.id);
-                        return (
-                          <button key={m.id} onClick={() => upFi({ prestamos: on ? fc.prestamos.filter((x) => x !== m.id) : [...fc.prestamos, m.id] })}
-                            style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10,
-                                     padding: "8px 0", borderTop: `1px solid ${T.linea}`, textAlign: "left" }}>
-                            <span style={{ fontSize: 13 }}>{m.detalle} <span className="num" style={{ color: T.tenue, fontSize: 11.5 }}>{plataR(m.monto)}</span></span>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: on ? T.verde : T.tenue, flexShrink: 0 }}>{on ? "ajusta" : "cuota fija"}</span>
-                          </button>
-                        );
-                      })}
-                    </Campo>
-                  )}
                 </>
+              )}
+              {prestamosReales.length > 0 && (
+                <Campo label="Tus préstamos: ¿cómo ajusta la cuota?"
+                  nota={"Inflación: sube cuando ajustan tus fijos" + (fc.modo === "periodico" ? "" : " (hoy tus fijos quedan como están, así que no sube)") +
+                        ". Sueldos (HogAr): sube lo mismo que tu sueldo."}>
+                  {prestamosReales.map((m) => {
+                    const t = fc.tipoDe[m.id] || "fija";
+                    return (
+                      <div key={m.id} style={{ padding: "8px 0", borderTop: `1px solid ${T.linea}` }}>
+                        <div style={{ fontSize: 13 }}>{m.detalle} <span className="num" style={{ color: T.tenue, fontSize: 11.5 }}>{plataR(m.monto)}</span></div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                          {[["fija", "Fija"], ["inflacion", "Inflación"], ["sueldo", "Sueldos (HogAr)"]].map(([v, n]) => (
+                            <button key={v} className={"chip sm" + (t === v ? " on" : "")}
+                              onClick={() => upFi({ ajustes: { ...((esc.fijos || {}).ajustes || {}), [m.id]: v } })}>{n}</button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </Campo>
               )}
             </>
           );
@@ -7308,6 +7698,12 @@ function Planes({ cfg, setCfg, movs, medios, abrirId, onAbierto }) {
   const guardar = (l) => setCfg({ ...cfg, planes: l });
   const upd = (patch) => guardar(planes.map((x) => (x.id === plan.id ? { ...x, ...patch } : x)));
   const nuevo = () => { const p = planVacio(); guardar([...planes, p]); setSel(p.id); };
+  const tieneVIEL = planes.some((x) => /^Territory Híbrida/.test(x.nombre || ""));
+  const cargarVIEL = () => {
+    const ps = planesTerritoryVIEL();
+    // Si hay otro plan prendido, lo apagamos: el de la suba media pasa a verse en Hoy
+    guardar([...planes.map((x) => ({ ...x, activo: false })), ...ps]); setSel(ps[1].id);
+  };
 
   // Tu flujo sin el plan: lo pesado. Solo se recalcula si cambia algo que lo afecta.
   const cfgBase = useCfgSinPlanes(cfg);
@@ -7322,7 +7718,12 @@ function Planes({ cfg, setCfg, movs, medios, abrirId, onAbierto }) {
           Simulá un plan de ahorro con licitación encima de tu flujo: cuotas, oferta, venta del Cronos,
           retiro y lo que te cuesta el auto nuevo. <b style={{ color: T.tinta }}>Nunca toca tus movimientos.</b>
         </div>
-        <button className="btn" style={{ marginTop: 14 }} onClick={nuevo}>Crear "Plan Ford → Territory"</button>
+        <button className="btn" style={{ marginTop: 14 }} onClick={cargarVIEL}>Cargar mi Territory Híbrida (VIEL)</button>
+        <div style={{ fontSize: 12, color: T.suave, marginTop: 8, lineHeight: 1.5 }}>
+          Plan SEL 70/30 en 84 cuotas, entrega pactada en cuota 3 con el 40%, retiro en enero con el
+          Cronos. Te crea tres versiones según cuánto sube el auto después de las 12 cuotas fijas.
+        </div>
+        <button className="chip sm" style={{ marginTop: 12 }} onClick={nuevo}>O crear uno vacío</button>
       </div>
     );
   }
@@ -7341,6 +7742,7 @@ function Planes({ cfg, setCfg, movs, medios, abrirId, onAbierto }) {
         {planes.map((x) => (
           <button key={x.id} className={"chip sm" + (x.id === plan.id ? " on" : "")} onClick={() => setSel(x.id)}>{x.nombre}</button>
         ))}
+        {!tieneVIEL && <button className="chip sm" onClick={cargarVIEL}>+ Mi Territory (VIEL)</button>}
         <button className="chip sm" onClick={nuevo}>+ Nuevo</button>
       </div>
 
@@ -7695,12 +8097,14 @@ export default function App() {
       const vivos = new Set(movsN.map((m) => m.id));
       // Las claves auxiliares (dev|xxx) cuelgan del movimiento xxx
       const raiz = (id) => String(id).replace(/^dev\|/, "");
+      // Las liquidaciones con personas (per|Nombre) no cuelgan de ningún movimiento
+      const vive = (id) => String(id).startsWith("per|") || vivos.has(raiz(id));
       let cajaFix = c.saldoHoy || 0, resFix = c.reservasUsd || 0, huerfanos = 0;
       const apLimpio = {};
       Object.keys(c.aplicados || {}).forEach((k) => {
         const mes = {};
         Object.keys(c.aplicados[k] || {}).forEach((id) => {
-          if (vivos.has(raiz(id))) mes[id] = c.aplicados[k][id];
+          if (vive(id)) mes[id] = c.aplicados[k][id];
           else {
             cajaFix += c.aplicados[k][id].pesos;
             resFix -= c.aplicados[k][id].usd;
@@ -7717,9 +8121,11 @@ export default function App() {
       // Ajustes que apuntan a movimientos borrados: sobran
       Object.keys(c.ajustes || {}).forEach((k) => {
         const mes = {};
-        Object.keys(c.ajustes[k] || {}).forEach((id) => { if (vivos.has(raiz(id))) mes[id] = c.ajustes[k][id]; });
+        Object.keys(c.ajustes[k] || {}).forEach((id) => { if (vive(id)) mes[id] = c.ajustes[k][id]; });
         c.ajustes[k] = mes;
       });
+      // Desde acá se arrastra lo que no se salda con cada persona
+      if (!c.personasDesde) c.personasDesde = mk;
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
@@ -7906,6 +8312,30 @@ export default function App() {
              reservasUsd: Math.max(0, Math.round(res * 100) / 100) });
   };
 
+  // Registrar que una persona te pasó plata (+) o que se la pasaste vos (−).
+  // total = lo liquidado ESE mes con esa persona, acumulado. null = deshacer.
+  const liquidar = (mk, persona, total) => {
+    const id = "per|" + persona;
+    marcarUndo("lo registrado con " + persona);
+    const a = { ...(cfg.ajustes || {}) };
+    const delMes = { ...(a[mk] || {}) };
+    const ap = { ...(cfg.aplicados || {}) };
+    const apMes = { ...(ap[mk] || {}) };
+    let caja = cfg.saldoHoy || 0;
+    // Primero se revierte lo que ya estaba registrado, así nunca se cuenta dos veces
+    if (apMes[id]) { caja += apMes[id].pesos; delete apMes[id]; }
+    if (!total) delete delMes[id];
+    else {
+      delMes[id] = Math.round(total);
+      // Te lo pasaron: entra a la caja. Se lo pasaste: sale.
+      apMes[id] = { usd: 0, pesos: -Math.round(total) };
+      caja += Math.round(total);
+    }
+    a[mk] = delMes; ap[mk] = apMes;
+    setCfg({ ...cfg, ajustes: a, aplicados: ap, saldoHoy: Math.round(caja),
+             personasDesde: cfg.personasDesde || mesDeHoy() });
+  };
+
   const { coti, estado: estadoCoti, refrescar } = useCotizacion(cfg.tcFuente || "blue", !!cfg.tcAuto);
   const tcVivo = cfg.tcAuto && coti && coti.fuente === (cfg.tcFuente || "blue")
     ? (cfg.tcLado === "venta" ? coti.venta : coti.compra) : null;
@@ -7989,7 +8419,7 @@ export default function App() {
       {tab === "hoy" && (
         <Hoy
           cfg={{ ...cfgTC, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
-          onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar}
+          onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar} onLiquidar={liquidar}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
           historial={historial} cerradas={[]} estimados={estimados}
           invertido={(() => {
@@ -8119,8 +8549,27 @@ export default function App() {
       {verImportar && (
         <ImportarResumen
           medios={medios} movs={movs}
-          onImportar={(nuevos, ciclos, medioId, fin) => {
-            setMovs([...movs, ...nuevos]);
+          onImportar={(nuevos, ciclos, medioId, fin, cambios = []) => {
+            marcarUndo("la importación del resumen");
+            // El resumen reemplaza lo cargado a mano en ese mes y tarjeta
+            const porId = {};
+            cambios.forEach((c) => { porId[c.id] = c; });
+            const quedan = movs.flatMap((m) => {
+              const c = porId[m.id];
+              if (!c) return [m];
+              if (c.accion === "borrar") return [];
+              if (c.accion === "mover") return [{ ...m, mesInicio: c.mes }];
+              if (c.accion === "truncar") {
+                const n = Math.max(1, c.cuotas);
+                const unit = m.moneda === "USD" ? null : (+m.montoCuota || (+m.monto || 0) / Math.max(1, m.cuotas || 1));
+                const unitUsd = m.moneda === "USD" ? (+m.montoUsd || 0) / Math.max(1, m.cuotas || 1) : null;
+                return [{ ...m, cuotas: n,
+                          ...(unit != null ? { monto: Math.round(unit * n) } : {}),
+                          ...(unitUsd != null ? { montoUsd: Math.round(unitUsd * n * 100) / 100 } : {}) }];
+              }
+              return [m];
+            });
+            setMovs([...quedan, ...nuevos]);
             // Ese mes ya no se estima: tenemos el resumen real
             if (medioId && ciclos && ciclos.vto) {
               setCfg({ ...cfg, resumenes: { ...(cfg.resumenes || {}),
