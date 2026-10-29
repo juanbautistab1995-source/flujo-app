@@ -11,6 +11,9 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 - Se usa desde un iPhone: todo tiene que andar bien en pantallas chicas y en Safari.
 
 ## Cómo piensa la app (no romper esto)
+- **Período de caja por sueldo** (`cfg.diaCobro`, `cfg.mesPorSueldo`, `DIA_CORTE`, `periodoDe()`). Si cobrás el 28,
+  noviembre va del 28/10 al 27/11: el sueldo del 28/10 paga noviembre. `mesDeHoy()` devuelve el período, no el mes calendario.
+  En el período en curso el sueldo ya está cobrado (lo tiene `saldoHoy`).
 - **Flujo de fondos por vencimiento.** Un gasto con tarjeta va al mes en que vence el resumen,
   que es cuando sale la plata. La compra puede ser de otro mes. `mesDePago()` decide eso con los ciclos de la tarjeta.
 - **Ciclos de tarjeta** (`medio.ciclos = [{cierre, vto, estimado?}]`). Los reales vienen de los resúmenes.

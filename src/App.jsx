@@ -189,8 +189,27 @@ const sumaMes = (mk, n) => mesDeIdx(idxMes(mk) + n);
 const distMes = (a, b) => idxMes(b) - idxMes(a);
 const etiqMes = (mk) => `${MESN[+mk.slice(5, 7) - 1]} ${mk.slice(2, 4)}`;
 const etiqMesLargo = (mk) => `${MESN[+mk.slice(5, 7) - 1]} 20${mk.slice(2, 4)}`;
-const mesDeHoy = () => new Date().toISOString().slice(0, 7);
-const hoyISO = () => new Date().toISOString().slice(0, 10);
+// Período de caja. Si cobrás el sueldo el día X, todo lo que pasa desde el X de un mes
+// es del mes siguiente: el sueldo del 28/10 paga noviembre, y noviembre arranca el 28/10.
+// DIA_CORTE = 0 vuelve a meses calendario (cfg.mesPorSueldo = false).
+let DIA_CORTE = 0;
+function fijarPeriodo(cfg) {
+  DIA_CORTE = cfg && cfg.mesPorSueldo !== false ? Math.min(28, Math.max(0, Math.round(+cfg.diaCobro || 0))) : 0;
+}
+// Fecha local (no UTC): a las 22 h de Argentina, UTC ya es el día siguiente.
+const fechaLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// A qué período de caja pertenece una fecha YYYY-MM-DD
+const periodoDe = (iso) => {
+  const t = String(iso || "");
+  const mk = t.slice(0, 7);
+  if (!DIA_CORTE || !/^\d{4}-\d{2}-\d{2}/.test(t)) return mk;
+  return +t.slice(8, 10) >= DIA_CORTE ? sumaMes(mk, 1) : mk;
+};
+const mesDeHoy = () => periodoDe(fechaLocal());
+const hoyISO = () => fechaLocal();
 
 const plata = (n, d = 0) =>
   (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -815,10 +834,10 @@ function normalizarCiclos(m) {
 function tarjetasVencidasEnMes(medios, mk) {
   const hoy = hoyISO();
   const out = {};
-  if (mk !== hoy.slice(0, 7)) return out;
+  if (mk !== mesDeHoy()) return out;
   (medios || []).forEach((md) => {
     if (!md || md.id === "efectivo") return;
-    const cs = ciclosDe(md).filter((c) => c && c.vto && c.vto.slice(0, 7) === mk);
+    const cs = ciclosDe(md).filter((c) => c && c.vto && periodoDe(c.vto) === mk);
     if (cs.length && cs.every((c) => c.vto < hoy)) out[md.id] = true;
   });
   return out;
@@ -863,10 +882,10 @@ function mesDePago(fecha, medioId, medios) {
   const m = (medios || []).find((x) => x.id === medioId);
   const d = new Date((fecha || "") + "T12:00:00");
   if (isNaN(d.getTime())) return mesDeHoy();
-  if (!m || m.id === "efectivo") return d.toISOString().slice(0, 7);
+  if (!m || m.id === "efectivo") return periodoDe(String(fecha).slice(0, 10));
 
   const c = cicloParaFecha(m, fecha);
-  if (c) return c.vto.slice(0, 7);
+  if (c) return periodoDe(c.vto);
 
   // Sin ciclos cargados: caemos al dia fijo del mes
   const ultimo = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
@@ -911,7 +930,8 @@ function mesConsumo(mv, mkPago, medios) {
 function montoEnMes(mv, mkPedido, tc, medios) {
   // Cobrás el 28 pero esa plata es del mes que viene: el ingreso se corre un mes
   // para quedar al lado de los gastos que va a pagar.
-  const mk = mv.paraMes === "siguiente" ? sumaMes(mkPedido, -1) : mkPedido;
+  // Con período de caja por sueldo esto ya está resuelto: no se corre dos veces.
+  const mk = !DIA_CORTE && mv.paraMes === "siguiente" ? sumaMes(mkPedido, -1) : mkPedido;
   // Un importe negativo no tiene sentido en este modelo y contaminaba los totales:
   // lo tratamos como cero en vez de dejar que reste.
   const num = (v) => {
@@ -941,7 +961,7 @@ function montoEnMes(mv, mkPedido, tc, medios) {
 
 function nroCuota(mv, mk) {
   if (mv.recurrente || !mv.mesInicio) return null;
-  return distMes(mv.mesInicio, mv.paraMes === "siguiente" ? sumaMes(mk, -1) : mk) + 1;
+  return distMes(mv.mesInicio, !DIA_CORTE && mv.paraMes === "siguiente" ? sumaMes(mk, -1) : mk) + 1;
 }
 
 // Deja todo el mes en cero: sirve para dar por saldado el mes en curso.
@@ -959,6 +979,7 @@ function estaConfirmado(cfg, mk, id) {
 // Los automáticos (suscripciones, seguros, servicios) se debitan solos y casi
 // nunca cambian. Los variables (nafta, súper) son una apuesta hasta que pasan.
 const esAuto = (mv) => mv.recurrente && mv.auto !== false;
+const esSueldo = (mv) => mv.id === "in_sueldo" || mv.esSueldo === true || /sueldo/i.test(mv.detalle || "");
 
 // El mes en curso y los que ya pasaron se arman SOLO con lo que cargaste.
 // Las bolsas estimadas (nafta, súper, gastos varios) valen de acá en adelante.
@@ -1075,6 +1096,7 @@ function arrastrePersonas(arr, cfg, medios, hasta) {
 }
 
 function proyectar(cfg, movs, medios, meses, extra) {
+  fijarPeriodo(cfg);
   const arr = extra ? [...movs, extra] : movs;
   // Meses de los que YA tenemos el resumen real de una tarjeta. Para esos, los
   // recurrentes de esa tarjeta dejan de estimar: manda el dato del resumen.
@@ -1152,6 +1174,11 @@ function proyectar(cfg, movs, medios, meses, extra) {
           reint.push({ persona: mv.persona, monto: m * pv, detalle: mv.detalle });
         }
         items.push({ mv, monto: 0, base: m, saldado: true, autoPagado: true, cuota: nroCuota(mv, mk) });
+        return;
+      }
+      // El sueldo de este período ya lo cobraste (es lo que lo abre) y tu saldo de hoy ya lo tiene.
+      if (DIA_CORTE && mk === mesDeHoy() && mv.tipo === "ingreso" && mv.recurrente && esSueldo(mv) && !tocado) {
+        items.push({ mv, monto: 0, base: m, ingreso: true, saldado: true, autoCobrado: true });
         return;
       }
       if (mv.tipo === "ingreso") {
@@ -4784,6 +4811,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
   const ahorroMes = mesEnCurso ? mesEnCurso.ahorro : 0;
   const pendiente = mesEnCurso ? mesEnCurso.egresos - mesEnCurso.ingresos : 0;
   const gastoPend = pendiente - ahorroMes;
+  // Lo que quedó sin marcar del período anterior. No se suma a la caja (tu saldo de hoy
+  // es el real), pero conviene verlo por si algo de verdad sigue pendiente.
+  const ant = historial.length ? historial[historial.length - 1] : null;
+  const pendAnt = ant && ant.mk === sumaMes(mesAct, -1)
+    ? ant.items.filter((x) => x.monto > 0 && !x.ingreso && !x.devolucion && !x.ahorro && !x.deuda
+        && (x.mv.medio || "efectivo") === "efectivo") : [];   // las tarjetas de ese período ya vencieron
+  const totPendAnt = pendAnt.reduce((a, x) => a + x.monto, 0);
+  const dd = (mk) => mk.slice(5, 7);
+  const rangoPeriodo = (mk) => DIA_CORTE
+    ? `del ${DIA_CORTE}/${dd(sumaMes(mk, -1))} al ${DIA_CORTE - 1}/${dd(mk)}`
+    : "este mes";
 
   const mesCard = (f, cerrado) => {
 
@@ -4802,7 +4840,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                       {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                      {f.mk === mesAct ? "este mes, en curso"
+                      {f.mk === mesAct ? `en curso · ${rangoPeriodo(f.mk)}`
                         : cerrado ? "ya pasó"
                         : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
@@ -5641,6 +5679,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
               if (fin.saldo < primero * 0.75) return `Vas para abajo. Lo más ajustado es ${etiqMesLargo(peor.mk)}.`;
               return "Te mantenés parejo en todo el período.";
             })()}
+          </div>
+        </div>
+      )}
+
+      {totPendAnt > 0 && (
+        <div className="card" style={{ padding: "11px 14px", marginTop: 14, background: "#F6F7F3" }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            De {etiqMesLargo(ant.mk)} quedaron {corta(totPendAnt)} sin marcar ({pendAnt.length})
+          </div>
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>
+            No se restan de tu caja: tu saldo de hoy ya es el real. Si algo de eso todavía no lo pagaste, cargalo en {etiqMesLargo(mesAct)}.
           </div>
         </div>
       )}
@@ -8092,6 +8141,8 @@ export default function App() {
   const [verCuenta, setVerCuenta] = useState(false);
   const [tab, setTab] = useState("hoy");
   const [cfg, setCfgRaw] = useState(CFG_INI);
+  // El período de caja depende del día de cobro: lo fijamos en cada render
+  fijarPeriodo(cfg);
   const [movs, setMovs] = useState(SEED);
   const [cargando, setCargando] = useState(true);
   const [falloCarga, setFalloCarga] = useState(false);
@@ -8191,6 +8242,7 @@ export default function App() {
       soloLectura.current = false;
 
       const mk = mesDeHoy();
+      fijarPeriodo({ ...CFG_INI, ...(cfgN || {}) });
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
                   ajustes: (cfgN && cfgN.ajustes) || {}, aplicados: (cfgN && cfgN.aplicados) || {} };
       if (nueva && !c.medios) c.medios = MEDIOS_NUEVO;
@@ -8238,6 +8290,26 @@ export default function App() {
       c.resumenes = resum;
       // Ciclos repetidos de las tarjetas: uno por cierre
       if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
+      // Período de caja por sueldo: los gastos en efectivo recientes hechos desde el día de cobro
+      // pasan al mes siguiente, con lo que ya hayas marcado de ellos (una sola vez).
+      if (DIA_CORTE && !c.periodoV1) {
+        const lim = new Date(); lim.setDate(lim.getDate() - 45);
+        const limISO = lim.toISOString().slice(0, 10);
+        movsN = movsN.map((m) => {
+          const f = String(m.fecha || "").slice(0, 10);
+          if (m.recurrente || (m.medio && m.medio !== "efectivo") || !f || f < limISO) return m;
+          if (m.mesInicio !== f.slice(0, 7) || periodoDe(f) === m.mesInicio) return m;
+          const de = m.mesInicio, a = periodoDe(f);
+          [c.ajustes, c.aplicados].forEach((tabla) => {
+            if (tabla && tabla[de] && Object.prototype.hasOwnProperty.call(tabla[de], m.id)) {
+              tabla[a] = { ...(tabla[a] || {}), [m.id]: tabla[de][m.id] };
+              const resto = { ...tabla[de] }; delete resto[m.id]; tabla[de] = resto;
+            }
+          });
+          return { ...m, mesInicio: a };
+        });
+        c.periodoV1 = true;
+      }
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
