@@ -4820,8 +4820,10 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
   const totPendAnt = pendAnt.reduce((a, x) => a + x.monto, 0);
   const dd = (mk) => mk.slice(5, 7);
   const rangoPeriodo = (mk) => DIA_CORTE
-    ? `del ${DIA_CORTE}/${dd(sumaMes(mk, -1))} al ${DIA_CORTE - 1}/${dd(mk)}`
+    ? `${DIA_CORTE}/${dd(sumaMes(mk, -1))} → ${DIA_CORTE - 1}/${dd(mk)}`
     : "este mes";
+  // Con período por sueldo, cada período se llama por el sueldo que lo paga (a mes vencido)
+  const nombrePeriodo = (mk) => DIA_CORTE ? `Sueldo de ${MESN[+sumaMes(mk, -1).slice(5, 7) - 1]}` : etiqMesLargo(mk);
 
   const mesCard = (f, cerrado) => {
 
@@ -4837,10 +4839,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 620 }}>
-                      {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
+                      {nombrePeriodo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
                       {f.mk === mesAct ? `en curso · ${rangoPeriodo(f.mk)}`
+                        : DIA_CORTE && !cerrado ? `${rangoPeriodo(f.mk)} · paga ${etiqMesLargo(f.mk)}`
                         : cerrado ? "ya pasó"
                         : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
@@ -5686,10 +5689,10 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
       {totPendAnt > 0 && (
         <div className="card" style={{ padding: "11px 14px", marginTop: 14, background: "#F6F7F3" }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>
-            De {etiqMesLargo(ant.mk)} quedaron {corta(totPendAnt)} sin marcar ({pendAnt.length})
+            {DIA_CORTE ? `Del ${nombrePeriodo(ant.mk).toLowerCase()}` : `De ${etiqMesLargo(ant.mk)}`} quedaron {corta(totPendAnt)} sin marcar ({pendAnt.length})
           </div>
           <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>
-            No se restan de tu caja: tu saldo de hoy ya es el real. Si algo de eso todavía no lo pagaste, cargalo en {etiqMesLargo(mesAct)}.
+            No se restan de tu caja: tu saldo de hoy ya es el real. Si algo de eso todavía no lo pagaste, cargalo en {DIA_CORTE ? `el ${nombrePeriodo(mesAct).toLowerCase()}` : etiqMesLargo(mesAct)}.
           </div>
         </div>
       )}
@@ -5876,7 +5879,7 @@ function AltaGasto({ medios, inicial, onGuardar, onBorrar, onCerrar }) {
 function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
   const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
   const hoy = hoyISO();
-  const [rango, setRango] = useState("mes");      // semana | mes | sueldo
+  const [rango, setRango] = useState("sueldo");   // sueldo | semana | mes
   const [mesVer, setMesVer] = useState(hoy.slice(0, 7));
   const [vista, setVista] = useState("medio");    // medio | cat
   const [alta, setAlta] = useState(null);         // null | {} nuevo | gasto a editar
@@ -5901,7 +5904,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
     let ini = new Date(h.getFullYear(), h.getMonth(), dc, 12);
     if (h.getDate() < dc) ini = new Date(h.getFullYear(), h.getMonth() - 1, dc, 12);
     desde = isoDe(ini); hasta = hoy;
-    titulo = `Desde que cobraste (${desde.slice(8, 10)}/${desde.slice(5, 7)})`;
+    const fin = sumaDias(isoDe(new Date(ini.getFullYear(), ini.getMonth() + 1, dc, 12)), -1);
+    titulo = `Sueldo de ${MESN[ini.getMonth()]} · ${desde.slice(8, 10)}/${desde.slice(5, 7)} → ${fin.slice(8, 10)}/${fin.slice(5, 7)}`;
   } else {
     desde = mesVer + "-01"; hasta = mesVer + "-31"; titulo = etiqMesLargo(mesVer);
   }
@@ -5932,8 +5936,11 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
   };
 
   // Traer lo que ya tenías cargado en la app (solo para arrancar; quedan como copias)
-  const yaCargados = movs.filter((mv) => !mv.recurrente && mv.tipo === "gasto"
-    && String(mv.fechaCompra || mv.fecha || "").slice(0, 7) === mesVer);
+  const yaCargados = movs.filter((mv) => {
+    if (mv.recurrente || mv.tipo !== "gasto") return false;
+    const f = String(mv.fechaCompra || mv.fecha || "").slice(0, 10);
+    return f >= desde && f <= hasta;
+  });
   const traer = () => {
     const ids = new Set(lista.map((g) => g.origen).filter(Boolean));
     const nuevos = yaCargados.filter((mv) => !ids.has(mv.id)).map((mv) => {
@@ -5960,7 +5967,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
       </div>
 
       <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
-        {[["semana", "Semana"], ["mes", "Mes"], ["sueldo", "Desde que cobré"]].map(([id, n]) => (
+        {[["sueldo", "Este sueldo"], ["semana", "Semana"], ["mes", "Mes"]].map(([id, n]) => (
           <button key={id} className={"chip sm" + (rango === id ? " on" : "")}
             onClick={() => { setRango(id); setFiltro(null); }}>{n}</button>
         ))}
@@ -6024,13 +6031,13 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
 
       {enRango.length === 0 && (
         <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "mes" ? "este mes" : "acá"}</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "sueldo" ? "en este sueldo" : rango === "mes" ? "este mes" : "esta semana"}</div>
           <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
             Tocá el <b>+</b> cada vez que gastes algo. Son tres toques: monto, en qué y con qué.
           </div>
-          {rango === "mes" && yaCargados.length > 0 && (
+          {yaCargados.length > 0 && (
             <button className="btn ghost" style={{ marginTop: 14 }} onClick={traer}>
-              Traer los {yaCargados.length} gastos de {etiqMesLargo(mesVer)} que ya tenés cargados
+              Traer {yaCargados.length === 1 ? "el gasto" : `los ${yaCargados.length} gastos`} de estas fechas que ya tenés cargados
             </button>
           )}
         </div>
