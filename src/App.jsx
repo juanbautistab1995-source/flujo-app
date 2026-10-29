@@ -792,6 +792,38 @@ function ciclosDe(m) {
   return (m.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
 }
 
+// Un ciclo por fecha de cierre: el real le gana al estimado. Y un estimado que cae
+// a menos de 10 días de un ciclo real es ese mismo ciclo mal estimado: se va.
+// Sin esto, el mismo ciclo quedaba guardado varias veces.
+function normalizarCiclos(m) {
+  if (!m || !Array.isArray(m.ciclos)) return m;
+  const por = {};
+  m.ciclos.forEach((c) => {
+    if (!c || !c.cierre || !c.vto) return;
+    const p = por[c.cierre];
+    if (!p || (p.estimado && !c.estimado)) por[c.cierre] = c;
+  });
+  const todos = Object.values(por);
+  const reales = todos.filter((c) => !c.estimado);
+  const cerca = (a, b) => Math.abs(new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) < 10 * 86400000;
+  const lista = todos.filter((c) => !c.estimado || !reales.some((r) => cerca(r.cierre, c.cierre)));
+  return { ...m, ciclos: lista.sort((a, b) => (a.cierre < b.cierre ? -1 : 1)) };
+}
+
+// Tarjetas cuyo resumen de este mes ya venció: si pagás el total, esa plata ya salió
+// y tu saldo de hoy ya la tiene descontada. Solo aplica al mes en curso.
+function tarjetasVencidasEnMes(medios, mk) {
+  const hoy = hoyISO();
+  const out = {};
+  if (mk !== hoy.slice(0, 7)) return out;
+  (medios || []).forEach((md) => {
+    if (!md || md.id === "efectivo") return;
+    const cs = ciclosDe(md).filter((c) => c && c.vto && c.vto.slice(0, 7) === mk);
+    if (cs.length && cs.every((c) => c.vto < hoy)) out[md.id] = true;
+  });
+  return out;
+}
+
 // Estima el siguiente ciclo respetando el dia de la semana del ultimo real.
 function siguienteCiclo(ult) {
   const av = (iso) => {
@@ -1067,6 +1099,8 @@ function proyectar(cfg, movs, medios, meses, extra) {
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
     const apl = (cfg.aplicados && cfg.aplicados[mk]) || {};
+    // Resúmenes de este mes que ya vencieron: se dan por pagados (salvo que lo apagues)
+    const vencidas = cfg.autoPagado === false ? {} : tarjetasVencidasEnMes(medios, mk);
     // Gastos reales cargados a mano que se comen la estimación de un recurrente
     // variable. Los juntamos antes para poder descontárselos abajo.
     const consumido = {};
@@ -1106,6 +1140,18 @@ function proyectar(cfg, movs, medios, meses, extra) {
           items.push({ mv, monto: 0, base, usado, saldado: true, cubierto: true, cuota: nroCuota(mv, mk) });
         else if (tocado && base > 0)
           items.push({ mv, monto: 0, base, saldado: true, cuota: nroCuota(mv, mk) });
+        return;
+      }
+      // El resumen de esta tarjeta ya venció este mes: la plata ya salió de tu cuenta.
+      // Queda visible como saldado. Si era compartido, la otra parte te la siguen debiendo.
+      if (vencidas[mv.medio] && mv.tipo !== "ingreso" && mv.tipo !== "ahorro"
+          && mv.pagadoPor !== "otro") {
+        const pv = mv.persona && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+        if (pv > 0) {
+          saldos[mv.persona] = (saldos[mv.persona] || 0) + m * pv;
+          reint.push({ persona: mv.persona, monto: m * pv, detalle: mv.detalle });
+        }
+        items.push({ mv, monto: 0, base: m, saldado: true, autoPagado: true, cuota: nroCuota(mv, mk) });
         return;
       }
       if (mv.tipo === "ingreso") {
@@ -1171,6 +1217,11 @@ function proyectar(cfg, movs, medios, meses, extra) {
       const monto = tocadoDev ? aj[devKey] : d;
       const aCaja = (mv.devDestino || "caja") !== "tarjeta";
       const medioDev = aCaja ? null : (mv.medio || "efectivo");
+      // Un reintegro en un resumen que ya venció ya está aplicado: no lo restamos de nuevo
+      if (!aCaja && vencidas[medioDev] && !tocadoDev) {
+        items.push({ mv, monto: 0, base: d, devolucion: true, devKey, aCaja, medioDev, saldado: true });
+        return;
+      }
       if (!monto) {
         items.push({ mv, monto: 0, base: d, devolucion: true, devKey, aCaja, medioDev, saldado: true });
         return;
@@ -4599,8 +4650,38 @@ function Curva({ filas, onTocar }) {
 
 
 /* ===================== PRÓXIMOS VENCIMIENTOS ===================== */
-function Vencimientos({ medios }) {
+function Vencimientos({ medios, movs = [], tc = 0 }) {
   const hoy = hoyISO();
+  // Meses en los que una tarjeta tiene DOS vencimientos (y el siguiente, ninguno)
+  const dobles = [];
+  const limite = sumaMes(hoy.slice(0, 7), 6);
+  medios.filter((m) => m.id !== "efectivo").forEach((m) => {
+    const cs = ciclosDe(m).filter((c) => c && c.vto);
+    if (!cs.length) return;
+    let u = cs[cs.length - 1];
+    for (let i = 0; i < 12 && u.vto.slice(0, 7) <= limite; i++) { u = siguienteCiclo(u); cs.push(u); }
+    const porMes = {};
+    cs.filter((c) => c.vto.slice(0, 7) >= hoy.slice(0, 7) && c.vto.slice(0, 7) <= limite)
+      .forEach((c) => { (porMes[c.vto.slice(0, 7)] = porMes[c.vto.slice(0, 7)] || []).push(c); });
+    Object.keys(porMes).forEach((mk) => {
+      if (porMes[mk].length > 1) dobles.push({ m, mk, cs: porMes[mk] });
+    });
+  });
+  // Lo que compraste este mes, por fecha de compra (control del día a día).
+  // No es lo que sale de la caja: eso lo manda el vencimiento de cada resumen.
+  const mkHoy = hoy.slice(0, 7);
+  const compras = movs.filter((mv) => !mv.recurrente && mv.tipo === "gasto"
+    && String(mv.fechaCompra || mv.fecha || "").slice(0, 7) === mkHoy);
+  const valor = (mv) => {
+    const n = (v) => (isFinite(+v) && +v > 0 ? +v : 0);
+    const cuotas = Math.max(1, +mv.cuotas || 1);
+    const total = mv.moneda === "USD" ? n(mv.montoUsd) * (tc || 0) : n(mv.monto);
+    // Si la cargó el resumen, monto es lo que queda: reconstruimos la compra completa
+    if (mv.fechaCompra && n(mv.montoCuota) && cuotas >= 1 && mv.moneda !== "USD") return n(mv.montoCuota) * cuotas;
+    return total;
+  };
+  const totCompras = compras.reduce((a, mv) => a + valor(mv), 0);
+  const fmtD = (iso) => iso.split("-").reverse().slice(0, 2).join("/");
   const prox = medios
     .filter((m) => m.id !== "efectivo")
     .map((m) => {
@@ -4611,14 +4692,36 @@ function Vencimientos({ medios }) {
     })
     .filter(Boolean)
     .sort((a, b) => (a.c.vto < b.c.vto ? -1 : 1));
-  if (!prox.length) return null;
+  if (!prox.length && !compras.length) return null;
 
   const dias = (iso) => Math.round((new Date(iso + "T12:00:00") - new Date(hoy + "T12:00:00")) / 86400000);
 
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Próximos vencimientos</div>
-      <div className="card" style={{ overflow: "hidden" }}>
+      {compras.length > 0 && (
+        <div className="card" style={{ padding: "12px 15px", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Compraste en {etiqMesLargo(mkHoy)}</div>
+            <div className="num" style={{ fontSize: 15, fontWeight: 640 }}>{corta(totCompras)}</div>
+          </div>
+          <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 3 }}>
+            {compras.length} compras por fecha de compra. Con tarjeta, se pagan cuando vence cada resumen.
+          </div>
+        </div>
+      )}
+      {dobles.map(({ m, mk, cs }) => (
+        <div key={m.id + mk} className="card" style={{ padding: "12px 15px", marginBottom: 10,
+              background: "#FFF6E5", borderColor: "#F0DDB4" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+            {m.nombre}: {cs.length} resúmenes vencen en {etiqMesLargo(mk)}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>
+            Vencen el {cs.map((c) => fmtD(c.vto)).join(" y el ")}. Ese mes pagás dos veces y el siguiente, ninguna.
+          </div>
+        </div>
+      ))}
+      {prox.length > 0 && <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Próximos vencimientos</div>}
+      {prox.length > 0 && <div className="card" style={{ overflow: "hidden" }}>
         {prox.map(({ m, c }, i) => {
           const d = dias(c.vto);
           const urgente = d <= 7;
@@ -4647,7 +4750,7 @@ function Vencimientos({ medios }) {
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -5546,7 +5649,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
         {filas.map((f) => mesCard(f, false))}
       </div>
 
-      <Vencimientos medios={medios} />
+      <Vencimientos medios={medios} movs={movs} tc={cfg.tc} />
 
       {medios.some((m) => m.id !== "efectivo") && (
         <button onClick={onFinanciar} className="card"
@@ -8126,6 +8229,15 @@ export default function App() {
       });
       // Desde acá se arrastra lo que no se salda con cada persona
       if (!c.personasDesde) c.personasDesde = mk;
+      // Resúmenes importados que perdieron su marca (bug viejo al importar): la reponemos
+      // para que los gastos fijos estimados de esa tarjeta y ese mes no se cuenten dos veces.
+      const resum = { ...(c.resumenes || {}) };
+      movsN.forEach((m) => {
+        if (String(m.id).startsWith("imp") && m.medio && m.mesInicio) resum[m.medio + "|" + m.mesInicio] = true;
+      });
+      c.resumenes = resum;
+      // Ciclos repetidos de las tarjetas: uno por cierre
+      if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
@@ -8246,7 +8358,7 @@ export default function App() {
   };
   const guardarMedios = (lista) => {
     // Nunca dejamos la app sin medios de pago
-    const l = lista.length ? lista : MEDIOS_NUEVO;
+    const l = (lista.length ? lista : MEDIOS_NUEVO).map(normalizarCiclos);
     setCfg({ ...cfg, medios: l });
   };
   // Vaciar deja la cuenta como recién creada: sin movimientos, sin tarjetas, sin saldo.
@@ -8570,26 +8682,32 @@ export default function App() {
               return [m];
             });
             setMovs([...quedan, ...nuevos]);
+            // Todo en UN solo cambio de configuración. Antes se guardaban por separado y el
+            // segundo pisaba al primero: se perdía la marca de "resumen real" y los fijos
+            // estimados de esa tarjeta se contaban dos veces.
+            let cfgN = { ...cfg };
             // Ese mes ya no se estima: tenemos el resumen real
             if (medioId && ciclos && ciclos.vto) {
-              setCfg({ ...cfg, resumenes: { ...(cfg.resumenes || {}),
-                       [medioId + "|" + ciclos.vto.slice(0, 7)]: true } });
+              cfgN.resumenes = { ...(cfg.resumenes || {}), [medioId + "|" + ciclos.vto.slice(0, 7)]: true };
             }
-            // El resumen trae las fechas del próximo ciclo: las guardamos como confirmadas
+            // El resumen trae las fechas de este ciclo y del próximo: quedan como reales
             if (medioId && ((ciclos && ciclos.proxCierre) || fin)) {
               const lista = medios.map((m) => {
                 if (m.id !== medioId) return m;
                 const cs = (m.ciclos || []).slice();
-                [[ciclos.cierre, ciclos.vto], [ciclos.proxCierre, ciclos.proxVto]].forEach(([c, v]) => {
-                  if (c && v && !cs.some((x) => x.cierre === c)) cs.push({ cierre: c, vto: v });
+                [[ciclos && ciclos.cierre, ciclos && ciclos.vto], [ciclos && ciclos.proxCierre, ciclos && ciclos.proxVto]].forEach(([c, v]) => {
+                  if (!c || !v) return;
+                  const j = cs.findIndex((x) => x.cierre === c);
+                  if (j >= 0) cs[j] = { cierre: c, vto: v }; else cs.push({ cierre: c, vto: v });
                 });
-                return { ...m, ciclos: cs,
+                return normalizarCiclos({ ...m, ciclos: cs,
                   tna: (fin && fin.tna) || m.tna, tem: (fin && fin.tem) || m.tem,
                   pagoMinimo: (fin && fin.pagoMinimo) || m.pagoMinimo,
-                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo };
+                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo });
               });
-              guardarMedios(lista);
+              cfgN.medios = lista.length ? lista : MEDIOS_NUEVO;
             }
+            setCfg(cfgN);
           }}
           onCerrar={() => setVerImportar(false)} />
       )}
