@@ -5782,93 +5782,216 @@ function Torta({ datos, total, centro, sub }) {
   );
 }
 
-function AltaGasto({ medios, inicial, onGuardar, onBorrar, onCerrar }) {
-  const [monto, setMonto] = useState(inicial ? String(Math.round(inicial.monto)) : "");
-  const [detalle, setDetalle] = useState(inicial ? inicial.detalle || "" : "");
-  const [medio, setMedio] = useState(inicial ? inicial.medio : (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo");
-  const [cat, setCat] = useState(inicial ? inicial.categoria : "");
-  const [catTocada, setCatTocada] = useState(!!inicial);
+// --- Categorías que aprende solas ---
+// Cada vez que guardás un gasto, las palabras de "en qué" quedan asociadas a la categoría.
+// La próxima vez que escribas algo parecido, sugiere esa. Si no conoce la palabra, usa las pistas fijas.
+const MARCAS_TILDE = new RegExp("[\\u0300-\\u036f]", "g");
+const sinTildes = (t) => String(t || "").normalize("NFD").replace(MARCAS_TILDE, "").toLowerCase();
+const PALABRAS_VACIAS = new Set(["para", "con", "del", "las", "los", "una", "uno", "que", "por", "pago",
+  "compra", "cuenta", "dni", "mercadopago", "merpago", "efectivo", "tarjeta", "cuota", "cuotas"]);
+const palabrasDe = (t) => sinTildes(t).split(/[^a-z0-9ñ]+/).filter((w) => w.length >= 3 && !PALABRAS_VACIAS.has(w));
+const PISTAS_EXTRA = {
+  "Alimentación": ["supermerc", "changomas", "hiper", "dia ", "vital", "maxiconsumo", "fiambre", "polleria",
+    "pescader", "dietet", "naturist", "kapri", "almacen", "mayorista", "coca", "bebida", "agua mineral"],
+  "Gastronomía y salidas": ["starbucks", "havanna", "mostaza", "kfc", "mc ", "vianda", "almuerzo", "cena",
+    "merienda", "desayuno", "bodegon", "cerveceria", "vino", "vinoteca", "helado", "empanada"],
+  "Transporte y nafta": ["colectivo", "tren", "subte", "micro", "estacionamiento", "lavadero", "gomeria", "taller"],
+  "Vivienda y servicios": ["luz", "gas ", "agua", "cable", "jardin", "plomero", "electricista", "gasista"],
+  "Suscripciones": ["membres", "suscrip", "abono", "premium", "plan "],
+  "Salud": ["farmacity", "clinica", "hospital", "turno", "remedio", "medicamento", "analisis"],
+  "Deporte": ["cancha", "entrena", "pileta", "running", "crossfit", "yoga"],
+  "Cuidado personal": ["corte de pelo", "manicur", "depila", "spa", "masaj"],
+  "Hogar y compras": ["regalo", "juguete", "libreria", "articulos", "planta", "vivero", "mates", "mate "],
+};
+function adivinarConAprendido(texto, aprendido) {
+  const votos = {};
+  palabrasDe(texto).forEach((w) => {
+    const c = (aprendido || {})[w];
+    if (c) Object.entries(c).forEach(([cat, n]) => { votos[cat] = (votos[cat] || 0) + n; });
+  });
+  const top = Object.entries(votos).sort((a, b) => b[1] - a[1])[0];
+  if (top) return { cat: top[0], aprendida: true };
+  const t = sinTildes(texto);
+  for (const [cat, pistas] of Object.entries(PISTAS_EXTRA))
+    if (pistas.some((p) => t.includes(p))) return { cat, aprendida: false };
+  return { cat: adivinarCategoria(t), aprendida: false };
+}
+function aprender(aprendido, texto, cat) {
+  const a = { ...(aprendido || {}) };
+  palabrasDe(texto).forEach((w) => {
+    const prev = a[w] || {};
+    a[w] = { ...prev, [cat]: Math.min(50, (prev[cat] || 0) + 1) };
+  });
+  return a;
+}
+
+function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
+  const ini = inicial || {};
+  const [monto, setMonto] = useState(inicial ? String(Math.round(ini.monto)) : "");
+  const [detalle, setDetalle] = useState(ini.detalle || "");
+  const [medio, setMedio] = useState(ini.medio || (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo");
+  // La categoría queda "fija" solo si la elegiste a mano; si no, sigue lo que escribís
+  const [cat, setCat] = useState(ini.catManual ? ini.categoria : "");
   const hoy = hoyISO();
-  const [fecha, setFecha] = useState(inicial ? inicial.fecha : hoy);
-  const [verCats, setVerCats] = useState(false);
+  const [fecha, setFecha] = useState(ini.fecha || hoy);
+  const [cuotas, setCuotas] = useState(ini.cuotas || 1);
+  const [persona, setPersona] = useState(ini.persona || "");
+  const [nuevaPersona, setNuevaPersona] = useState("");
+  const [agregandoPersona, setAgregandoPersona] = useState(false);
+  const [pct, setPct] = useState(ini.pct != null ? Math.round(ini.pct * 100) : 50);
+  const [pagoOtro, setPagoOtro] = useState(ini.pagadoPor === "otro");
+  const [nota, setNota] = useState(ini.nota || "");
+  const [verMas, setVerMas] = useState(!!(ini.persona || ini.nota || (ini.cuotas || 1) > 1));
 
   const n = parseInt(monto || "0", 10);
-  const catAuto = adivinarCategoria(detalle);
-  const catFinal = catTocada && cat ? cat : catAuto;
+  const sug = adivinarConAprendido(detalle, aprendido);
+  const catFinal = cat || sug.cat;
   const tecla = (t) => {
     if (t === "b") return setMonto(monto.slice(0, -1));
     if (t === "000") return setMonto(monto && monto.length < 8 ? monto + "000" : monto);
     if (monto.length < 10) setMonto((monto === "0" ? "" : monto) + t);
   };
+  const quien = (agregandoPersona ? nuevaPersona.trim() : persona) || "";
+  const parte = quien ? Math.round(n * (pct / 100)) : 0;
   const guardar = () => {
     if (n <= 0) return;
     onGuardar({
-      id: inicial ? inicial.id : "a" + Date.now(),
+      id: ini.id || "a" + Date.now(),
       fecha, monto: n, detalle: detalle.trim() || nomCat(catFinal),
-      medio, categoria: catFinal,
+      medio, categoria: catFinal, ...(cat ? { catManual: true } : {}),
+      ...(medio !== "efectivo" && cuotas > 1 ? { cuotas } : {}),
+      ...(quien ? { persona: quien, pct: pct / 100, pagadoPor: pagoOtro ? "otro" : "yo" } : {}),
+      ...(nota.trim() ? { nota: nota.trim() } : {}),
     });
     onCerrar();
   };
   const ayer = sumaDias(hoy, -1);
+  // Las categorías: la sugerida primero, después el resto
+  const cats = [catFinal, ...CATEGORIAS.filter((c) => c !== catFinal && c !== "Préstamos")];
+  const fila = { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 };
+  const rotulo = { fontSize: 11.5, color: T.tenue, margin: "12px 0 6px", fontWeight: 560 };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
                   display: "flex", flexDirection: "column", maxWidth: 470, margin: "0 auto" }}>
-      <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ padding: "12px 16px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
         <span style={{ fontSize: 14.5, fontWeight: 620 }}>{inicial ? "Editar gasto" : "Anotar gasto"}</span>
         {inicial
-          ? <button onClick={() => { onBorrar(inicial.id); onCerrar(); }} style={{ fontSize: 14, color: T.rojo, fontWeight: 600 }}>Borrar</button>
+          ? <button onClick={() => { onBorrar(ini.id); onCerrar(); }} style={{ fontSize: 14, color: T.rojo, fontWeight: 600 }}>Borrar</button>
           : <span style={{ width: 52 }} />}
       </div>
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center",
-                    padding: "0 20px", minHeight: 0, overflowY: "auto" }}>
-        <div className="plata" style={{ fontSize: 46, textAlign: "center", color: n > 0 ? T.tinta : T.tenue }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px", minHeight: 0 }}>
+        <div className="plata" style={{ fontSize: 40, textAlign: "center", marginTop: 6, color: n > 0 ? T.tinta : T.tenue }}>
           {n > 0 ? plata(n) : "$0"}
         </div>
+        {quien && n > 0 && (
+          <div style={{ textAlign: "center", fontSize: 12.5, color: T.suave, marginTop: 3 }}>
+            {pagoOtro ? `Pagó ${quien} · tu parte ${plata(n - parte)}` : `${quien} te debe ${plata(parte)}`}
+          </div>
+        )}
         <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="¿En qué?"
-          style={{ marginTop: 14, textAlign: "center", fontSize: 16, background: "transparent",
+          style={{ marginTop: 10, textAlign: "center", fontSize: 16, background: "transparent",
                    border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
 
-        <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14, paddingBottom: 3 }}>
+        <div style={rotulo}>Categoría {!cat && detalle.trim() && (sug.aprendida ? "· la aprendí de vos" : "· sugerida")}</div>
+        <div className="scroll" style={fila}>
+          {cats.map((c) => (
+            <button key={c} className={"chip sm" + (catFinal === c ? " on" : "")}
+              onClick={() => setCat(c === cat ? "" : c)}>{nomCat(c)}</button>
+          ))}
+        </div>
+
+        <div style={rotulo}>Con qué</div>
+        <div className="scroll" style={fila}>
           {medios.map((m) => (
             <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
               onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
           ))}
         </div>
 
-        <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap", justifyContent: "center" }}>
+        <div style={rotulo}>Cuándo</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button className={"chip sm" + (fecha === hoy ? " on" : "")} onClick={() => setFecha(hoy)}>Hoy</button>
           <button className={"chip sm" + (fecha === ayer ? " on" : "")} onClick={() => setFecha(ayer)}>Ayer</button>
           <input type="date" value={fecha} max={hoy} onChange={(e) => e.target.value && setFecha(e.target.value)}
-            style={{ width: 150, padding: "5px 9px", fontSize: 14, borderRadius: 999 }} />
+            style={{ flex: 1, padding: "5px 9px", fontSize: 14, borderRadius: 999 }} />
         </div>
 
-        <button onClick={() => setVerCats(!verCats)}
-          style={{ marginTop: 12, fontSize: 13, color: T.suave, textAlign: "center" }}>
-          Categoría: <b style={{ color: T.tinta }}>{nomCat(catFinal)}</b> · {verCats ? "listo" : "cambiar"}
-        </button>
-        {verCats && (
-          <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap", justifyContent: "center" }}>
-            {CATEGORIAS.filter((c) => c !== "Préstamos").map((c) => (
-              <button key={c} className={"chip sm" + (catFinal === c ? " on" : "")}
-                onClick={() => { setCat(c); setCatTocada(true); setVerCats(false); }}>{nomCat(c)}</button>
-            ))}
-          </div>
+        {!verMas && (
+          <button onClick={() => setVerMas(true)}
+            style={{ marginTop: 12, fontSize: 13, color: T.ambar, fontWeight: 600, width: "100%" }}>
+            + Compartido, cuotas o nota
+          </button>
         )}
+        {verMas && (
+          <>
+            <div style={rotulo}>¿Compartido?</div>
+            <div className="scroll" style={fila}>
+              <button className={"chip sm" + (!quien ? " on" : "")}
+                onClick={() => { setPersona(""); setAgregandoPersona(false); }}>Solo mío</button>
+              {personas.map((p) => (
+                <button key={p} className={"chip sm" + (!agregandoPersona && persona === p ? " on" : "")}
+                  onClick={() => { setPersona(p); setAgregandoPersona(false); }}>{p}</button>
+              ))}
+              <button className={"chip sm" + (agregandoPersona ? " on" : "")}
+                onClick={() => setAgregandoPersona(true)}>+ Otra persona</button>
+            </div>
+            {agregandoPersona && (
+              <input value={nuevaPersona} onChange={(e) => setNuevaPersona(e.target.value)} placeholder="Nombre"
+                style={{ marginTop: 8, padding: "8px 12px", fontSize: 15 }} />
+            )}
+            {quien && (
+              <>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {[50, 33, 100].map((v) => (
+                    <button key={v} className={"chip sm" + (pct === v ? " on" : "")} onClick={() => setPct(v)}>
+                      {v === 100 ? "Todo de " + quien : v === 50 ? "Mitad y mitad" : "Un tercio"}
+                    </button>
+                  ))}
+                  <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: T.suave }}>
+                    <input inputMode="numeric" value={pct}
+                      onChange={(e) => setPct(Math.min(100, Math.max(0, parseInt(e.target.value.replace(/\D/g, "") || "0", 10))))}
+                      style={{ width: 56, padding: "5px 8px", fontSize: 14, textAlign: "center" }} />% de {quien}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button className={"chip sm" + (!pagoOtro ? " on" : "")} onClick={() => setPagoOtro(false)}>Pagué yo</button>
+                  <button className={"chip sm" + (pagoOtro ? " on" : "")} onClick={() => setPagoOtro(true)}>Pagó {quien}</button>
+                </div>
+              </>
+            )}
+            {medio !== "efectivo" && (
+              <>
+                <div style={rotulo}>Cuotas</div>
+                <div className="scroll" style={fila}>
+                  {[1, 3, 6, 9, 12, 18].map((c) => (
+                    <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
+                      onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <div style={rotulo}>Nota</div>
+            <input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Opcional"
+              style={{ padding: "8px 12px", fontSize: 15 }} />
+          </>
+        )}
+        <div style={{ height: 10 }} />
       </div>
 
-      <div style={{ padding: "10px 12px 16px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+      <div style={{ padding: "8px 12px 14px", borderTop: `1px solid ${T.linea}` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
           {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
             <button key={t} onClick={() => tecla(t)}
-              style={{ padding: "15px 0", fontSize: t === "b" ? 19 : 22, fontWeight: 500,
-                       background: T.card, borderRadius: 13, border: `1px solid ${T.linea}` }}>
+              style={{ padding: "11px 0", fontSize: t === "b" ? 18 : 21, fontWeight: 500,
+                       background: T.card, borderRadius: 12, border: `1px solid ${T.linea}` }}>
               {t === "b" ? "⌫" : t}
             </button>
           ))}
         </div>
-        <button className="btn" style={{ marginTop: 10, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
+        <button className="btn" style={{ marginTop: 8, padding: 13, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
           {inicial ? "Guardar cambios" : "Anotar"}
         </button>
       </div>
@@ -5885,11 +6008,22 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
   const [alta, setAlta] = useState(null);         // null | {} nuevo | gasto a editar
   const [filtro, setFiltro] = useState(null);     // porción tocada de la torta
 
+  const aprendido = cfg.anotadorAprende || {};
   const guardarLista = (l) => setCfg({ ...cfg, anotador: l });
   const guardar = (g) => {
     const i = lista.findIndex((x) => x.id === g.id);
-    guardarLista(i >= 0 ? lista.map((x) => (x.id === g.id ? g : x)) : [...lista, g]);
+    const l = i >= 0 ? lista.map((x) => (x.id === g.id ? g : x)) : [...lista, g];
+    setCfg({ ...cfg, anotador: l, anotadorAprende: aprender(aprendido, g.detalle, g.categoria) });
   };
+  // Categoría que se muestra: la que elegiste a mano manda; si quedó en "Otros", se reintenta
+  const catDe = (g) => (g.catManual || (g.categoria && g.categoria !== "Otros")
+    ? g.categoria || "Otros" : adivinarConAprendido(g.detalle, aprendido).cat);
+  const personasAnot = [...new Set([
+    ...movs.filter((m) => m.persona).map((m) => m.persona),
+    ...lista.filter((g) => g.persona).map((g) => g.persona),
+  ])];
+  // Lo que salió de tu bolsillo (si pagó otro, no salió nada tuyo)
+  const pagado = (g) => (g.pagadoPor === "otro" ? 0 : +g.monto || 0);
   const borrar = (id) => guardarLista(lista.filter((x) => x.id !== id));
 
   // Rango de fechas que se mira
@@ -5910,15 +6044,17 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
     desde = mesVer + "-01"; hasta = mesVer + "-31"; titulo = etiqMesLargo(mesVer);
   }
   const enRango = lista.filter((g) => g.fecha >= desde && g.fecha <= hasta);
-  const total = enRango.reduce((a, g) => a + (+g.monto || 0), 0);
+  const total = enRango.reduce((a, g) => a + pagado(g), 0);
+  const teDeben = enRango.reduce((a, g) => a + (g.persona && g.pagadoPor !== "otro" ? (+g.monto || 0) * (+g.pct || 0) : 0), 0);
+  const debes = enRango.reduce((a, g) => a + (g.persona && g.pagadoPor === "otro" ? (+g.monto || 0) * (1 - (+g.pct || 0)) : 0), 0);
   const dias = Math.max(1, Math.round((new Date((rango === "mes" && mesVer !== hoy.slice(0, 7)
     ? isoDe(new Date(+mesVer.slice(0, 4), +mesVer.slice(5, 7), 0, 12)) : hoy) + "T12:00:00")
     - new Date(desde + "T12:00:00")) / 86400000) + 1);
 
   const nomMedio = (id) => { const m = medios.find((x) => x.id === id); return m ? (m.corto || m.nombre) : "Otro"; };
-  const clave = (g) => (vista === "medio" ? g.medio || "efectivo" : g.categoria || "Otros");
+  const clave = (g) => (vista === "medio" ? g.medio || "efectivo" : catDe(g));
   const grupos = {};
-  enRango.forEach((g) => { grupos[clave(g)] = (grupos[clave(g)] || 0) + (+g.monto || 0); });
+  enRango.forEach((g) => { if (pagado(g) > 0) grupos[clave(g)] = (grupos[clave(g)] || 0) + pagado(g); });
   const datos = Object.entries(grupos).sort((a, b) => b[1] - a[1])
     .map(([k, v], i) => ({ k, v, color: ANOT_COLORES[i % ANOT_COLORES.length],
                            nom: vista === "medio" ? nomMedio(k) : nomCat(k) }));
@@ -5949,7 +6085,9 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
         : mv.fechaCompra && +mv.montoCuota ? +mv.montoCuota * cuotas : +mv.monto || 0;
       return { id: "a" + mv.id, origen: mv.id, fecha: String(mv.fechaCompra || mv.fecha).slice(0, 10),
                monto: Math.round(m), detalle: mv.detalle || "Gasto", medio: mv.medio || "efectivo",
-               categoria: mv.categoria || adivinarCategoria(mv.detalle || "") };
+               categoria: mv.categoria || adivinarCategoria(mv.detalle || ""),
+               ...(mv.persona ? { persona: mv.persona, pct: isFinite(+mv.pct) ? +mv.pct : 0.5,
+                                  pagadoPor: mv.pagadoPor === "otro" ? "otro" : "yo" } : {}) };
     }).filter((g) => g.monto > 0);
     if (nuevos.length) guardarLista([...lista, ...nuevos]);
   };
@@ -5990,6 +6128,13 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
           {enRango.length} {enRango.length === 1 ? "gasto" : "gastos"}
           {total > 0 ? ` · ${corta(total / dias)} por día` : ""}
         </div>
+        {(teDeben > 0 || debes > 0) && (
+          <div style={{ fontSize: 12.5, textAlign: "center", marginTop: 8, opacity: 0.9 }}>
+            {teDeben > 0 && <>Te deben <b className="num">{corta(teDeben)}</b></>}
+            {teDeben > 0 && debes > 0 && " · "}
+            {debes > 0 && <>Debés <b className="num">{corta(debes)}</b></>}
+          </div>
+        )}
       </div>
 
       {enRango.length > 0 && (
@@ -6044,7 +6189,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
       )}
 
       {diasOrden.map((dia) => {
-        const tot = porDia[dia].reduce((a, g) => a + (+g.monto || 0), 0);
+        const tot = porDia[dia].reduce((a, g) => a + pagado(g), 0);
         return (
           <div key={dia} style={{ marginTop: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5,
@@ -6063,7 +6208,11 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
                     <span style={{ display: "block", fontSize: 14, fontWeight: 560, overflow: "hidden",
                                    textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.detalle}</span>
                     <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 1 }}>
-                      {nomCat(g.categoria)} · {nomMedio(g.medio)}
+                      {nomCat(catDe(g))} · {nomMedio(g.medio)}
+                      {g.cuotas > 1 ? ` · ${g.cuotas} cuotas` : ""}
+                      {g.persona ? (g.pagadoPor === "otro"
+                        ? ` · pagó ${g.persona}`
+                        : ` · ${g.persona} te debe ${corta((+g.monto || 0) * (+g.pct || 0))}`) : ""}
                     </span>
                   </span>
                   <span className="num" style={{ fontSize: 14.5, fontWeight: 620 }}>{plata(g.monto)}</span>
@@ -6082,6 +6231,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
 
       {alta && (
         <AltaGasto medios={medios} inicial={alta.id ? alta : null}
+          personas={personasAnot} aprendido={aprendido}
           onGuardar={guardar} onBorrar={borrar} onCerrar={() => setAlta(null)} />
       )}
     </div>
@@ -8989,7 +9139,8 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "anot" && <Anotador cfg={cfgTC} setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador })}
+      {tab === "anot" && <Anotador cfg={cfgTC}
+                              setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador, anotadorAprende: c.anotadorAprende || cfg.anotadorAprende })}
                               medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
       {tab === "movs" && (
         <div>
