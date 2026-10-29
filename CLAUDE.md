@@ -28,6 +28,8 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 - **Ajustes puntuales** (`cfg.ajustes[mes][id]`) y **aplicados** (`cfg.aplicados[mes][id]`): marcar algo como pagado
   o cobrado mueve la caja una sola vez y se puede revertir.
 - **Préstamos** pueden ajustar por `fija`, `inflacion` o `sueldo` (`mv.ajustaPor`).
+- **Anotador de gastos** (pestaña "Gastos", `cfg.anotador`): libreta del día a día por fecha de compra.
+  Es independiente: no toca `movs` ni la proyección. La lista completa del flujo (Movimientos) se abre desde ahí.
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo

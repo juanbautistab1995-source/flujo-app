@@ -5741,6 +5741,346 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
 }
 
 /* ===================== PANTALLA: MOVIMIENTOS ===================== */
+/* ===================== ANOTADOR DE GASTOS ===================== */
+// Libreta del día a día: lo que vas gastando, por fecha de compra. Es INDEPENDIENTE de
+// la proyección y de la liquidación del mes: vive en cfg.anotador y no toca movs.
+const ANOT_COLORES = ["#17714F", "#C2742B", "#3E6FA8", "#A93B28", "#7A5BA6", "#2E8C8C",
+                      "#B59A2E", "#5E6B66", "#C25E85", "#4E8A3E", "#8C5A3C", "#6B7FB8"];
+const ANOT_CAT_CORTAS = {
+  "Alimentación": "Súper", "Gastronomía y salidas": "Salidas", "Transporte y nafta": "Nafta y transporte",
+  "Vivienda y servicios": "Casa y servicios", "Hogar y compras": "Hogar",
+};
+const nomCat = (c) => ANOT_CAT_CORTAS[c] || c || "Otros";
+const DIAS_SEM = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const isoDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const sumaDias = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return isoDe(d); };
+
+function Torta({ datos, total, centro, sub }) {
+  // Dona en SVG: cada porción arranca donde terminó la anterior
+  const R = 54, r = 36, C = 66;
+  let ang = -Math.PI / 2;
+  const arcos = datos.filter((d) => d.v > 0).map((d) => {
+    const a = total > 0 ? (d.v / total) * Math.PI * 2 : 0;
+    const a0 = ang, a1 = ang + Math.min(a, Math.PI * 2 - 0.0001);
+    ang += a;
+    const p = (rad, ra) => [C + ra * Math.cos(rad), C + ra * Math.sin(rad)];
+    const [x0, y0] = p(a0, R), [x1, y1] = p(a1, R), [x2, y2] = p(a1, r), [x3, y3] = p(a0, r);
+    const big = a1 - a0 > Math.PI ? 1 : 0;
+    return { ...d, path: `M${x0} ${y0}A${R} ${R} 0 ${big} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${big} 0 ${x3} ${y3}Z` };
+  });
+  return (
+    <svg width="132" height="132" viewBox="0 0 132 132" role="img" aria-label="Gráfico de torta">
+      {arcos.length === 0 && <circle cx={C} cy={C} r={(R + r) / 2} fill="none" stroke={T.linea} strokeWidth={R - r} />}
+      {arcos.map((a) => <path key={a.k} d={a.path} fill={a.color} stroke={T.card} strokeWidth="1.5" />)}
+      <text x={C} y={C - 2} textAnchor="middle" fontSize="15" fontWeight="680" fill={T.tinta}
+            style={{ fontVariantNumeric: "tabular-nums" }}>{centro}</text>
+      <text x={C} y={C + 15} textAnchor="middle" fontSize="10" fill={T.tenue}>{sub}</text>
+    </svg>
+  );
+}
+
+function AltaGasto({ medios, inicial, onGuardar, onBorrar, onCerrar }) {
+  const [monto, setMonto] = useState(inicial ? String(Math.round(inicial.monto)) : "");
+  const [detalle, setDetalle] = useState(inicial ? inicial.detalle || "" : "");
+  const [medio, setMedio] = useState(inicial ? inicial.medio : (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo");
+  const [cat, setCat] = useState(inicial ? inicial.categoria : "");
+  const [catTocada, setCatTocada] = useState(!!inicial);
+  const hoy = hoyISO();
+  const [fecha, setFecha] = useState(inicial ? inicial.fecha : hoy);
+  const [verCats, setVerCats] = useState(false);
+
+  const n = parseInt(monto || "0", 10);
+  const catAuto = adivinarCategoria(detalle);
+  const catFinal = catTocada && cat ? cat : catAuto;
+  const tecla = (t) => {
+    if (t === "b") return setMonto(monto.slice(0, -1));
+    if (t === "000") return setMonto(monto && monto.length < 8 ? monto + "000" : monto);
+    if (monto.length < 10) setMonto((monto === "0" ? "" : monto) + t);
+  };
+  const guardar = () => {
+    if (n <= 0) return;
+    onGuardar({
+      id: inicial ? inicial.id : "a" + Date.now(),
+      fecha, monto: n, detalle: detalle.trim() || nomCat(catFinal),
+      medio, categoria: catFinal,
+    });
+    onCerrar();
+  };
+  const ayer = sumaDias(hoy, -1);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
+                  display: "flex", flexDirection: "column", maxWidth: 470, margin: "0 auto" }}>
+      <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 14.5, fontWeight: 620 }}>{inicial ? "Editar gasto" : "Anotar gasto"}</span>
+        {inicial
+          ? <button onClick={() => { onBorrar(inicial.id); onCerrar(); }} style={{ fontSize: 14, color: T.rojo, fontWeight: 600 }}>Borrar</button>
+          : <span style={{ width: 52 }} />}
+      </div>
+
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center",
+                    padding: "0 20px", minHeight: 0, overflowY: "auto" }}>
+        <div className="plata" style={{ fontSize: 46, textAlign: "center", color: n > 0 ? T.tinta : T.tenue }}>
+          {n > 0 ? plata(n) : "$0"}
+        </div>
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="¿En qué?"
+          style={{ marginTop: 14, textAlign: "center", fontSize: 16, background: "transparent",
+                   border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
+
+        <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14, paddingBottom: 3 }}>
+          {medios.map((m) => (
+            <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
+              onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap", justifyContent: "center" }}>
+          <button className={"chip sm" + (fecha === hoy ? " on" : "")} onClick={() => setFecha(hoy)}>Hoy</button>
+          <button className={"chip sm" + (fecha === ayer ? " on" : "")} onClick={() => setFecha(ayer)}>Ayer</button>
+          <input type="date" value={fecha} max={hoy} onChange={(e) => e.target.value && setFecha(e.target.value)}
+            style={{ width: 150, padding: "5px 9px", fontSize: 14, borderRadius: 999 }} />
+        </div>
+
+        <button onClick={() => setVerCats(!verCats)}
+          style={{ marginTop: 12, fontSize: 13, color: T.suave, textAlign: "center" }}>
+          Categoría: <b style={{ color: T.tinta }}>{nomCat(catFinal)}</b> · {verCats ? "listo" : "cambiar"}
+        </button>
+        {verCats && (
+          <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap", justifyContent: "center" }}>
+            {CATEGORIAS.filter((c) => c !== "Préstamos").map((c) => (
+              <button key={c} className={"chip sm" + (catFinal === c ? " on" : "")}
+                onClick={() => { setCat(c); setCatTocada(true); setVerCats(false); }}>{nomCat(c)}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "10px 12px 16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
+            <button key={t} onClick={() => tecla(t)}
+              style={{ padding: "15px 0", fontSize: t === "b" ? 19 : 22, fontWeight: 500,
+                       background: T.card, borderRadius: 13, border: `1px solid ${T.linea}` }}>
+              {t === "b" ? "⌫" : t}
+            </button>
+          ))}
+        </div>
+        <button className="btn" style={{ marginTop: 10, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
+          {inicial ? "Guardar cambios" : "Anotar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
+  const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
+  const hoy = hoyISO();
+  const [rango, setRango] = useState("mes");      // semana | mes | sueldo
+  const [mesVer, setMesVer] = useState(hoy.slice(0, 7));
+  const [vista, setVista] = useState("medio");    // medio | cat
+  const [alta, setAlta] = useState(null);         // null | {} nuevo | gasto a editar
+  const [filtro, setFiltro] = useState(null);     // porción tocada de la torta
+
+  const guardarLista = (l) => setCfg({ ...cfg, anotador: l });
+  const guardar = (g) => {
+    const i = lista.findIndex((x) => x.id === g.id);
+    guardarLista(i >= 0 ? lista.map((x) => (x.id === g.id ? g : x)) : [...lista, g]);
+  };
+  const borrar = (id) => guardarLista(lista.filter((x) => x.id !== id));
+
+  // Rango de fechas que se mira
+  const dc = Math.min(28, Math.max(1, Math.round(+cfg.diaCobro || 28)));
+  let desde, hasta, titulo;
+  if (rango === "semana") {
+    const d = new Date(hoy + "T12:00:00");
+    const lunes = sumaDias(hoy, -((d.getDay() + 6) % 7));
+    desde = lunes; hasta = hoy; titulo = "Esta semana";
+  } else if (rango === "sueldo") {
+    const h = new Date(hoy + "T12:00:00");
+    let ini = new Date(h.getFullYear(), h.getMonth(), dc, 12);
+    if (h.getDate() < dc) ini = new Date(h.getFullYear(), h.getMonth() - 1, dc, 12);
+    desde = isoDe(ini); hasta = hoy;
+    titulo = `Desde que cobraste (${desde.slice(8, 10)}/${desde.slice(5, 7)})`;
+  } else {
+    desde = mesVer + "-01"; hasta = mesVer + "-31"; titulo = etiqMesLargo(mesVer);
+  }
+  const enRango = lista.filter((g) => g.fecha >= desde && g.fecha <= hasta);
+  const total = enRango.reduce((a, g) => a + (+g.monto || 0), 0);
+  const dias = Math.max(1, Math.round((new Date((rango === "mes" && mesVer !== hoy.slice(0, 7)
+    ? isoDe(new Date(+mesVer.slice(0, 4), +mesVer.slice(5, 7), 0, 12)) : hoy) + "T12:00:00")
+    - new Date(desde + "T12:00:00")) / 86400000) + 1);
+
+  const nomMedio = (id) => { const m = medios.find((x) => x.id === id); return m ? (m.corto || m.nombre) : "Otro"; };
+  const clave = (g) => (vista === "medio" ? g.medio || "efectivo" : g.categoria || "Otros");
+  const grupos = {};
+  enRango.forEach((g) => { grupos[clave(g)] = (grupos[clave(g)] || 0) + (+g.monto || 0); });
+  const datos = Object.entries(grupos).sort((a, b) => b[1] - a[1])
+    .map(([k, v], i) => ({ k, v, color: ANOT_COLORES[i % ANOT_COLORES.length],
+                           nom: vista === "medio" ? nomMedio(k) : nomCat(k) }));
+  const visibles = filtro ? enRango.filter((g) => clave(g) === filtro) : enRango;
+
+  // Lista por día, el más nuevo arriba
+  const porDia = {};
+  visibles.forEach((g) => { (porDia[g.fecha] = porDia[g.fecha] || []).push(g); });
+  const diasOrden = Object.keys(porDia).sort((a, b) => (a < b ? 1 : -1));
+  const etiqDia = (iso) => {
+    if (iso === hoy) return "Hoy";
+    if (iso === sumaDias(hoy, -1)) return "Ayer";
+    const d = new Date(iso + "T12:00:00");
+    return `${DIAS_SEM[d.getDay()]} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+  };
+
+  // Traer lo que ya tenías cargado en la app (solo para arrancar; quedan como copias)
+  const yaCargados = movs.filter((mv) => !mv.recurrente && mv.tipo === "gasto"
+    && String(mv.fechaCompra || mv.fecha || "").slice(0, 7) === mesVer);
+  const traer = () => {
+    const ids = new Set(lista.map((g) => g.origen).filter(Boolean));
+    const nuevos = yaCargados.filter((mv) => !ids.has(mv.id)).map((mv) => {
+      const cuotas = Math.max(1, +mv.cuotas || 1);
+      const m = mv.moneda === "USD" ? (+mv.montoUsd || 0) * (cfg.tc || 0)
+        : mv.fechaCompra && +mv.montoCuota ? +mv.montoCuota * cuotas : +mv.monto || 0;
+      return { id: "a" + mv.id, origen: mv.id, fecha: String(mv.fechaCompra || mv.fecha).slice(0, 10),
+               monto: Math.round(m), detalle: mv.detalle || "Gasto", medio: mv.medio || "efectivo",
+               categoria: mv.categoria || adivinarCategoria(mv.detalle || "") };
+    }).filter((g) => g.monto > 0);
+    if (nuevos.length) guardarLista([...lista, ...nuevos]);
+  };
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 110 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div style={{ fontSize: 22, fontWeight: 680, letterSpacing: "-0.02em" }}>Mis gastos</div>
+        <button onClick={onVerMovs} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+          Movimientos del flujo ›
+        </button>
+      </div>
+      <div style={{ fontSize: 12, color: T.tenue, marginTop: 3 }}>
+        Tu anotador del día a día. No toca la proyección.
+      </div>
+
+      <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
+        {[["semana", "Semana"], ["mes", "Mes"], ["sueldo", "Desde que cobré"]].map(([id, n]) => (
+          <button key={id} className={"chip sm" + (rango === id ? " on" : "")}
+            onClick={() => { setRango(id); setFiltro(null); }}>{n}</button>
+        ))}
+      </div>
+
+      <div className="cima" style={{ padding: "16px 18px", marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {rango === "mes"
+            ? <button onClick={() => { setMesVer(sumaMes(mesVer, -1)); setFiltro(null); }}
+                aria-label="Mes anterior" style={{ fontSize: 20, padding: "0 6px", color: "#EAF0EC" }}>‹</button>
+            : <span />}
+          <div style={{ fontSize: 13, opacity: 0.8 }}>{titulo}</div>
+          {rango === "mes" && mesVer < hoy.slice(0, 7)
+            ? <button onClick={() => { setMesVer(sumaMes(mesVer, 1)); setFiltro(null); }}
+                aria-label="Mes siguiente" style={{ fontSize: 20, padding: "0 6px", color: "#EAF0EC" }}>›</button>
+            : <span style={{ width: 18 }} />}
+        </div>
+        <div className="plata" style={{ fontSize: 38, textAlign: "center", marginTop: 6 }}>{plata(total)}</div>
+        <div style={{ fontSize: 12, opacity: 0.75, textAlign: "center", marginTop: 4 }}>
+          {enRango.length} {enRango.length === 1 ? "gasto" : "gastos"}
+          {total > 0 ? ` · ${corta(total / dias)} por día` : ""}
+        </div>
+      </div>
+
+      {enRango.length > 0 && (
+        <div className="card" style={{ padding: 14, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+            <button className={"chip sm" + (vista === "medio" ? " on" : "")}
+              onClick={() => { setVista("medio"); setFiltro(null); }}>Por medio de pago</button>
+            <button className={"chip sm" + (vista === "cat" ? " on" : "")}
+              onClick={() => { setVista("cat"); setFiltro(null); }}>Por categoría</button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12 }}>
+            <Torta datos={datos} total={total} centro={corta(total)} sub={vista === "medio" ? "por medio" : "por categoría"} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {datos.slice(0, 7).map((d) => (
+                <button key={d.k} onClick={() => setFiltro(filtro === d.k ? null : d.k)}
+                  style={{ display: "flex", alignItems: "center", width: "100%", gap: 7, padding: "4px 0",
+                           opacity: filtro && filtro !== d.k ? 0.4 : 1 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: d.color, flex: "none" }} />
+                  <span style={{ fontSize: 12.5, flex: 1, textAlign: "left", overflow: "hidden",
+                                 textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom}</span>
+                  <span className="num" style={{ fontSize: 12.5, fontWeight: 600 }}>{corta(d.v)}</span>
+                  <span className="num" style={{ fontSize: 11, color: T.tenue, width: 30, textAlign: "right" }}>
+                    {Math.round((d.v / total) * 100)}%
+                  </span>
+                </button>
+              ))}
+              {datos.length > 7 && (
+                <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 3 }}>y {datos.length - 7} más</div>
+              )}
+            </div>
+          </div>
+          {filtro && (
+            <button onClick={() => setFiltro(null)} style={{ fontSize: 12, color: T.ambar, marginTop: 8, fontWeight: 600 }}>
+              Mostrando solo {datos.find((d) => d.k === filtro)?.nom} · ver todo
+            </button>
+          )}
+        </div>
+      )}
+
+      {enRango.length === 0 && (
+        <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "mes" ? "este mes" : "acá"}</div>
+          <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+            Tocá el <b>+</b> cada vez que gastes algo. Son tres toques: monto, en qué y con qué.
+          </div>
+          {rango === "mes" && yaCargados.length > 0 && (
+            <button className="btn ghost" style={{ marginTop: 14 }} onClick={traer}>
+              Traer los {yaCargados.length} gastos de {etiqMesLargo(mesVer)} que ya tenés cargados
+            </button>
+          )}
+        </div>
+      )}
+
+      {diasOrden.map((dia) => {
+        const tot = porDia[dia].reduce((a, g) => a + (+g.monto || 0), 0);
+        return (
+          <div key={dia} style={{ marginTop: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5,
+                          color: T.suave, padding: "0 4px 6px" }}>
+              <span style={{ fontWeight: 600 }}>{etiqDia(dia)}</span>
+              <span className="num">{plata(tot)}</span>
+            </div>
+            <div className="card" style={{ overflow: "hidden" }}>
+              {porDia[dia].slice().reverse().map((g, i) => (
+                <button key={g.id} onClick={() => setAlta(g)}
+                  style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, padding: "11px 14px",
+                           borderTop: i ? `1px solid ${T.linea}` : "none", textAlign: "left" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, flex: "none",
+                    background: (datos.find((d) => d.k === clave(g)) || {}).color || T.eje }} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 14, fontWeight: 560, overflow: "hidden",
+                                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.detalle}</span>
+                    <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 1 }}>
+                      {nomCat(g.categoria)} · {nomMedio(g.medio)}
+                    </span>
+                  </span>
+                  <span className="num" style={{ fontSize: 14.5, fontWeight: 620 }}>{plata(g.monto)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      <button onClick={() => setAlta({})}
+        style={{ position: "fixed", right: 18, bottom: 84, width: 58, height: 58, borderRadius: 29,
+                 background: T.tinta, color: "#fff", fontSize: 30, fontWeight: 300, zIndex: 20,
+                 boxShadow: "0 3px 14px rgba(18,49,43,.28)", lineHeight: 1 }}
+        aria-label="Anotar gasto">+</button>
+
+      {alta && (
+        <AltaGasto medios={medios} inicial={alta.id ? alta : null}
+          onGuardar={guardar} onBorrar={borrar} onCerrar={() => setAlta(null)} />
+      )}
+    </div>
+  );
+}
+
 function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
   const [filtro, setFiltro] = useState("todos");
   const [busca, setBusca] = useState("");
@@ -8125,14 +8465,15 @@ function SimularWrap({ cfg, setCfg, cfgVista, movs, medios, esDueno, vista, setV
 const ICONOS = {
   hoy:  "M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10",
   movs: "M4 7h16M4 12h16M4 17h10",
+  anot: "M6 3.5h9l3.5 3.5v13.5H6zM14.5 3.5V7.5H18.5M9 12h6M9 16h4",
   inv:  "M4 17.5 9.5 12l3.5 3.5L20 8M20 8h-4.5M20 8v4.5",
   sim:  "M5 8h14M5 16h14M9 5.5v5M15 13.5v5",
   rep:  "M8.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 19.5c0-3 2.5-4.5 5.5-4.5s5.5 1.5 5.5 4.5M16.5 15c2.5.3 4 1.8 4 4.5M15.5 10.5a2.6 2.6 0 0 0 0-5",
 };
-const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
+const TABS = [["hoy", "Hoy"], ["anot", "Gastos"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [] };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [], anotador: [] };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -8641,7 +8982,15 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
+      {tab === "anot" && <Anotador cfg={cfgTC} setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador })}
+                              medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
+      {tab === "movs" && (
+        <div>
+          <button onClick={() => setTab("anot")}
+            style={{ padding: "14px 16px 0", fontSize: 14, color: T.ambar, fontWeight: 600 }}>‹ Mis gastos</button>
+          <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />
+        </div>
+      )}
       {tab === "sim" && (
         <SimularWrap cfg={cfgTC} setCfg={setCfg} cfgVista={{ ...cfgTC, desdeMes: desde }}
           movs={movs} medios={medios} esDueno={esDueno}
@@ -8656,7 +9005,7 @@ export default function App() {
           onCompartir={() => setVerCompartir(true)} />
       )}
 
-      <button
+      {tab !== "anot" && <button
         onClick={() => setVerRapido(true)}
         style={{
           position: "fixed", right: 18, bottom: 84, width: 54, height: 54, borderRadius: 27,
@@ -8664,7 +9013,7 @@ export default function App() {
           boxShadow: "0 3px 14px rgba(18,49,43,.28)", lineHeight: 1,
         }}
         aria-label="Agregar movimiento"
-      >+</button>
+      >+</button>}
 
       <nav style={{
         position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 470, margin: "0 auto",
@@ -8674,7 +9023,7 @@ export default function App() {
         paddingBottom: "env(safe-area-inset-bottom, 6px)",
       }}>
         {TABS.map(([id, n]) => {
-          const on = tab === id;
+          const on = tab === id || (id === "anot" && tab === "movs");
           return (
             <button key={id} onClick={() => setTab(id)}
               aria-label={n} aria-current={on ? "page" : undefined}
