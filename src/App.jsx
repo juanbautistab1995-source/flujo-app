@@ -5891,7 +5891,7 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
             {pagoOtro ? `Pagó ${quien} · tu parte ${plata(n - parte)}` : `${quien} te debe ${plata(parte)}`}
           </div>
         )}
-        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="¿En qué?"
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="Nombre del gasto (ej: Verdulería, Uber)"
           style={{ marginTop: 10, textAlign: "center", fontSize: 16, background: "transparent",
                    border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
 
@@ -6178,7 +6178,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
         <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "sueldo" ? "en este sueldo" : rango === "mes" ? "este mes" : "esta semana"}</div>
           <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
-            Tocá el <b>+</b> cada vez que gastes algo. Son tres toques: monto, en qué y con qué.
+            Tocá el <b>+</b> cada vez que gastes algo: monto, nombre y con qué pagaste. La categoría se pone sola.
           </div>
           {yaCargados.length > 0 && (
             <button className="btn ghost" style={{ marginTop: 14 }} onClick={traer}>
