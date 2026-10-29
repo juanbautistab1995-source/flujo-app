@@ -189,8 +189,27 @@ const sumaMes = (mk, n) => mesDeIdx(idxMes(mk) + n);
 const distMes = (a, b) => idxMes(b) - idxMes(a);
 const etiqMes = (mk) => `${MESN[+mk.slice(5, 7) - 1]} ${mk.slice(2, 4)}`;
 const etiqMesLargo = (mk) => `${MESN[+mk.slice(5, 7) - 1]} 20${mk.slice(2, 4)}`;
-const mesDeHoy = () => new Date().toISOString().slice(0, 7);
-const hoyISO = () => new Date().toISOString().slice(0, 10);
+// Período de caja. Si cobrás el sueldo el día X, todo lo que pasa desde el X de un mes
+// es del mes siguiente: el sueldo del 28/10 paga noviembre, y noviembre arranca el 28/10.
+// DIA_CORTE = 0 vuelve a meses calendario (cfg.mesPorSueldo = false).
+let DIA_CORTE = 0;
+function fijarPeriodo(cfg) {
+  DIA_CORTE = cfg && cfg.mesPorSueldo !== false ? Math.min(28, Math.max(0, Math.round(+cfg.diaCobro || 0))) : 0;
+}
+// Fecha local (no UTC): a las 22 h de Argentina, UTC ya es el día siguiente.
+const fechaLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// A qué período de caja pertenece una fecha YYYY-MM-DD
+const periodoDe = (iso) => {
+  const t = String(iso || "");
+  const mk = t.slice(0, 7);
+  if (!DIA_CORTE || !/^\d{4}-\d{2}-\d{2}/.test(t)) return mk;
+  return +t.slice(8, 10) >= DIA_CORTE ? sumaMes(mk, 1) : mk;
+};
+const mesDeHoy = () => periodoDe(fechaLocal());
+const hoyISO = () => fechaLocal();
 
 const plata = (n, d = 0) =>
   (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -792,6 +811,38 @@ function ciclosDe(m) {
   return (m.ciclos || []).slice().sort((a, b) => (a.cierre < b.cierre ? -1 : 1));
 }
 
+// Un ciclo por fecha de cierre: el real le gana al estimado. Y un estimado que cae
+// a menos de 10 días de un ciclo real es ese mismo ciclo mal estimado: se va.
+// Sin esto, el mismo ciclo quedaba guardado varias veces.
+function normalizarCiclos(m) {
+  if (!m || !Array.isArray(m.ciclos)) return m;
+  const por = {};
+  m.ciclos.forEach((c) => {
+    if (!c || !c.cierre || !c.vto) return;
+    const p = por[c.cierre];
+    if (!p || (p.estimado && !c.estimado)) por[c.cierre] = c;
+  });
+  const todos = Object.values(por);
+  const reales = todos.filter((c) => !c.estimado);
+  const cerca = (a, b) => Math.abs(new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) < 10 * 86400000;
+  const lista = todos.filter((c) => !c.estimado || !reales.some((r) => cerca(r.cierre, c.cierre)));
+  return { ...m, ciclos: lista.sort((a, b) => (a.cierre < b.cierre ? -1 : 1)) };
+}
+
+// Tarjetas cuyo resumen de este mes ya venció: si pagás el total, esa plata ya salió
+// y tu saldo de hoy ya la tiene descontada. Solo aplica al mes en curso.
+function tarjetasVencidasEnMes(medios, mk) {
+  const hoy = hoyISO();
+  const out = {};
+  if (mk !== mesDeHoy()) return out;
+  (medios || []).forEach((md) => {
+    if (!md || md.id === "efectivo") return;
+    const cs = ciclosDe(md).filter((c) => c && c.vto && periodoDe(c.vto) === mk);
+    if (cs.length && cs.every((c) => c.vto < hoy)) out[md.id] = true;
+  });
+  return out;
+}
+
 // Estima el siguiente ciclo respetando el dia de la semana del ultimo real.
 function siguienteCiclo(ult) {
   const av = (iso) => {
@@ -831,10 +882,10 @@ function mesDePago(fecha, medioId, medios) {
   const m = (medios || []).find((x) => x.id === medioId);
   const d = new Date((fecha || "") + "T12:00:00");
   if (isNaN(d.getTime())) return mesDeHoy();
-  if (!m || m.id === "efectivo") return d.toISOString().slice(0, 7);
+  if (!m || m.id === "efectivo") return periodoDe(String(fecha).slice(0, 10));
 
   const c = cicloParaFecha(m, fecha);
-  if (c) return c.vto.slice(0, 7);
+  if (c) return periodoDe(c.vto);
 
   // Sin ciclos cargados: caemos al dia fijo del mes
   const ultimo = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
@@ -879,7 +930,8 @@ function mesConsumo(mv, mkPago, medios) {
 function montoEnMes(mv, mkPedido, tc, medios) {
   // Cobrás el 28 pero esa plata es del mes que viene: el ingreso se corre un mes
   // para quedar al lado de los gastos que va a pagar.
-  const mk = mv.paraMes === "siguiente" ? sumaMes(mkPedido, -1) : mkPedido;
+  // Con período de caja por sueldo esto ya está resuelto: no se corre dos veces.
+  const mk = !DIA_CORTE && mv.paraMes === "siguiente" ? sumaMes(mkPedido, -1) : mkPedido;
   // Un importe negativo no tiene sentido en este modelo y contaminaba los totales:
   // lo tratamos como cero en vez de dejar que reste.
   const num = (v) => {
@@ -909,7 +961,7 @@ function montoEnMes(mv, mkPedido, tc, medios) {
 
 function nroCuota(mv, mk) {
   if (mv.recurrente || !mv.mesInicio) return null;
-  return distMes(mv.mesInicio, mv.paraMes === "siguiente" ? sumaMes(mk, -1) : mk) + 1;
+  return distMes(mv.mesInicio, !DIA_CORTE && mv.paraMes === "siguiente" ? sumaMes(mk, -1) : mk) + 1;
 }
 
 // Deja todo el mes en cero: sirve para dar por saldado el mes en curso.
@@ -927,6 +979,7 @@ function estaConfirmado(cfg, mk, id) {
 // Los automáticos (suscripciones, seguros, servicios) se debitan solos y casi
 // nunca cambian. Los variables (nafta, súper) son una apuesta hasta que pasan.
 const esAuto = (mv) => mv.recurrente && mv.auto !== false;
+const esSueldo = (mv) => mv.id === "in_sueldo" || mv.esSueldo === true || /sueldo/i.test(mv.detalle || "");
 
 // El mes en curso y los que ya pasaron se arman SOLO con lo que cargaste.
 // Las bolsas estimadas (nafta, súper, gastos varios) valen de acá en adelante.
@@ -1043,6 +1096,7 @@ function arrastrePersonas(arr, cfg, medios, hasta) {
 }
 
 function proyectar(cfg, movs, medios, meses, extra) {
+  fijarPeriodo(cfg);
   const arr = extra ? [...movs, extra] : movs;
   // Meses de los que YA tenemos el resumen real de una tarjeta. Para esos, los
   // recurrentes de esa tarjeta dejan de estimar: manda el dato del resumen.
@@ -1067,6 +1121,8 @@ function proyectar(cfg, movs, medios, meses, extra) {
 
     const aj = (cfg.ajustes && cfg.ajustes[mk]) || {};
     const apl = (cfg.aplicados && cfg.aplicados[mk]) || {};
+    // Resúmenes de este mes que ya vencieron: se dan por pagados (salvo que lo apagues)
+    const vencidas = cfg.autoPagado === false ? {} : tarjetasVencidasEnMes(medios, mk);
     // Gastos reales cargados a mano que se comen la estimación de un recurrente
     // variable. Los juntamos antes para poder descontárselos abajo.
     const consumido = {};
@@ -1106,6 +1162,23 @@ function proyectar(cfg, movs, medios, meses, extra) {
           items.push({ mv, monto: 0, base, usado, saldado: true, cubierto: true, cuota: nroCuota(mv, mk) });
         else if (tocado && base > 0)
           items.push({ mv, monto: 0, base, saldado: true, cuota: nroCuota(mv, mk) });
+        return;
+      }
+      // El resumen de esta tarjeta ya venció este mes: la plata ya salió de tu cuenta.
+      // Queda visible como saldado. Si era compartido, la otra parte te la siguen debiendo.
+      if (vencidas[mv.medio] && mv.tipo !== "ingreso" && mv.tipo !== "ahorro"
+          && mv.pagadoPor !== "otro") {
+        const pv = mv.persona && isFinite(+mv.pct) ? Math.min(1, Math.max(0, +mv.pct)) : 0;
+        if (pv > 0) {
+          saldos[mv.persona] = (saldos[mv.persona] || 0) + m * pv;
+          reint.push({ persona: mv.persona, monto: m * pv, detalle: mv.detalle });
+        }
+        items.push({ mv, monto: 0, base: m, saldado: true, autoPagado: true, cuota: nroCuota(mv, mk) });
+        return;
+      }
+      // El sueldo de este período ya lo cobraste (es lo que lo abre) y tu saldo de hoy ya lo tiene.
+      if (DIA_CORTE && mk === mesDeHoy() && mv.tipo === "ingreso" && mv.recurrente && esSueldo(mv) && !tocado) {
+        items.push({ mv, monto: 0, base: m, ingreso: true, saldado: true, autoCobrado: true });
         return;
       }
       if (mv.tipo === "ingreso") {
@@ -1171,6 +1244,11 @@ function proyectar(cfg, movs, medios, meses, extra) {
       const monto = tocadoDev ? aj[devKey] : d;
       const aCaja = (mv.devDestino || "caja") !== "tarjeta";
       const medioDev = aCaja ? null : (mv.medio || "efectivo");
+      // Un reintegro en un resumen que ya venció ya está aplicado: no lo restamos de nuevo
+      if (!aCaja && vencidas[medioDev] && !tocadoDev) {
+        items.push({ mv, monto: 0, base: d, devolucion: true, devKey, aCaja, medioDev, saldado: true });
+        return;
+      }
       if (!monto) {
         items.push({ mv, monto: 0, base: d, devolucion: true, devKey, aCaja, medioDev, saldado: true });
         return;
@@ -4599,8 +4677,38 @@ function Curva({ filas, onTocar }) {
 
 
 /* ===================== PRÓXIMOS VENCIMIENTOS ===================== */
-function Vencimientos({ medios }) {
+function Vencimientos({ medios, movs = [], tc = 0 }) {
   const hoy = hoyISO();
+  // Meses en los que una tarjeta tiene DOS vencimientos (y el siguiente, ninguno)
+  const dobles = [];
+  const limite = sumaMes(hoy.slice(0, 7), 6);
+  medios.filter((m) => m.id !== "efectivo").forEach((m) => {
+    const cs = ciclosDe(m).filter((c) => c && c.vto);
+    if (!cs.length) return;
+    let u = cs[cs.length - 1];
+    for (let i = 0; i < 12 && u.vto.slice(0, 7) <= limite; i++) { u = siguienteCiclo(u); cs.push(u); }
+    const porMes = {};
+    cs.filter((c) => c.vto.slice(0, 7) >= hoy.slice(0, 7) && c.vto.slice(0, 7) <= limite)
+      .forEach((c) => { (porMes[c.vto.slice(0, 7)] = porMes[c.vto.slice(0, 7)] || []).push(c); });
+    Object.keys(porMes).forEach((mk) => {
+      if (porMes[mk].length > 1) dobles.push({ m, mk, cs: porMes[mk] });
+    });
+  });
+  // Lo que compraste este mes, por fecha de compra (control del día a día).
+  // No es lo que sale de la caja: eso lo manda el vencimiento de cada resumen.
+  const mkHoy = hoy.slice(0, 7);
+  const compras = movs.filter((mv) => !mv.recurrente && mv.tipo === "gasto"
+    && String(mv.fechaCompra || mv.fecha || "").slice(0, 7) === mkHoy);
+  const valor = (mv) => {
+    const n = (v) => (isFinite(+v) && +v > 0 ? +v : 0);
+    const cuotas = Math.max(1, +mv.cuotas || 1);
+    const total = mv.moneda === "USD" ? n(mv.montoUsd) * (tc || 0) : n(mv.monto);
+    // Si la cargó el resumen, monto es lo que queda: reconstruimos la compra completa
+    if (mv.fechaCompra && n(mv.montoCuota) && cuotas >= 1 && mv.moneda !== "USD") return n(mv.montoCuota) * cuotas;
+    return total;
+  };
+  const totCompras = compras.reduce((a, mv) => a + valor(mv), 0);
+  const fmtD = (iso) => iso.split("-").reverse().slice(0, 2).join("/");
   const prox = medios
     .filter((m) => m.id !== "efectivo")
     .map((m) => {
@@ -4611,14 +4719,36 @@ function Vencimientos({ medios }) {
     })
     .filter(Boolean)
     .sort((a, b) => (a.c.vto < b.c.vto ? -1 : 1));
-  if (!prox.length) return null;
+  if (!prox.length && !compras.length) return null;
 
   const dias = (iso) => Math.round((new Date(iso + "T12:00:00") - new Date(hoy + "T12:00:00")) / 86400000);
 
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Próximos vencimientos</div>
-      <div className="card" style={{ overflow: "hidden" }}>
+      {compras.length > 0 && (
+        <div className="card" style={{ padding: "12px 15px", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Compraste en {etiqMesLargo(mkHoy)}</div>
+            <div className="num" style={{ fontSize: 15, fontWeight: 640 }}>{corta(totCompras)}</div>
+          </div>
+          <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 3 }}>
+            {compras.length} compras por fecha de compra. Con tarjeta, se pagan cuando vence cada resumen.
+          </div>
+        </div>
+      )}
+      {dobles.map(({ m, mk, cs }) => (
+        <div key={m.id + mk} className="card" style={{ padding: "12px 15px", marginBottom: 10,
+              background: "#FFF6E5", borderColor: "#F0DDB4" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+            {m.nombre}: {cs.length} resúmenes vencen en {etiqMesLargo(mk)}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>
+            Vencen el {cs.map((c) => fmtD(c.vto)).join(" y el ")}. Ese mes pagás dos veces y el siguiente, ninguna.
+          </div>
+        </div>
+      ))}
+      {prox.length > 0 && <div style={{ fontSize: 15.5, fontWeight: 620, marginBottom: 9 }}>Próximos vencimientos</div>}
+      {prox.length > 0 && <div className="card" style={{ overflow: "hidden" }}>
         {prox.map(({ m, c }, i) => {
           const d = dias(c.vto);
           const urgente = d <= 7;
@@ -4647,7 +4777,7 @@ function Vencimientos({ medios }) {
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -4681,6 +4811,19 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
   const ahorroMes = mesEnCurso ? mesEnCurso.ahorro : 0;
   const pendiente = mesEnCurso ? mesEnCurso.egresos - mesEnCurso.ingresos : 0;
   const gastoPend = pendiente - ahorroMes;
+  // Lo que quedó sin marcar del período anterior. No se suma a la caja (tu saldo de hoy
+  // es el real), pero conviene verlo por si algo de verdad sigue pendiente.
+  const ant = historial.length ? historial[historial.length - 1] : null;
+  const pendAnt = ant && ant.mk === sumaMes(mesAct, -1)
+    ? ant.items.filter((x) => x.monto > 0 && !x.ingreso && !x.devolucion && !x.ahorro && !x.deuda
+        && (x.mv.medio || "efectivo") === "efectivo") : [];   // las tarjetas de ese período ya vencieron
+  const totPendAnt = pendAnt.reduce((a, x) => a + x.monto, 0);
+  const dd = (mk) => mk.slice(5, 7);
+  const rangoPeriodo = (mk) => DIA_CORTE
+    ? `${DIA_CORTE}/${dd(sumaMes(mk, -1))} → ${DIA_CORTE - 1}/${dd(mk)}`
+    : "este mes";
+  // Con período por sueldo, cada período se llama por el sueldo que lo paga (a mes vencido)
+  const nombrePeriodo = (mk) => DIA_CORTE ? `Sueldo de ${MESN[+sumaMes(mk, -1).slice(5, 7) - 1]}` : etiqMesLargo(mk);
 
   const mesCard = (f, cerrado) => {
 
@@ -4696,10 +4839,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 620 }}>
-                      {etiqMesLargo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
+                      {nombrePeriodo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                      {f.mk === mesAct ? "este mes, en curso"
+                      {f.mk === mesAct ? `en curso · ${rangoPeriodo(f.mk)}`
+                        : DIA_CORTE && !cerrado ? `${rangoPeriodo(f.mk)} · paga ${etiqMesLargo(f.mk)}`
                         : cerrado ? "ya pasó"
                         : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
@@ -5542,11 +5686,22 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
         </div>
       )}
 
+      {totPendAnt > 0 && (
+        <div className="card" style={{ padding: "11px 14px", marginTop: 14, background: "#F6F7F3" }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {DIA_CORTE ? `Del ${nombrePeriodo(ant.mk).toLowerCase()}` : `De ${etiqMesLargo(ant.mk)}`} quedaron {corta(totPendAnt)} sin marcar ({pendAnt.length})
+          </div>
+          <div style={{ fontSize: 11.5, color: T.suave, marginTop: 3 }}>
+            No se restan de tu caja: tu saldo de hoy ya es el real. Si algo de eso todavía no lo pagaste, cargalo en {DIA_CORTE ? `el ${nombrePeriodo(mesAct).toLowerCase()}` : etiqMesLargo(mesAct)}.
+          </div>
+        </div>
+      )}
+
       <div className="eje" style={{ marginTop: 18 }}>
         {filas.map((f) => mesCard(f, false))}
       </div>
 
-      <Vencimientos medios={medios} />
+      <Vencimientos medios={medios} movs={movs} tc={cfg.tc} />
 
       {medios.some((m) => m.id !== "efectivo") && (
         <button onClick={onFinanciar} className="card"
@@ -5589,6 +5744,500 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
 }
 
 /* ===================== PANTALLA: MOVIMIENTOS ===================== */
+/* ===================== ANOTADOR DE GASTOS ===================== */
+// Libreta del día a día: lo que vas gastando, por fecha de compra. Es INDEPENDIENTE de
+// la proyección y de la liquidación del mes: vive en cfg.anotador y no toca movs.
+const ANOT_COLORES = ["#17714F", "#C2742B", "#3E6FA8", "#A93B28", "#7A5BA6", "#2E8C8C",
+                      "#B59A2E", "#5E6B66", "#C25E85", "#4E8A3E", "#8C5A3C", "#6B7FB8"];
+const ANOT_CAT_CORTAS = {
+  "Alimentación": "Súper", "Gastronomía y salidas": "Salidas", "Transporte y nafta": "Nafta y transporte",
+  "Vivienda y servicios": "Casa y servicios", "Hogar y compras": "Hogar",
+};
+const nomCat = (c) => ANOT_CAT_CORTAS[c] || c || "Otros";
+const DIAS_SEM = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const isoDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const sumaDias = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return isoDe(d); };
+
+function Torta({ datos, total, centro, sub }) {
+  // Dona en SVG: cada porción arranca donde terminó la anterior
+  const R = 54, r = 36, C = 66;
+  let ang = -Math.PI / 2;
+  const arcos = datos.filter((d) => d.v > 0).map((d) => {
+    const a = total > 0 ? (d.v / total) * Math.PI * 2 : 0;
+    const a0 = ang, a1 = ang + Math.min(a, Math.PI * 2 - 0.0001);
+    ang += a;
+    const p = (rad, ra) => [C + ra * Math.cos(rad), C + ra * Math.sin(rad)];
+    const [x0, y0] = p(a0, R), [x1, y1] = p(a1, R), [x2, y2] = p(a1, r), [x3, y3] = p(a0, r);
+    const big = a1 - a0 > Math.PI ? 1 : 0;
+    return { ...d, path: `M${x0} ${y0}A${R} ${R} 0 ${big} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${big} 0 ${x3} ${y3}Z` };
+  });
+  return (
+    <svg width="132" height="132" viewBox="0 0 132 132" role="img" aria-label="Gráfico de torta">
+      {arcos.length === 0 && <circle cx={C} cy={C} r={(R + r) / 2} fill="none" stroke={T.linea} strokeWidth={R - r} />}
+      {arcos.map((a) => <path key={a.k} d={a.path} fill={a.color} stroke={T.card} strokeWidth="1.5" />)}
+      <text x={C} y={C - 2} textAnchor="middle" fontSize="15" fontWeight="680" fill={T.tinta}
+            style={{ fontVariantNumeric: "tabular-nums" }}>{centro}</text>
+      <text x={C} y={C + 15} textAnchor="middle" fontSize="10" fill={T.tenue}>{sub}</text>
+    </svg>
+  );
+}
+
+// --- Categorías que aprende solas ---
+// Cada vez que guardás un gasto, las palabras de "en qué" quedan asociadas a la categoría.
+// La próxima vez que escribas algo parecido, sugiere esa. Si no conoce la palabra, usa las pistas fijas.
+const MARCAS_TILDE = new RegExp("[\\u0300-\\u036f]", "g");
+const sinTildes = (t) => String(t || "").normalize("NFD").replace(MARCAS_TILDE, "").toLowerCase();
+const PALABRAS_VACIAS = new Set(["para", "con", "del", "las", "los", "una", "uno", "que", "por", "pago",
+  "compra", "cuenta", "dni", "mercadopago", "merpago", "efectivo", "tarjeta", "cuota", "cuotas"]);
+const palabrasDe = (t) => sinTildes(t).split(/[^a-z0-9ñ]+/).filter((w) => w.length >= 3 && !PALABRAS_VACIAS.has(w));
+const PISTAS_EXTRA = {
+  "Alimentación": ["supermerc", "changomas", "hiper", "dia ", "vital", "maxiconsumo", "fiambre", "polleria",
+    "pescader", "dietet", "naturist", "kapri", "almacen", "mayorista", "coca", "bebida", "agua mineral"],
+  "Gastronomía y salidas": ["starbucks", "havanna", "mostaza", "kfc", "mc ", "vianda", "almuerzo", "cena",
+    "merienda", "desayuno", "bodegon", "cerveceria", "vino", "vinoteca", "helado", "empanada"],
+  "Transporte y nafta": ["colectivo", "tren", "subte", "micro", "estacionamiento", "lavadero", "gomeria", "taller"],
+  "Vivienda y servicios": ["luz", "gas ", "agua", "cable", "jardin", "plomero", "electricista", "gasista"],
+  "Suscripciones": ["membres", "suscrip", "abono", "premium", "plan "],
+  "Salud": ["farmacity", "clinica", "hospital", "turno", "remedio", "medicamento", "analisis"],
+  "Deporte": ["cancha", "entrena", "pileta", "running", "crossfit", "yoga"],
+  "Cuidado personal": ["corte de pelo", "manicur", "depila", "spa", "masaj"],
+  "Hogar y compras": ["regalo", "juguete", "libreria", "articulos", "planta", "vivero", "mates", "mate "],
+};
+function adivinarConAprendido(texto, aprendido) {
+  const votos = {};
+  palabrasDe(texto).forEach((w) => {
+    const c = (aprendido || {})[w];
+    if (c) Object.entries(c).forEach(([cat, n]) => { votos[cat] = (votos[cat] || 0) + n; });
+  });
+  const top = Object.entries(votos).sort((a, b) => b[1] - a[1])[0];
+  if (top) return { cat: top[0], aprendida: true };
+  const t = sinTildes(texto);
+  for (const [cat, pistas] of Object.entries(PISTAS_EXTRA))
+    if (pistas.some((p) => t.includes(p))) return { cat, aprendida: false };
+  return { cat: adivinarCategoria(t), aprendida: false };
+}
+function aprender(aprendido, texto, cat) {
+  const a = { ...(aprendido || {}) };
+  palabrasDe(texto).forEach((w) => {
+    const prev = a[w] || {};
+    a[w] = { ...prev, [cat]: Math.min(50, (prev[cat] || 0) + 1) };
+  });
+  return a;
+}
+
+function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
+  const ini = inicial || {};
+  const [monto, setMonto] = useState(inicial ? String(Math.round(ini.monto)) : "");
+  const [detalle, setDetalle] = useState(ini.detalle || "");
+  const [medio, setMedio] = useState(ini.medio || (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo");
+  // La categoría queda "fija" solo si la elegiste a mano; si no, sigue lo que escribís
+  const [cat, setCat] = useState(ini.catManual ? ini.categoria : "");
+  const hoy = hoyISO();
+  const [fecha, setFecha] = useState(ini.fecha || hoy);
+  const [cuotas, setCuotas] = useState(ini.cuotas || 1);
+  const [persona, setPersona] = useState(ini.persona || "");
+  const [nuevaPersona, setNuevaPersona] = useState("");
+  const [agregandoPersona, setAgregandoPersona] = useState(false);
+  const [pct, setPct] = useState(ini.pct != null ? Math.round(ini.pct * 100) : 50);
+  const [pagoOtro, setPagoOtro] = useState(ini.pagadoPor === "otro");
+  const [nota, setNota] = useState(ini.nota || "");
+  const [verMas, setVerMas] = useState(!!(ini.persona || ini.nota || (ini.cuotas || 1) > 1));
+
+  const n = parseInt(monto || "0", 10);
+  const sug = adivinarConAprendido(detalle, aprendido);
+  const catFinal = cat || sug.cat;
+  const tecla = (t) => {
+    if (t === "b") return setMonto(monto.slice(0, -1));
+    if (t === "000") return setMonto(monto && monto.length < 8 ? monto + "000" : monto);
+    if (monto.length < 10) setMonto((monto === "0" ? "" : monto) + t);
+  };
+  const quien = (agregandoPersona ? nuevaPersona.trim() : persona) || "";
+  const parte = quien ? Math.round(n * (pct / 100)) : 0;
+  const guardar = () => {
+    if (n <= 0) return;
+    onGuardar({
+      id: ini.id || "a" + Date.now(),
+      fecha, monto: n, detalle: detalle.trim() || nomCat(catFinal),
+      medio, categoria: catFinal, ...(cat ? { catManual: true } : {}),
+      ...(medio !== "efectivo" && cuotas > 1 ? { cuotas } : {}),
+      ...(quien ? { persona: quien, pct: pct / 100, pagadoPor: pagoOtro ? "otro" : "yo" } : {}),
+      ...(nota.trim() ? { nota: nota.trim() } : {}),
+    });
+    onCerrar();
+  };
+  const ayer = sumaDias(hoy, -1);
+  // Las categorías: la sugerida primero, después el resto
+  const cats = [catFinal, ...CATEGORIAS.filter((c) => c !== catFinal && c !== "Préstamos")];
+  const fila = { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 };
+  const rotulo = { fontSize: 11.5, color: T.tenue, margin: "12px 0 6px", fontWeight: 560 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
+                  display: "flex", flexDirection: "column", maxWidth: 470, margin: "0 auto" }}>
+      <div style={{ padding: "12px 16px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+        <span style={{ fontSize: 14.5, fontWeight: 620 }}>{inicial ? "Editar gasto" : "Anotar gasto"}</span>
+        {inicial
+          ? <button onClick={() => { onBorrar(ini.id); onCerrar(); }} style={{ fontSize: 14, color: T.rojo, fontWeight: 600 }}>Borrar</button>
+          : <span style={{ width: 52 }} />}
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px", minHeight: 0 }}>
+        <div className="plata" style={{ fontSize: 40, textAlign: "center", marginTop: 6, color: n > 0 ? T.tinta : T.tenue }}>
+          {n > 0 ? plata(n) : "$0"}
+        </div>
+        {quien && n > 0 && (
+          <div style={{ textAlign: "center", fontSize: 12.5, color: T.suave, marginTop: 3 }}>
+            {pagoOtro ? `Pagó ${quien} · tu parte ${plata(n - parte)}` : `${quien} te debe ${plata(parte)}`}
+          </div>
+        )}
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="¿En qué?"
+          style={{ marginTop: 10, textAlign: "center", fontSize: 16, background: "transparent",
+                   border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
+
+        <div style={rotulo}>Categoría {!cat && detalle.trim() && (sug.aprendida ? "· la aprendí de vos" : "· sugerida")}</div>
+        <div className="scroll" style={fila}>
+          {cats.map((c) => (
+            <button key={c} className={"chip sm" + (catFinal === c ? " on" : "")}
+              onClick={() => setCat(c === cat ? "" : c)}>{nomCat(c)}</button>
+          ))}
+        </div>
+
+        <div style={rotulo}>Con qué</div>
+        <div className="scroll" style={fila}>
+          {medios.map((m) => (
+            <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
+              onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+          ))}
+        </div>
+
+        <div style={rotulo}>Cuándo</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button className={"chip sm" + (fecha === hoy ? " on" : "")} onClick={() => setFecha(hoy)}>Hoy</button>
+          <button className={"chip sm" + (fecha === ayer ? " on" : "")} onClick={() => setFecha(ayer)}>Ayer</button>
+          <input type="date" value={fecha} max={hoy} onChange={(e) => e.target.value && setFecha(e.target.value)}
+            style={{ flex: 1, padding: "5px 9px", fontSize: 14, borderRadius: 999 }} />
+        </div>
+
+        {!verMas && (
+          <button onClick={() => setVerMas(true)}
+            style={{ marginTop: 12, fontSize: 13, color: T.ambar, fontWeight: 600, width: "100%" }}>
+            + Compartido, cuotas o nota
+          </button>
+        )}
+        {verMas && (
+          <>
+            <div style={rotulo}>¿Compartido?</div>
+            <div className="scroll" style={fila}>
+              <button className={"chip sm" + (!quien ? " on" : "")}
+                onClick={() => { setPersona(""); setAgregandoPersona(false); }}>Solo mío</button>
+              {personas.map((p) => (
+                <button key={p} className={"chip sm" + (!agregandoPersona && persona === p ? " on" : "")}
+                  onClick={() => { setPersona(p); setAgregandoPersona(false); }}>{p}</button>
+              ))}
+              <button className={"chip sm" + (agregandoPersona ? " on" : "")}
+                onClick={() => setAgregandoPersona(true)}>+ Otra persona</button>
+            </div>
+            {agregandoPersona && (
+              <input value={nuevaPersona} onChange={(e) => setNuevaPersona(e.target.value)} placeholder="Nombre"
+                style={{ marginTop: 8, padding: "8px 12px", fontSize: 15 }} />
+            )}
+            {quien && (
+              <>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {[50, 33, 100].map((v) => (
+                    <button key={v} className={"chip sm" + (pct === v ? " on" : "")} onClick={() => setPct(v)}>
+                      {v === 100 ? "Todo de " + quien : v === 50 ? "Mitad y mitad" : "Un tercio"}
+                    </button>
+                  ))}
+                  <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: T.suave }}>
+                    <input inputMode="numeric" value={pct}
+                      onChange={(e) => setPct(Math.min(100, Math.max(0, parseInt(e.target.value.replace(/\D/g, "") || "0", 10))))}
+                      style={{ width: 56, padding: "5px 8px", fontSize: 14, textAlign: "center" }} />% de {quien}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button className={"chip sm" + (!pagoOtro ? " on" : "")} onClick={() => setPagoOtro(false)}>Pagué yo</button>
+                  <button className={"chip sm" + (pagoOtro ? " on" : "")} onClick={() => setPagoOtro(true)}>Pagó {quien}</button>
+                </div>
+              </>
+            )}
+            {medio !== "efectivo" && (
+              <>
+                <div style={rotulo}>Cuotas</div>
+                <div className="scroll" style={fila}>
+                  {[1, 3, 6, 9, 12, 18].map((c) => (
+                    <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
+                      onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <div style={rotulo}>Nota</div>
+            <input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Opcional"
+              style={{ padding: "8px 12px", fontSize: 15 }} />
+          </>
+        )}
+        <div style={{ height: 10 }} />
+      </div>
+
+      <div style={{ padding: "8px 12px 14px", borderTop: `1px solid ${T.linea}` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+          {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
+            <button key={t} onClick={() => tecla(t)}
+              style={{ padding: "11px 0", fontSize: t === "b" ? 18 : 21, fontWeight: 500,
+                       background: T.card, borderRadius: 12, border: `1px solid ${T.linea}` }}>
+              {t === "b" ? "⌫" : t}
+            </button>
+          ))}
+        </div>
+        <button className="btn" style={{ marginTop: 8, padding: 13, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
+          {inicial ? "Guardar cambios" : "Anotar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
+  const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
+  const hoy = hoyISO();
+  const [rango, setRango] = useState("sueldo");   // sueldo | semana | mes
+  const [mesVer, setMesVer] = useState(hoy.slice(0, 7));
+  const [vista, setVista] = useState("medio");    // medio | cat
+  const [alta, setAlta] = useState(null);         // null | {} nuevo | gasto a editar
+  const [filtro, setFiltro] = useState(null);     // porción tocada de la torta
+
+  const aprendido = cfg.anotadorAprende || {};
+  const guardarLista = (l) => setCfg({ ...cfg, anotador: l });
+  const guardar = (g) => {
+    const i = lista.findIndex((x) => x.id === g.id);
+    const l = i >= 0 ? lista.map((x) => (x.id === g.id ? g : x)) : [...lista, g];
+    setCfg({ ...cfg, anotador: l, anotadorAprende: aprender(aprendido, g.detalle, g.categoria) });
+  };
+  // Categoría que se muestra: la que elegiste a mano manda; si quedó en "Otros", se reintenta
+  const catDe = (g) => (g.catManual || (g.categoria && g.categoria !== "Otros")
+    ? g.categoria || "Otros" : adivinarConAprendido(g.detalle, aprendido).cat);
+  const personasAnot = [...new Set([
+    ...movs.filter((m) => m.persona).map((m) => m.persona),
+    ...lista.filter((g) => g.persona).map((g) => g.persona),
+  ])];
+  // Lo que salió de tu bolsillo (si pagó otro, no salió nada tuyo)
+  const pagado = (g) => (g.pagadoPor === "otro" ? 0 : +g.monto || 0);
+  const borrar = (id) => guardarLista(lista.filter((x) => x.id !== id));
+
+  // Rango de fechas que se mira
+  const dc = Math.min(28, Math.max(1, Math.round(+cfg.diaCobro || 28)));
+  let desde, hasta, titulo;
+  if (rango === "semana") {
+    const d = new Date(hoy + "T12:00:00");
+    const lunes = sumaDias(hoy, -((d.getDay() + 6) % 7));
+    desde = lunes; hasta = hoy; titulo = "Esta semana";
+  } else if (rango === "sueldo") {
+    const h = new Date(hoy + "T12:00:00");
+    let ini = new Date(h.getFullYear(), h.getMonth(), dc, 12);
+    if (h.getDate() < dc) ini = new Date(h.getFullYear(), h.getMonth() - 1, dc, 12);
+    desde = isoDe(ini); hasta = hoy;
+    const fin = sumaDias(isoDe(new Date(ini.getFullYear(), ini.getMonth() + 1, dc, 12)), -1);
+    titulo = `Sueldo de ${MESN[ini.getMonth()]} · ${desde.slice(8, 10)}/${desde.slice(5, 7)} → ${fin.slice(8, 10)}/${fin.slice(5, 7)}`;
+  } else {
+    desde = mesVer + "-01"; hasta = mesVer + "-31"; titulo = etiqMesLargo(mesVer);
+  }
+  const enRango = lista.filter((g) => g.fecha >= desde && g.fecha <= hasta);
+  const total = enRango.reduce((a, g) => a + pagado(g), 0);
+  const teDeben = enRango.reduce((a, g) => a + (g.persona && g.pagadoPor !== "otro" ? (+g.monto || 0) * (+g.pct || 0) : 0), 0);
+  const debes = enRango.reduce((a, g) => a + (g.persona && g.pagadoPor === "otro" ? (+g.monto || 0) * (1 - (+g.pct || 0)) : 0), 0);
+  const dias = Math.max(1, Math.round((new Date((rango === "mes" && mesVer !== hoy.slice(0, 7)
+    ? isoDe(new Date(+mesVer.slice(0, 4), +mesVer.slice(5, 7), 0, 12)) : hoy) + "T12:00:00")
+    - new Date(desde + "T12:00:00")) / 86400000) + 1);
+
+  const nomMedio = (id) => { const m = medios.find((x) => x.id === id); return m ? (m.corto || m.nombre) : "Otro"; };
+  const clave = (g) => (vista === "medio" ? g.medio || "efectivo" : catDe(g));
+  const grupos = {};
+  enRango.forEach((g) => { if (pagado(g) > 0) grupos[clave(g)] = (grupos[clave(g)] || 0) + pagado(g); });
+  const datos = Object.entries(grupos).sort((a, b) => b[1] - a[1])
+    .map(([k, v], i) => ({ k, v, color: ANOT_COLORES[i % ANOT_COLORES.length],
+                           nom: vista === "medio" ? nomMedio(k) : nomCat(k) }));
+  const visibles = filtro ? enRango.filter((g) => clave(g) === filtro) : enRango;
+
+  // Lista por día, el más nuevo arriba
+  const porDia = {};
+  visibles.forEach((g) => { (porDia[g.fecha] = porDia[g.fecha] || []).push(g); });
+  const diasOrden = Object.keys(porDia).sort((a, b) => (a < b ? 1 : -1));
+  const etiqDia = (iso) => {
+    if (iso === hoy) return "Hoy";
+    if (iso === sumaDias(hoy, -1)) return "Ayer";
+    const d = new Date(iso + "T12:00:00");
+    return `${DIAS_SEM[d.getDay()]} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+  };
+
+  // Traer lo que ya tenías cargado en la app (solo para arrancar; quedan como copias)
+  const yaCargados = movs.filter((mv) => {
+    if (mv.recurrente || mv.tipo !== "gasto") return false;
+    const f = String(mv.fechaCompra || mv.fecha || "").slice(0, 10);
+    return f >= desde && f <= hasta;
+  });
+  const traer = () => {
+    const ids = new Set(lista.map((g) => g.origen).filter(Boolean));
+    const nuevos = yaCargados.filter((mv) => !ids.has(mv.id)).map((mv) => {
+      const cuotas = Math.max(1, +mv.cuotas || 1);
+      const m = mv.moneda === "USD" ? (+mv.montoUsd || 0) * (cfg.tc || 0)
+        : mv.fechaCompra && +mv.montoCuota ? +mv.montoCuota * cuotas : +mv.monto || 0;
+      return { id: "a" + mv.id, origen: mv.id, fecha: String(mv.fechaCompra || mv.fecha).slice(0, 10),
+               monto: Math.round(m), detalle: mv.detalle || "Gasto", medio: mv.medio || "efectivo",
+               categoria: mv.categoria || adivinarCategoria(mv.detalle || ""),
+               ...(mv.persona ? { persona: mv.persona, pct: isFinite(+mv.pct) ? +mv.pct : 0.5,
+                                  pagadoPor: mv.pagadoPor === "otro" ? "otro" : "yo" } : {}) };
+    }).filter((g) => g.monto > 0);
+    if (nuevos.length) guardarLista([...lista, ...nuevos]);
+  };
+
+  return (
+    <div style={{ padding: 16, paddingBottom: 110 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div style={{ fontSize: 22, fontWeight: 680, letterSpacing: "-0.02em" }}>Mis gastos</div>
+        <button onClick={onVerMovs} style={{ fontSize: 13, color: T.ambar, fontWeight: 600 }}>
+          Movimientos del flujo ›
+        </button>
+      </div>
+      <div style={{ fontSize: 12, color: T.tenue, marginTop: 3 }}>
+        Tu anotador del día a día. No toca la proyección.
+      </div>
+
+      <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
+        {[["sueldo", "Este sueldo"], ["semana", "Semana"], ["mes", "Mes"]].map(([id, n]) => (
+          <button key={id} className={"chip sm" + (rango === id ? " on" : "")}
+            onClick={() => { setRango(id); setFiltro(null); }}>{n}</button>
+        ))}
+      </div>
+
+      <div className="cima" style={{ padding: "16px 18px", marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {rango === "mes"
+            ? <button onClick={() => { setMesVer(sumaMes(mesVer, -1)); setFiltro(null); }}
+                aria-label="Mes anterior" style={{ fontSize: 20, padding: "0 6px", color: "#EAF0EC" }}>‹</button>
+            : <span />}
+          <div style={{ fontSize: 13, opacity: 0.8 }}>{titulo}</div>
+          {rango === "mes" && mesVer < hoy.slice(0, 7)
+            ? <button onClick={() => { setMesVer(sumaMes(mesVer, 1)); setFiltro(null); }}
+                aria-label="Mes siguiente" style={{ fontSize: 20, padding: "0 6px", color: "#EAF0EC" }}>›</button>
+            : <span style={{ width: 18 }} />}
+        </div>
+        <div className="plata" style={{ fontSize: 38, textAlign: "center", marginTop: 6 }}>{plata(total)}</div>
+        <div style={{ fontSize: 12, opacity: 0.75, textAlign: "center", marginTop: 4 }}>
+          {enRango.length} {enRango.length === 1 ? "gasto" : "gastos"}
+          {total > 0 ? ` · ${corta(total / dias)} por día` : ""}
+        </div>
+        {(teDeben > 0 || debes > 0) && (
+          <div style={{ fontSize: 12.5, textAlign: "center", marginTop: 8, opacity: 0.9 }}>
+            {teDeben > 0 && <>Te deben <b className="num">{corta(teDeben)}</b></>}
+            {teDeben > 0 && debes > 0 && " · "}
+            {debes > 0 && <>Debés <b className="num">{corta(debes)}</b></>}
+          </div>
+        )}
+      </div>
+
+      {enRango.length > 0 && (
+        <div className="card" style={{ padding: 14, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+            <button className={"chip sm" + (vista === "medio" ? " on" : "")}
+              onClick={() => { setVista("medio"); setFiltro(null); }}>Por medio de pago</button>
+            <button className={"chip sm" + (vista === "cat" ? " on" : "")}
+              onClick={() => { setVista("cat"); setFiltro(null); }}>Por categoría</button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12 }}>
+            <Torta datos={datos} total={total} centro={corta(total)} sub={vista === "medio" ? "por medio" : "por categoría"} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {datos.slice(0, 7).map((d) => (
+                <button key={d.k} onClick={() => setFiltro(filtro === d.k ? null : d.k)}
+                  style={{ display: "flex", alignItems: "center", width: "100%", gap: 7, padding: "4px 0",
+                           opacity: filtro && filtro !== d.k ? 0.4 : 1 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: d.color, flex: "none" }} />
+                  <span style={{ fontSize: 12.5, flex: 1, textAlign: "left", overflow: "hidden",
+                                 textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom}</span>
+                  <span className="num" style={{ fontSize: 12.5, fontWeight: 600 }}>{corta(d.v)}</span>
+                  <span className="num" style={{ fontSize: 11, color: T.tenue, width: 30, textAlign: "right" }}>
+                    {Math.round((d.v / total) * 100)}%
+                  </span>
+                </button>
+              ))}
+              {datos.length > 7 && (
+                <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 3 }}>y {datos.length - 7} más</div>
+              )}
+            </div>
+          </div>
+          {filtro && (
+            <button onClick={() => setFiltro(null)} style={{ fontSize: 12, color: T.ambar, marginTop: 8, fontWeight: 600 }}>
+              Mostrando solo {datos.find((d) => d.k === filtro)?.nom} · ver todo
+            </button>
+          )}
+        </div>
+      )}
+
+      {enRango.length === 0 && (
+        <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "sueldo" ? "en este sueldo" : rango === "mes" ? "este mes" : "esta semana"}</div>
+          <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
+            Tocá el <b>+</b> cada vez que gastes algo. Son tres toques: monto, en qué y con qué.
+          </div>
+          {yaCargados.length > 0 && (
+            <button className="btn ghost" style={{ marginTop: 14 }} onClick={traer}>
+              Traer {yaCargados.length === 1 ? "el gasto" : `los ${yaCargados.length} gastos`} de estas fechas que ya tenés cargados
+            </button>
+          )}
+        </div>
+      )}
+
+      {diasOrden.map((dia) => {
+        const tot = porDia[dia].reduce((a, g) => a + pagado(g), 0);
+        return (
+          <div key={dia} style={{ marginTop: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5,
+                          color: T.suave, padding: "0 4px 6px" }}>
+              <span style={{ fontWeight: 600 }}>{etiqDia(dia)}</span>
+              <span className="num">{plata(tot)}</span>
+            </div>
+            <div className="card" style={{ overflow: "hidden" }}>
+              {porDia[dia].slice().reverse().map((g, i) => (
+                <button key={g.id} onClick={() => setAlta(g)}
+                  style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, padding: "11px 14px",
+                           borderTop: i ? `1px solid ${T.linea}` : "none", textAlign: "left" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, flex: "none",
+                    background: (datos.find((d) => d.k === clave(g)) || {}).color || T.eje }} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 14, fontWeight: 560, overflow: "hidden",
+                                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.detalle}</span>
+                    <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 1 }}>
+                      {nomCat(catDe(g))} · {nomMedio(g.medio)}
+                      {g.cuotas > 1 ? ` · ${g.cuotas} cuotas` : ""}
+                      {g.persona ? (g.pagadoPor === "otro"
+                        ? ` · pagó ${g.persona}`
+                        : ` · ${g.persona} te debe ${corta((+g.monto || 0) * (+g.pct || 0))}`) : ""}
+                    </span>
+                  </span>
+                  <span className="num" style={{ fontSize: 14.5, fontWeight: 620 }}>{plata(g.monto)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      <button onClick={() => setAlta({})}
+        style={{ position: "fixed", right: 18, bottom: 84, width: 58, height: 58, borderRadius: 29,
+                 background: T.tinta, color: "#fff", fontSize: 30, fontWeight: 300, zIndex: 20,
+                 boxShadow: "0 3px 14px rgba(18,49,43,.28)", lineHeight: 1 }}
+        aria-label="Anotar gasto">+</button>
+
+      {alta && (
+        <AltaGasto medios={medios} inicial={alta.id ? alta : null}
+          personas={personasAnot} aprendido={aprendido}
+          onGuardar={guardar} onBorrar={borrar} onCerrar={() => setAlta(null)} />
+      )}
+    </div>
+  );
+}
+
 function Movimientos({ movs, medios, cfg, onEditar, onBorrarVarios }) {
   const [filtro, setFiltro] = useState("todos");
   const [busca, setBusca] = useState("");
@@ -7973,14 +8622,15 @@ function SimularWrap({ cfg, setCfg, cfgVista, movs, medios, esDueno, vista, setV
 const ICONOS = {
   hoy:  "M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10",
   movs: "M4 7h16M4 12h16M4 17h10",
+  anot: "M6 3.5h9l3.5 3.5v13.5H6zM14.5 3.5V7.5H18.5M9 12h6M9 16h4",
   inv:  "M4 17.5 9.5 12l3.5 3.5L20 8M20 8h-4.5M20 8v4.5",
   sim:  "M5 8h14M5 16h14M9 5.5v5M15 13.5v5",
   rep:  "M8.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 19.5c0-3 2.5-4.5 5.5-4.5s5.5 1.5 5.5 4.5M16.5 15c2.5.3 4 1.8 4 4.5M15.5 10.5a2.6 2.6 0 0 0 0-5",
 };
-const TABS = [["hoy", "Hoy"], ["movs", "Movs"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
+const TABS = [["hoy", "Hoy"], ["anot", "Gastos"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
-const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [] };
+const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [], anotador: [] };
 
 export default function App() {
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
@@ -7989,6 +8639,8 @@ export default function App() {
   const [verCuenta, setVerCuenta] = useState(false);
   const [tab, setTab] = useState("hoy");
   const [cfg, setCfgRaw] = useState(CFG_INI);
+  // El período de caja depende del día de cobro: lo fijamos en cada render
+  fijarPeriodo(cfg);
   const [movs, setMovs] = useState(SEED);
   const [cargando, setCargando] = useState(true);
   const [falloCarga, setFalloCarga] = useState(false);
@@ -8088,6 +8740,7 @@ export default function App() {
       soloLectura.current = false;
 
       const mk = mesDeHoy();
+      fijarPeriodo({ ...CFG_INI, ...(cfgN || {}) });
       const c = { ...CFG_INI, ...(cfgN || {}), desdeMes: null,
                   ajustes: (cfgN && cfgN.ajustes) || {}, aplicados: (cfgN && cfgN.aplicados) || {} };
       if (nueva && !c.medios) c.medios = MEDIOS_NUEVO;
@@ -8126,6 +8779,35 @@ export default function App() {
       });
       // Desde acá se arrastra lo que no se salda con cada persona
       if (!c.personasDesde) c.personasDesde = mk;
+      // Resúmenes importados que perdieron su marca (bug viejo al importar): la reponemos
+      // para que los gastos fijos estimados de esa tarjeta y ese mes no se cuenten dos veces.
+      const resum = { ...(c.resumenes || {}) };
+      movsN.forEach((m) => {
+        if (String(m.id).startsWith("imp") && m.medio && m.mesInicio) resum[m.medio + "|" + m.mesInicio] = true;
+      });
+      c.resumenes = resum;
+      // Ciclos repetidos de las tarjetas: uno por cierre
+      if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
+      // Período de caja por sueldo: los gastos en efectivo recientes hechos desde el día de cobro
+      // pasan al mes siguiente, con lo que ya hayas marcado de ellos (una sola vez).
+      if (DIA_CORTE && !c.periodoV1) {
+        const lim = new Date(); lim.setDate(lim.getDate() - 45);
+        const limISO = lim.toISOString().slice(0, 10);
+        movsN = movsN.map((m) => {
+          const f = String(m.fecha || "").slice(0, 10);
+          if (m.recurrente || (m.medio && m.medio !== "efectivo") || !f || f < limISO) return m;
+          if (m.mesInicio !== f.slice(0, 7) || periodoDe(f) === m.mesInicio) return m;
+          const de = m.mesInicio, a = periodoDe(f);
+          [c.ajustes, c.aplicados].forEach((tabla) => {
+            if (tabla && tabla[de] && Object.prototype.hasOwnProperty.call(tabla[de], m.id)) {
+              tabla[a] = { ...(tabla[a] || {}), [m.id]: tabla[de][m.id] };
+              const resto = { ...tabla[de] }; delete resto[m.id]; tabla[de] = resto;
+            }
+          });
+          return { ...m, mesInicio: a };
+        });
+        c.periodoV1 = true;
+      }
       if (!c.ajustesInit) {
         c.ajustes = { ...c.ajustes,
           [mk]: { ...ajustesEnCero(movsN.filter((m) => String(m.id).startsWith("s")), mk, c.tc),
@@ -8246,7 +8928,7 @@ export default function App() {
   };
   const guardarMedios = (lista) => {
     // Nunca dejamos la app sin medios de pago
-    const l = lista.length ? lista : MEDIOS_NUEVO;
+    const l = (lista.length ? lista : MEDIOS_NUEVO).map(normalizarCiclos);
     setCfg({ ...cfg, medios: l });
   };
   // Vaciar deja la cuenta como recién creada: sin movimientos, sin tarjetas, sin saldo.
@@ -8457,7 +9139,16 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "movs" && <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />}
+      {tab === "anot" && <Anotador cfg={cfgTC}
+                              setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador, anotadorAprende: c.anotadorAprende || cfg.anotadorAprende })}
+                              medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
+      {tab === "movs" && (
+        <div>
+          <button onClick={() => setTab("anot")}
+            style={{ padding: "14px 16px 0", fontSize: 14, color: T.ambar, fontWeight: 600 }}>‹ Mis gastos</button>
+          <Movimientos movs={movs} medios={medios} cfg={cfgTC} onEditar={setEditando} onBorrarVarios={borrarVarios} />
+        </div>
+      )}
       {tab === "sim" && (
         <SimularWrap cfg={cfgTC} setCfg={setCfg} cfgVista={{ ...cfgTC, desdeMes: desde }}
           movs={movs} medios={medios} esDueno={esDueno}
@@ -8472,7 +9163,7 @@ export default function App() {
           onCompartir={() => setVerCompartir(true)} />
       )}
 
-      <button
+      {tab !== "anot" && <button
         onClick={() => setVerRapido(true)}
         style={{
           position: "fixed", right: 18, bottom: 84, width: 54, height: 54, borderRadius: 27,
@@ -8480,7 +9171,7 @@ export default function App() {
           boxShadow: "0 3px 14px rgba(18,49,43,.28)", lineHeight: 1,
         }}
         aria-label="Agregar movimiento"
-      >+</button>
+      >+</button>}
 
       <nav style={{
         position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 470, margin: "0 auto",
@@ -8490,7 +9181,7 @@ export default function App() {
         paddingBottom: "env(safe-area-inset-bottom, 6px)",
       }}>
         {TABS.map(([id, n]) => {
-          const on = tab === id;
+          const on = tab === id || (id === "anot" && tab === "movs");
           return (
             <button key={id} onClick={() => setTab(id)}
               aria-label={n} aria-current={on ? "page" : undefined}
@@ -8570,26 +9261,32 @@ export default function App() {
               return [m];
             });
             setMovs([...quedan, ...nuevos]);
+            // Todo en UN solo cambio de configuración. Antes se guardaban por separado y el
+            // segundo pisaba al primero: se perdía la marca de "resumen real" y los fijos
+            // estimados de esa tarjeta se contaban dos veces.
+            let cfgN = { ...cfg };
             // Ese mes ya no se estima: tenemos el resumen real
             if (medioId && ciclos && ciclos.vto) {
-              setCfg({ ...cfg, resumenes: { ...(cfg.resumenes || {}),
-                       [medioId + "|" + ciclos.vto.slice(0, 7)]: true } });
+              cfgN.resumenes = { ...(cfg.resumenes || {}), [medioId + "|" + ciclos.vto.slice(0, 7)]: true };
             }
-            // El resumen trae las fechas del próximo ciclo: las guardamos como confirmadas
+            // El resumen trae las fechas de este ciclo y del próximo: quedan como reales
             if (medioId && ((ciclos && ciclos.proxCierre) || fin)) {
               const lista = medios.map((m) => {
                 if (m.id !== medioId) return m;
                 const cs = (m.ciclos || []).slice();
-                [[ciclos.cierre, ciclos.vto], [ciclos.proxCierre, ciclos.proxVto]].forEach(([c, v]) => {
-                  if (c && v && !cs.some((x) => x.cierre === c)) cs.push({ cierre: c, vto: v });
+                [[ciclos && ciclos.cierre, ciclos && ciclos.vto], [ciclos && ciclos.proxCierre, ciclos && ciclos.proxVto]].forEach(([c, v]) => {
+                  if (!c || !v) return;
+                  const j = cs.findIndex((x) => x.cierre === c);
+                  if (j >= 0) cs[j] = { cierre: c, vto: v }; else cs.push({ cierre: c, vto: v });
                 });
-                return { ...m, ciclos: cs,
+                return normalizarCiclos({ ...m, ciclos: cs,
                   tna: (fin && fin.tna) || m.tna, tem: (fin && fin.tem) || m.tem,
                   pagoMinimo: (fin && fin.pagoMinimo) || m.pagoMinimo,
-                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo };
+                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo });
               });
-              guardarMedios(lista);
+              cfgN.medios = lista.length ? lista : MEDIOS_NUEVO;
             }
+            setCfg(cfgN);
           }}
           onCerrar={() => setVerImportar(false)} />
       )}
