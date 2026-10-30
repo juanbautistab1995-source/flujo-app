@@ -30,6 +30,12 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 - **Préstamos** pueden ajustar por `fija`, `inflacion` o `sueldo` (`mv.ajustaPor`).
 - **Anotador de gastos** (pestaña "Gastos", `cfg.anotador`): libreta del día a día por fecha de compra.
   Es independiente: no toca `movs` ni la proyección. La lista completa del flujo (Movimientos) se abre desde ahí.
+- **Saldo vivo**: anotar un gasto en efectivo/débito baja `saldoHoy` en el momento (`restoCaja` guarda cuánto, para revertir).
+  "Ajustar con el banco" pone el saldo real y la diferencia queda como "Gastos sin anotar" (`sinAnotar`).
+- **Liquidar** (`liquidarAnotador`): pasa gastos del anotador a `movs` (efectivo como ya pagado: ajuste 0 + aplicado 0;
+  tarjeta a su resumen; compartidos con persona). El gasto queda con `mov` y no se puede volver a liquidar ni editar desde el anotador.
+- **Panel del sueldo** (`PanelSueldo` en Hoy): libre para gastar = saldo − falta pagar + falta cobrar, por día hasta el fin del período,
+  con la regla de vencimientos.
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo

@@ -4782,10 +4782,248 @@ function Vencimientos({ medios, movs = [], tc = 0 }) {
   );
 }
 
+/* ===================== PANEL DEL SUELDO ===================== */
+// Responde una sola pregunta: cuánto puedo gastar hasta el próximo sueldo.
+// La regla del período es la pieza central: del día que cobraste al día antes del próximo
+// cobro, con los vencimientos clavados en su fecha.
+const ddmm = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+
+function rangoDelPeriodo(mk, diaCobro) {
+  const dc = Math.min(28, Math.max(1, Math.round(+diaCobro || 28)));
+  const ant = sumaMes(mk, -1);
+  const ini = `${ant}-${String(dc).padStart(2, "0")}`;
+  const fin = sumaDias(`${mk}-${String(dc).padStart(2, "0")}`, -1);
+  return { ini, fin };
+}
+
+function ReglaSueldo({ ini, fin, hoy, marcas }) {
+  const W = 340, H = 74, x0 = 8, x1 = W - 8, yL = 40;
+  const t = (iso) => new Date(iso + "T12:00:00").getTime();
+  const total = Math.max(1, t(fin) - t(ini));
+  const x = (iso) => x0 + ((Math.min(Math.max(t(iso), t(ini)), t(fin)) - t(ini)) / total) * (x1 - x0);
+  const xh = x(hoy);
+  // Vencimientos del mismo día van juntos en una sola marca
+  const porDia = {};
+  marcas.forEach((m) => { (porDia[m.fecha] = porDia[m.fecha] || []).push(m); });
+  const dias = Object.keys(porDia).sort();
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img"
+         aria-label={`Período del ${ddmm(ini)} al ${ddmm(fin)}. Vencimientos: ${dias.map((d) => ddmm(d)).join(", ")}`}>
+      <line x1={x0} y1={yL} x2={x1} y2={yL} stroke="rgba(234,240,236,.22)" strokeWidth="6" strokeLinecap="round" />
+      <line x1={x0} y1={yL} x2={xh} y2={yL} stroke="#7FD6A8" strokeWidth="6" strokeLinecap="round" />
+      {dias.map((d, i) => {
+        const xm = x(d), pasado = d < hoy;
+        const ms = porDia[d];
+        const arriba = i % 2 === 0;
+        const etiqueta = ms.map((m) => m.corto).join(" + ");
+        return (
+          <g key={d} opacity={pasado ? 0.45 : 1}>
+            <line x1={xm} y1={yL - 9} x2={xm} y2={yL + 9} stroke="#EAF0EC" strokeWidth="1.5" />
+            <text x={Math.min(x1 - 2, Math.max(x0 + 2, xm))} y={arriba ? yL - 15 : yL + 23}
+                  textAnchor={xm < 40 ? "start" : xm > W - 40 ? "end" : "middle"}
+                  fontSize="10.5" fill="#EAF0EC" fontWeight="600">{etiqueta}</text>
+            <text x={Math.min(x1 - 2, Math.max(x0 + 2, xm))} y={arriba ? yL - 27 : yL + 35}
+                  textAnchor={xm < 40 ? "start" : xm > W - 40 ? "end" : "middle"}
+                  fontSize="9.5" fill="rgba(234,240,236,.6)">{ddmm(d)}</text>
+          </g>
+        );
+      })}
+      <circle cx={xh} cy={yL} r="7.5" fill="#0E2B25" stroke="#7FD6A8" strokeWidth="3" />
+      <text x={x0} y={H - 1} fontSize="9.5" fill="rgba(234,240,236,.5)">{ddmm(ini)}</text>
+      <text x={x1} y={H - 1} fontSize="9.5" fill="rgba(234,240,236,.5)" textAnchor="end">{ddmm(fin)}</text>
+    </svg>
+  );
+}
+
+function PanelSueldo({ cfg, setCfg, mes, mesAct, medios, movs, onVerGastos }) {
+  const hoy = hoyISO();
+  const { ini, fin } = rangoDelPeriodo(mesAct, cfg.diaCobro);
+  const [ajustando, setAjustando] = useState(false);
+  const [real, setReal] = useState("");
+  const [abierto, setAbierto] = useState(null);   // "pagar" | "cobrar"
+
+  const egresos = mes ? mes.egresos : 0;
+  const ingresos = mes ? mes.ingresos : 0;
+  const libre = (cfg.saldoHoy || 0) - egresos + ingresos;
+  const diasQuedan = Math.max(1, Math.round((new Date(fin + "T12:00:00") - new Date(hoy + "T12:00:00")) / 86400000) + 1);
+  const porDia = Math.max(0, Math.floor(libre / diasQuedan));
+
+  // Lo que falta pagar, en el orden en que sale
+  const pagos = [];
+  if (mes) {
+    medios.filter((m) => m.id !== "efectivo").forEach((m) => {
+      const monto = mes.porMedio[m.id] || 0;
+      if (monto <= 0) return;
+      const c = ciclosDe(m).find((x) => x.vto && periodoDe(x.vto) === mesAct && x.vto >= hoy)
+        || ciclosDe(m).find((x) => x.vto && periodoDe(x.vto) === mesAct);
+      pagos.push({ id: m.id, nombre: m.nombre, corto: m.corto || m.nombre, monto, fecha: c ? c.vto : fin, tarjeta: true });
+    });
+    const efvo = mes.items.filter((x) => x.monto > 0 && !x.ingreso && !x.devolucion && !x.ahorro
+      && (x.mv.medio || "efectivo") === "efectivo");
+    const totEf = mes.porMedio.efectivo || 0;   // ya incluye lo que le pasás a otras personas
+    if (totEf > 0) pagos.push({ id: "efectivo", nombre: "Efectivo y débito", corto: "Efvo", monto: totEf,
+                                fecha: null, detalle: [...efvo.map((x) => [x.mv.detalle, x.monto]),
+                                  ...mes.netos.filter((n) => n.neto < 0).map((n) => ["Le pasás a " + n.persona, -n.neto])] });
+  }
+  pagos.sort((a, b) => (a.fecha || "9") < (b.fecha || "9") ? -1 : 1);
+  const marcas = pagos.filter((p) => p.tarjeta && p.fecha >= ini && p.fecha <= fin);
+  const cobros = mes ? [
+    ...mes.items.filter((x) => x.ingreso && x.monto > 0).map((x) => [x.mv.detalle, x.monto]),
+    ...mes.netos.filter((n) => n.neto > 0).map((n) => [n.persona, n.neto]),
+  ] : [];
+
+  // Lo anotado en este sueldo
+  const anot = (cfg.anotador || []).filter((g) => g.fecha >= ini && g.fecha <= fin);
+  const gastado = anot.reduce((a, g) => a + (g.pagadoPor === "otro" ? 0 : +g.monto || 0), 0);
+  const conTarjeta = anot.filter((g) => g.medio && g.medio !== "efectivo" && g.pagadoPor !== "otro")
+    .reduce((a, g) => a + (+g.monto || 0), 0);
+  // El presupuesto del día es plata de la cuenta: cuenta lo que pagaste en efectivo o débito
+  const gastadoHoy = anot.filter((g) => g.fecha === hoy && g.pagadoPor !== "otro"
+      && (g.medio || "efectivo") === "efectivo" && !g.sinAnotar)
+    .reduce((a, g) => a + (+g.monto || 0), 0);
+
+  const ultimo = cfg.ultimoAjuste;
+  const diasSinAjustar = ultimo ? Math.round((new Date(hoy + "T12:00:00") - new Date(ultimo + "T12:00:00")) / 86400000) : null;
+
+  const confirmarAjuste = () => {
+    const r = parseInt(String(real).replace(/[^\d-]/g, "") || "", 10);
+    if (!isFinite(r)) return;
+    const dif = Math.round((cfg.saldoHoy || 0) - r);
+    const lista = cfg.anotador || [];
+    const nuevo = dif > 0 ? [...lista, { id: "a" + Date.now(), fecha: hoy, monto: dif, detalle: "Gastos sin anotar",
+      medio: "efectivo", categoria: "Otros", catManual: true, sinAnotar: true }] : lista;
+    setCfg({ ...cfg, saldoHoy: r, ultimoAjuste: hoy, anotador: nuevo });
+    setAjustando(false); setReal("");
+  };
+
+  const suave = "rgba(234,240,236,.64)";
+  const fila = (k, n, v, extra) => (
+    <button key={k} onClick={() => extra && setAbierto(abierto === k ? null : k)}
+      style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "baseline",
+               padding: "8px 0", borderTop: "1px solid rgba(234,240,236,.12)", textAlign: "left",
+               cursor: extra ? "pointer" : "default" }}>
+      <span style={{ fontSize: 13.5, color: suave }}>{n}{extra ? (abierto === k ? " ▾" : " ▸") : ""}</span>
+      <span className="num" style={{ fontSize: 14.5, color: "#EAF0EC", fontWeight: 560 }}>{v}</span>
+    </button>
+  );
+
+  return (
+    <div className="cima sube" style={{ padding: "18px 18px 12px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontSize: 13, color: suave }}>
+          Sueldo de {MESN[+sumaMes(mesAct, -1).slice(5, 7) - 1]} · {ddmm(ini)} → {ddmm(fin)}
+        </span>
+        <button onClick={() => { setAjustando(!ajustando); setReal(String(cfg.saldoHoy || "")); }}
+          style={{ fontSize: 12.5, color: "#7FD6A8", fontWeight: 600 }}>
+          {ajustando ? "Cancelar" : "Ajustar con el banco"}
+        </button>
+      </div>
+
+      {ajustando ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, color: suave, lineHeight: 1.5 }}>
+            Poné lo que tenés hoy en cuenta, billetera virtual y efectivo. Si es menos de lo que la app
+            calcula, la diferencia queda anotada como <b style={{ color: "#EAF0EC" }}>gastos sin anotar</b>.
+          </div>
+          <input className="num" inputMode="numeric" autoFocus value={real}
+            onChange={(e) => setReal(e.target.value.replace(/[^\d]/g, ""))}
+            style={{ marginTop: 10, fontSize: 28, fontWeight: 660, textAlign: "right",
+                     background: "rgba(255,255,255,.09)", border: "none", color: "#EAF0EC" }} />
+          {real !== "" && +real !== cfg.saldoHoy && (
+            <div className="num" style={{ fontSize: 12.5, color: suave, marginTop: 7, textAlign: "right" }}>
+              La app calculaba {plata(cfg.saldoHoy || 0)} ·{" "}
+              {+real < cfg.saldoHoy ? `sin anotar ${plata(cfg.saldoHoy - +real)}` : `tenés ${plata(+real - cfg.saldoHoy)} de más`}
+            </div>
+          )}
+          <button className="btn" onClick={confirmarAjuste}
+            style={{ marginTop: 11, background: "#7FD6A8", color: T.tinta }}>Guardar saldo</button>
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: suave, marginTop: 14 }}>Libre para gastar</div>
+          <div className="plata hero" style={{ color: libre < 0 ? "#F0A896" : "#FFFFFF", marginTop: 2 }}>
+            {plata(libre)}
+          </div>
+          <div style={{ fontSize: 13.5, color: "#EAF0EC", marginTop: 4 }}>
+            {libre > 0
+              ? <><b className="num">{plata(porDia)}</b> <span style={{ color: suave }}>por día · quedan {diasQuedan} días</span></>
+              : <span style={{ color: "#F0A896" }}>Te faltan {plata(-libre)} para llegar al {ddmm(fin)}</span>}
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <ReglaSueldo ini={ini} fin={fin} hoy={hoy} marcas={marcas} />
+          </div>
+
+          {porDia > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div className="ritmo">
+                <i style={{ width: `${Math.max(2, Math.min(100, (gastadoHoy / porDia) * 100))}%`,
+                     background: gastadoHoy > porDia ? "#E88B72" : "#7FD6A8" }} />
+              </div>
+              <div style={{ fontSize: 12, color: suave, marginTop: 6 }}>
+                {gastadoHoy > porDia
+                  ? `Hoy gastaste ${plata(gastadoHoy)} de la cuenta: te pasaste ${plata(gastadoHoy - porDia)} del día`
+                  : gastadoHoy > 0
+                    ? `Hoy gastaste ${plata(gastadoHoy)} de la cuenta · te quedan ${plata(porDia - gastadoHoy)} para hoy`
+                    : `Hoy todavía no gastaste de la cuenta`}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 12 }}>
+            {fila("cuenta", "Tenés en la cuenta", plata(cfg.saldoHoy || 0), false)}
+            {fila("pagar", "Falta pagar", plata(-egresos), pagos.length > 0)}
+            {abierto === "pagar" && pagos.map((p) => (
+              <div key={p.id} style={{ padding: "2px 0 8px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                  <span style={{ color: "#EAF0EC" }}>{p.fecha ? ddmm(p.fecha) + " · " : ""}{p.nombre}</span>
+                  <span className="num" style={{ color: "#EAF0EC" }}>{plata(p.monto)}</span>
+                </div>
+                {p.detalle && p.detalle.slice(0, 8).map(([n, v], i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5,
+                                        color: suave, marginTop: 3, paddingLeft: 10 }}>
+                    <span>{n}</span><span className="num">{plata(v)}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            {fila("cobrar", "Falta cobrar", plata(ingresos), cobros.length > 0)}
+            {abierto === "cobrar" && cobros.map(([n, v], i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5,
+                                    padding: "2px 0 6px 12px", color: "#EAF0EC" }}>
+                <span>{n}</span><span className="num">{plata(v)}</span>
+              </div>
+            ))}
+          </div>
+
+          <button onClick={onVerGastos}
+            style={{ display: "block", width: "100%", textAlign: "left", marginTop: 4, padding: "10px 0 2px",
+                     borderTop: "1px solid rgba(234,240,236,.12)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+              <span style={{ color: suave }}>Anotaste en este sueldo</span>
+              <span className="num" style={{ color: "#EAF0EC" }}>{plata(gastado)}</span>
+            </div>
+            {conTarjeta > 0 && (
+              <div style={{ fontSize: 11.5, color: suave, marginTop: 3 }}>
+                {plata(conTarjeta)} fueron con tarjeta: los pagás con el próximo sueldo
+              </div>
+            )}
+          </button>
+          {(diasSinAjustar == null || diasSinAjustar > 7) && (
+            <div style={{ fontSize: 11.5, color: "#F0C98A", marginTop: 8 }}>
+              {diasSinAjustar == null ? "Todavía no ajustaste el saldo con el banco." : `Hace ${diasSinAjustar} días que no ajustás el saldo con el banco.`}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLiquidar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
-               invertido = { total: 0, porTipo: {} }, onVerInvertido, onFinanciar,
+               invertido = { total: 0, porTipo: {} }, onVerInvertido, onVerGastos, onFinanciar,
                pendientesDeuda = 0, onVerPersonas, onConfirmarAuto, undo = null, onDeshacer,
                escenariosCard = null }) {
   const [editSaldo, setEditSaldo] = useState(false);
@@ -5346,153 +5584,17 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
       <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 13 }}>
         {saludo}{cfg.nombre ? `, ${cfg.nombre.split(" ")[0]}` : ""}
       </div>
-      <div className="cima sube" style={{ padding: "20px 20px 18px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: "rgba(234,240,236,.62)" }}>
-            {pendiente > 0 ? "Te queda libre este mes"
-             : pendiente < 0 ? "Vas a cerrar el mes con"
-             : "Tenés disponible"}
-          </span>
-          <button onClick={() => setEditSaldo(!editSaldo)}
-            style={{ fontSize: 13, color: "rgba(234,240,236,.62)", fontWeight: 560 }}>
-            {editSaldo ? "Listo" : "Ajustar"}
-          </button>
-        </div>
+      <PanelSueldo cfg={cfg} setCfg={setCfg} mes={mesEnCurso} mesAct={mesAct}
+        medios={medios} movs={movs} onVerGastos={onVerGastos} />
 
-        {editSaldo ? (
-          <>
-          <div style={{ fontSize: 12.5, color: "rgba(234,240,236,.7)", marginTop: 10,
-                        lineHeight: 1.55 }}>
-            Poné solo la plata que tenés <b>disponible ahora</b>: cuenta bancaria, billetera
-            virtual y efectivo. No sumes lo que está en plazo fijo, dólares o acciones, eso va
-            en Invierto.
-          </div>
-          <input
-            className="num" inputMode="decimal" value={cfg.saldoHoy}
-            onChange={(e) => setCfg({ ...cfg, saldoHoy: +e.target.value.replace(/[^\d-]/g, "") || 0 })}
-            style={{ marginTop: 11, fontSize: 29, fontWeight: 660, textAlign: "right",
-                     background: "rgba(255,255,255,.09)", border: "none", color: "#EAF0EC" }}
-          />
-          </>
-        ) : (
-          <div className="plata hero" style={{ marginTop: 6,
-                color: cfg.saldoHoy - pendiente < 0 ? "#F0A896" : "#FFFFFF" }}>
-            {plata(cfg.saldoHoy - pendiente)}
-          </div>
-        )}
-
-        {(() => {
-          const libre = cfg.saldoHoy - pendiente;
-          const hoy = new Date(), hISO = hoyISO();
-          const dc = cfg.diaCobro || 28;
-          const prox = new Date(hoy.getFullYear(), hoy.getMonth(), dc, 12);
-          if (prox <= hoy) prox.setMonth(prox.getMonth() + 1);
-          const faltan = Math.max(1, Math.round((prox - hoy) / 86400000));
-          const porDia = Math.max(0, Math.floor(libre / faltan));
-
-          // Lo que ya gastaste hoy: el gancho para abrir la app todos los días
-          const brutoHoy = movs
-            .filter((m) => m.fecha === hISO && m.tipo === "gasto" && !m.recurrente)
-            .reduce((a, m) => a + (+m.monto || 0) / Math.max(1, m.cuotas || 1), 0);
-          // Si pusiste el contador a cero hoy, descontamos lo que ya había
-          const base = cfg.ritmoBase && cfg.ritmoBase.fecha === hISO ? +cfg.ritmoBase.monto || 0 : 0;
-          const gastadoHoy = Math.max(0, brutoHoy - base);
-          const usado = porDia > 0 ? Math.min(100, (gastadoHoy / porDia) * 100) : 0;
-          const pasado = porDia > 0 && gastadoHoy > porDia;
-
-          if (libre < 0) return (
-            <div style={{ fontSize: 13.5, color: "#F0A896", marginTop: 10, lineHeight: 1.5 }}>
-              Te faltan {plata(-libre)} para cubrir lo que queda del mes.
-            </div>
-          );
-
-          return (
-            <div style={{ marginTop: 15 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
-                            marginBottom: 7 }}>
-                <span style={{ fontSize: 13, color: "rgba(234,240,236,.72)" }}>
-                  Hoy gastaste <b className="num" style={{ color: "#fff" }}>{plata(gastadoHoy)}</b>
-                </span>
-                <span className="num" style={{ fontSize: 12.5, color: "rgba(234,240,236,.55)" }}>
-                  de {plata(porDia)}
-                </span>
-              </div>
-              <div className="ritmo">
-                <i style={{ width: `${Math.max(2, usado)}%`,
-                     background: pasado ? "#E88B72" : "#7FD6A8" }} />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-                            gap: 10, marginTop: 8 }}>
-                <span style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)", lineHeight: 1.5 }}>
-                  {pasado
-                    ? `Te pasaste ${plata(gastadoHoy - porDia)} de tu día. Compensalo mañana.`
-                    : gastadoHoy > 0
-                      ? `Te quedan ${plata(porDia - gastadoHoy)} para hoy · faltan ${faltan} días para cobrar`
-                      : `${plata(porDia)} por día durante ${faltan} días, hasta que cobres`}
-                </span>
-                {brutoHoy > 0 && (
-                  <button
-                    onClick={() => setCfg({ ...cfg,
-                      ritmoBase: base ? null : { fecha: hISO, monto: brutoHoy } })}
-                    style={{ fontSize: 12, color: "rgba(234,240,236,.7)", fontWeight: 600,
-                             whiteSpace: "nowrap", flexShrink: 0 }}>
-                    {base ? "Deshacer" : "Poner en cero"}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {invertido.total > 0 && (
-          <button onClick={onVerInvertido}
-            style={{ width: "100%", textAlign: "left", marginTop: 15, paddingTop: 13,
-                     borderTop: "1px solid rgba(234,240,236,.14)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <span style={{ fontSize: 12.5, color: "rgba(234,240,236,.62)" }}>Patrimonio total</span>
-              <span className="num plata" style={{ fontSize: 17, color: "#EAF0EC" }}>
-                {plata(cfg.saldoHoy + invertido.total)}
-              </span>
-            </div>
-            <div style={{ fontSize: 11.5, color: "rgba(234,240,236,.5)", marginTop: 4, lineHeight: 1.5 }}>
-              {plata(cfg.saldoHoy)} en efectivo · {plata(invertido.total)} invertido
-            </div>
-            <div style={{ display: "flex", gap: 3, marginTop: 8, height: 5,
-                          borderRadius: 99, overflow: "hidden" }}>
-              {(() => {
-                const tot = cfg.saldoHoy + invertido.total || 1;
-                const cols = ["#7FD6A8", "#9FC7E8", "#E8C98B", "#C9A8E0", "#E8A89B"];
-                const partes = [["Efectivo", cfg.saldoHoy],
-                                ...Object.entries(invertido.porTipo)].filter(([, v]) => v > 0);
-                return partes.map(([n, v], i) => (
-                  <span key={n} title={n} style={{ width: `${(v / tot) * 100}%`,
-                        background: cols[i % cols.length], borderRadius: 99 }} />
-                ));
-              })()}
-            </div>
-            <div style={{ fontSize: 11, color: "rgba(234,240,236,.45)", marginTop: 6 }}>
-              {["Efectivo", ...Object.keys(invertido.porTipo)].slice(0, 4).join(" · ")}
-            </div>
-          </button>
-        )}
-
-        {pendiente !== 0 && !editSaldo && (
-          <div style={{ marginTop: 15, paddingTop: 13,
-                        borderTop: "1px solid rgba(234,240,236,.14)" }}>
-            {[["En la cuenta hoy", cfg.saldoHoy],
-              ...(gastoPend > 0 ? [["Falta pagar", -gastoPend]] : []),
-              ...(gastoPend < 0 ? [["Falta que entre", -gastoPend]] : []),
-              ...(ahorroMes > 0 ? [["Pasás a dólares", -ahorroMes]] : [])]
-              .map(([n, v]) => (
-                <div key={n} style={{ display: "flex", justifyContent: "space-between",
-                                      fontSize: 13, marginTop: 5 }}>
-                  <span style={{ color: "rgba(234,240,236,.62)" }}>{n}</span>
-                  <span className="num" style={{ color: "#EAF0EC" }}>{plata(v)}</span>
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
+      {invertido.total > 0 && (
+        <button onClick={onVerInvertido} className="card"
+          style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "baseline",
+                   padding: "12px 15px", marginTop: 10 }}>
+          <span style={{ fontSize: 13, color: T.suave }}>Patrimonio total</span>
+          <span className="num" style={{ fontSize: 15, fontWeight: 620 }}>{plata(cfg.saldoHoy + invertido.total)} ›</span>
+        </button>
+      )}
 
       {undo && onDeshacer && (
         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline",
@@ -5999,7 +6101,7 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   );
 }
 
-function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
+function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar }) {
   const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
   const hoy = hoyISO();
   const [rango, setRango] = useState("sueldo");   // sueldo | semana | mes
@@ -6010,10 +6112,19 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
 
   const aprendido = cfg.anotadorAprende || {};
   const guardarLista = (l) => setCfg({ ...cfg, anotador: l });
+  // Lo que pagás en efectivo o débito sale de tu cuenta en el momento: baja el saldo.
+  // Guardamos cuánto bajó (restoCaja) para poder deshacerlo exacto al editar o borrar.
+  const aCaja = (g) => ((g.medio || "efectivo") === "efectivo" && g.pagadoPor !== "otro" && !g.sinAnotar
+    ? Math.round(+g.monto || 0) : 0);
+  const [aviso, setAviso] = useState("");
   const guardar = (g) => {
-    const i = lista.findIndex((x) => x.id === g.id);
-    const l = i >= 0 ? lista.map((x) => (x.id === g.id ? g : x)) : [...lista, g];
-    setCfg({ ...cfg, anotador: l, anotadorAprende: aprender(aprendido, g.detalle, g.categoria) });
+    const viejo = lista.find((x) => x.id === g.id);
+    const resto = aCaja(g);
+    const delta = resto - (viejo ? +viejo.restoCaja || 0 : 0);
+    const g2 = { ...g, restoCaja: resto };
+    const l = viejo ? lista.map((x) => (x.id === g.id ? g2 : x)) : [...lista, g2];
+    setCfg({ ...cfg, anotador: l, saldoHoy: Math.round((cfg.saldoHoy || 0) - delta),
+             anotadorAprende: aprender(aprendido, g.detalle, g.categoria) });
   };
   // Categoría que se muestra: la que elegiste a mano manda; si quedó en "Otros", se reintenta
   const catDe = (g) => (g.catManual || (g.categoria && g.categoria !== "Otros")
@@ -6024,7 +6135,15 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
   ])];
   // Lo que salió de tu bolsillo (si pagó otro, no salió nada tuyo)
   const pagado = (g) => (g.pagadoPor === "otro" ? 0 : +g.monto || 0);
-  const borrar = (id) => guardarLista(lista.filter((x) => x.id !== id));
+  const borrar = (id) => {
+    const viejo = lista.find((x) => x.id === id);
+    setCfg({ ...cfg, anotador: lista.filter((x) => x.id !== id),
+             saldoHoy: Math.round((cfg.saldoHoy || 0) + (viejo ? +viejo.restoCaja || 0 : 0)) });
+  };
+  const abrir = (g) => {
+    if (g.mov) { setAviso(`"${g.detalle}" ya está liquidado: cambialo desde Movimientos del flujo.`); return; }
+    setAviso(""); setAlta(g);
+  };
 
   // Rango de fechas que se mira
   const dc = Math.min(28, Math.max(1, Math.round(+cfg.diaCobro || 28)));
@@ -6174,6 +6293,29 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
         </div>
       )}
 
+      {aviso && (
+        <div className="aviso" style={{ background: T.ambarBg, marginTop: 12 }}>{aviso}</div>
+      )}
+      {(() => {
+        const sinLiq = enRango.filter((g) => !g.mov && !g.sinAnotar && +g.monto > 0);
+        if (!sinLiq.length || !onLiquidar) return null;
+        const tot = sinLiq.reduce((a, g) => a + (+g.monto || 0), 0);
+        return (
+          <div className="card" style={{ padding: "13px 15px", marginTop: 12, display: "flex",
+                                         alignItems: "center", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                {sinLiq.length} {sinLiq.length === 1 ? "gasto" : "gastos"} sin liquidar · {corta(tot)}
+              </div>
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 2, lineHeight: 1.45 }}>
+                Liquidar los pasa al flujo: los de tarjeta van a su resumen y los compartidos, a Personas.
+              </div>
+            </div>
+            <button className="chip on" onClick={() => onLiquidar(sinLiq.map((g) => g.id))}>Liquidar</button>
+          </div>
+        );
+      })()}
+
       {enRango.length === 0 && (
         <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "sueldo" ? "en este sueldo" : rango === "mes" ? "este mes" : "esta semana"}</div>
@@ -6199,7 +6341,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
             </div>
             <div className="card" style={{ overflow: "hidden" }}>
               {porDia[dia].slice().reverse().map((g, i) => (
-                <button key={g.id} onClick={() => setAlta(g)}
+                <button key={g.id} onClick={() => abrir(g)}
                   style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, padding: "11px 14px",
                            borderTop: i ? `1px solid ${T.linea}` : "none", textAlign: "left" }}>
                   <span style={{ width: 8, height: 8, borderRadius: 4, flex: "none",
@@ -6215,7 +6357,10 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs }) {
                         : ` · ${g.persona} te debe ${corta((+g.monto || 0) * (+g.pct || 0))}`) : ""}
                     </span>
                   </span>
-                  <span className="num" style={{ fontSize: 14.5, fontWeight: 620 }}>{plata(g.monto)}</span>
+                  <span style={{ textAlign: "right" }}>
+                    <span className="num" style={{ display: "block", fontSize: 14.5, fontWeight: 620 }}>{plata(g.monto)}</span>
+                    {g.mov && <span style={{ display: "block", fontSize: 10.5, color: T.verde, marginTop: 1 }}>en el flujo</span>}
+                  </span>
                 </button>
               ))}
             </div>
@@ -8878,6 +9023,40 @@ export default function App() {
   };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
 
+  // Pasa gastos del anotador al flujo. Efectivo/débito: entra como gasto YA pagado del período
+  // (la caja ya bajó al anotarlo). Tarjeta: va a su resumen. Compartidos: generan la cuenta con esa persona.
+  const liquidarAnotador = (ids) => {
+    const set = new Set(ids);
+    const aj = { ...(cfg.ajustes || {}) }, ap = { ...(cfg.aplicados || {}) };
+    const nuevos = [];
+    const lista = (cfg.anotador || []).map((g) => {
+      if (!set.has(g.id) || g.mov) return g;
+      const id = "m" + g.id;
+      const cuotas = Math.max(1, +g.cuotas || 1);
+      const efvo = (g.medio || "efectivo") === "efectivo";
+      const mk = mesDePago(g.fecha, g.medio || "efectivo", medios);
+      nuevos.push({
+        id, tipo: "gasto", detalle: g.detalle, monto: Math.round(+g.monto || 0), moneda: "ARS",
+        medio: g.medio || "efectivo", cuotas, fecha: g.fecha, mesInicio: mk,
+        categoria: g.categoria || "Otros", recurrente: false,
+        pagadoPor: g.pagadoPor === "otro" ? "otro" : "yo",
+        ...(g.persona ? { persona: g.persona, pct: +g.pct || 0 } : {}),
+        ...(g.nota ? { nota: g.nota } : {}), desdeAnotador: g.id,
+      });
+      if (efvo && g.pagadoPor !== "otro") {
+        // Ya salió de la caja: queda saldado sin volver a mover el saldo
+        aj[mk] = { ...(aj[mk] || {}), [id]: 0 };
+        ap[mk] = { ...(ap[mk] || {}), [id]: { usd: 0, pesos: 0 } };
+      }
+      return { ...g, mov: id };
+    });
+    if (!nuevos.length) return;
+    marcarUndo("la liquidación de " + nuevos.length + " gastos");
+    const c = { ...cfg, anotador: lista, ajustes: aj, aplicados: ap, desdeMes: null };
+    const m = [...movs, ...nuevos];
+    setMovs(m); setCfgRaw(c); persistir(c, m);
+  };
+
   // Foto del estado anterior. Una sola: alcanza para arrepentirse del último toque.
   const marcarUndo = (que) => setUndo({ cfg, movs, que });
   const deshacer = () => {
@@ -9111,6 +9290,7 @@ export default function App() {
                      porTipo: usd > 0 ? { Dólares: usd, ...b.porTipo } : b.porTipo };
           })()}
           onVerInvertido={() => setTab("inv")}
+          onVerGastos={() => setTab("anot")}
           onAbrirImportar={() => setVerImportar(true)}
           onFinanciar={() => setVerFinanciar(true)}
           pendientesDeuda={pendientes}
@@ -9139,8 +9319,11 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "anot" && <Anotador cfg={cfgTC}
-                              setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador, anotadorAprende: c.anotadorAprende || cfg.anotadorAprende })}
+      {tab === "anot" && <Anotador cfg={cfgTC} onLiquidar={liquidarAnotador}
+                              setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador,
+                                anotadorAprende: c.anotadorAprende || cfg.anotadorAprende,
+                                saldoHoy: c.saldoHoy != null ? c.saldoHoy : cfg.saldoHoy,
+                                ultimoAjuste: c.ultimoAjuste || cfg.ultimoAjuste })}
                               medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
       {tab === "movs" && (
         <div>
