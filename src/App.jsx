@@ -5903,6 +5903,7 @@ const PISTAS_EXTRA = {
   "Salud": ["farmacity", "clinica", "hospital", "turno", "remedio", "medicamento", "analisis"],
   "Deporte": ["cancha", "entrena", "pileta", "running", "crossfit", "yoga"],
   "Cuidado personal": ["corte de pelo", "manicur", "depila", "spa", "masaj"],
+  "Indumentaria": ["zapa", "buzo", "pantalon", "medias", "camisa", "vestido"],
   "Hogar y compras": ["regalo", "juguete", "libreria", "articulos", "planta", "vivero", "mates", "mate "],
 };
 function adivinarConAprendido(texto, aprendido) {
@@ -5925,6 +5926,70 @@ function aprender(aprendido, texto, cat) {
     a[w] = { ...prev, [cat]: Math.min(50, (prev[cat] || 0) + 1) };
   });
   return a;
+}
+
+// Interpreta un gasto escrito o dictado: "coca 4500 efvo", "nafta 35 lucas icbc",
+// "cena 24.000 master con sol", "uber 8900 ayer", "zapas 90k hipo 3 cuotas".
+function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
+  const original = String(texto || "").trim();
+  let t = " " + sinTildes(original) + " ";
+  // Monto: el primer número, con miles, decimales y "k / mil / lucas / palos"
+  const mm = t.match(/(\d[\d.,]*)\s*(k|mil|lucas?|luquitas?|palos?|m)?(?=[^a-z0-9]|$)/);
+  if (!mm) return null;
+  let num = mm[1];
+  const mult = mm[2] ? (/^(palo|m$)/.test(mm[2]) ? 1e6 : 1000) : 1;
+  if (mult > 1) num = num.replace(",", ".");
+  else if (/^\d{1,3}([.,]\d{3})+([.,]\d{1,2})?$/.test(num)) num = num.replace(/[.,](?=\d{3})/g, "").replace(",", ".");
+  else num = num.replace(",", ".");
+  const monto = Math.round(parseFloat(num) * mult);
+  if (!isFinite(monto) || monto <= 0) return null;
+  t = t.replace(mm[0], " ");
+  // Cuotas
+  let cuotas = 1;
+  const mc = t.match(/(\d{1,2})\s*cuotas?/);
+  if (mc) { cuotas = +mc[1]; t = t.replace(mc[0], " "); }
+  // Fecha
+  let fecha = fechaBase || hoyISO();
+  if (/\bayer\b/.test(t)) { fecha = sumaDias(fecha, -1); t = t.replace(/\bayer\b/, " "); }
+  if (/\banteayer\b/.test(t)) { fecha = sumaDias(fecha, -2); t = t.replace(/\banteayer\b/, " "); }
+  // Medio de pago
+  const alias = [];
+  medios.forEach((m) => {
+    [m.id, m.corto, m.nombre].filter(Boolean).forEach((a) => alias.push([sinTildes(a), m.id]));
+    if (m.id === "efectivo") ["efvo", "efectivo", "debito", "cash", "mp", "mercado pago", "mercadopago", "transferencia", "billetera"].forEach((a) => alias.push([a, m.id]));
+    if (m.id === "hipo") ["hipotecario"].forEach((a) => alias.push([a, m.id]));
+    if (m.id === "bna") ["nacion", "banco nacion"].forEach((a) => alias.push([a, m.id]));
+    if (m.id === "master") ["mastercard"].forEach((a) => alias.push([a, m.id]));
+  });
+  alias.sort((a, b) => b[0].length - a[0].length);
+  let medio = (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo";
+  for (const [a, id] of alias) {
+    const re = new RegExp("(^|[^a-z0-9])(con |en |por )?" + a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=[^a-z0-9]|$)");
+    if (a.length >= 2 && re.test(t)) { medio = id; t = t.replace(re, " "); break; }
+  }
+  // Compartido: "con sol", "pagó betty", "mitad", "un tercio"
+  let persona = "", pct = 0.5, pagadoPor = "yo";
+  for (const p of personas) {
+    const pp = sinTildes(p);
+    const rePago = new RegExp("pago\\s+" + pp + "(?=[^a-z]|$)");
+    const reCon = new RegExp("(con|de|a)\\s+" + pp + "(?=[^a-z]|$)");
+    if (rePago.test(t)) { persona = p; pagadoPor = "otro"; t = t.replace(rePago, " "); break; }
+    if (reCon.test(t)) { persona = p; t = t.replace(reCon, " "); break; }
+  }
+  if (/\btercio\b/.test(t)) pct = 1 / 3;
+  if (/\btodo\b/.test(t) && persona) pct = 1;
+  t = t.replace(/\b(mitad|tercio|un|todo|pague|gaste|en|de|del|la|el|los|las|con|por|y|para|pesos|\$)\b/g, " ");
+  const palabras = original.split(/\s+/).filter((w) => {
+    const n = sinTildes(w).replace(/[^a-z0-9ñ]/g, "");
+    return n && t.includes(" " + n + " ") || (n && new RegExp("(^|[^a-z0-9])" + n + "(?=[^a-z0-9]|$)").test(t));
+  });
+  let detalle = palabras.join(" ").replace(/\s+/g, " ").trim();
+  if (!detalle) detalle = "Gasto";
+  detalle = detalle.charAt(0).toUpperCase() + detalle.slice(1);
+  const categoria = adivinarConAprendido(detalle, aprendido).cat;
+  return { monto, detalle, medio, fecha, categoria,
+           ...(cuotas > 1 && medio !== "efectivo" ? { cuotas } : {}),
+           ...(persona ? { persona, pct, pagadoPor } : {}) };
 }
 
 function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
@@ -6101,7 +6166,84 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   );
 }
 
-function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar }) {
+// Configuración del Atajo de iPhone: crea una clave personal y explica cómo armar el atajo.
+// El atajo llama a una función de Supabase (anotar_por_atajo) que deja el texto en la tabla "bandeja";
+// la app la levanta al abrirse y lo pasa al anotador.
+function ConfigAtajo({ sesion, onCerrar }) {
+  const [token, setToken] = useState("");
+  const [estado, setEstado] = useState("");
+  const [copiado, setCopiado] = useState("");
+  const url = SUPABASE_URL + "/rest/v1/rpc/anotar_por_atajo";
+  const crear = async () => {
+    setEstado("creando");
+    try {
+      const t = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).replace(/-/g, "");
+      const { error } = await sb.from("atajos").insert({ token: t, user_id: sesion.user.id });
+      if (error) throw error;
+      setToken(t); setEstado("");
+    } catch (e) {
+      setEstado("No pude crear la clave. Revisá que hayas corrido el SQL del atajo en Supabase.");
+    }
+  };
+  const copiar = async (k, v) => {
+    try { await navigator.clipboard.writeText(v); setCopiado(k); setTimeout(() => setCopiado(""), 1800); } catch (e) { /* nada */ }
+  };
+  const campo = (k, n, v) => (
+    <div style={{ marginTop: 10 }}>
+      <div className="lbl">{n}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="card" style={{ flex: 1, padding: "9px 11px", fontSize: 12, fontFamily: "ui-monospace, monospace",
+                                       wordBreak: "break-all", lineHeight: 1.4 }}>{v}</div>
+        <button className="chip sm" onClick={() => copiar(k, v)}>{copiado === k ? "Copiado" : "Copiar"}</button>
+      </div>
+    </div>
+  );
+  const paso = (n, txt) => (
+    <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+      <span style={{ width: 22, height: 22, borderRadius: 11, background: T.tinta, color: "#fff", fontSize: 12,
+                     fontWeight: 650, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{n}</span>
+      <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{txt}</div>
+    </div>
+  );
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 90, overflowY: "auto",
+                  maxWidth: 470, margin: "0 auto" }}>
+      <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>Anotar con Siri</span>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Listo</button>
+      </div>
+      <div style={{ padding: "0 18px 40px" }}>
+        <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.55 }}>
+          Decile a Siri <b style={{ color: T.tinta }}>"Anotar gasto"</b> y dictá: <i>"café 4500 efectivo"</i>,{" "}
+          <i>"nafta 35 lucas icbc"</i>, <i>"cena 24 mil master con Sol"</i>. Aparece en Gastos la próxima vez que abrís la app.
+        </div>
+        {!token ? (
+          <button className="btn" style={{ marginTop: 16 }} onClick={crear} disabled={estado === "creando"}>
+            {estado === "creando" ? "Creando…" : "Crear mi clave para el atajo"}
+          </button>
+        ) : (
+          <>
+            {campo("url", "Dirección (URL)", url)}
+            {campo("key", "apikey", SUPABASE_KEY)}
+            {campo("tok", "Tu clave (p_token) · no la compartas", token)}
+          </>
+        )}
+        {estado && estado !== "creando" && <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 8 }}>{estado}</div>}
+
+        <div style={{ fontSize: 15, fontWeight: 620, marginTop: 24 }}>Cómo armar el atajo</div>
+        {paso(1, <>Abrí la app <b>Atajos</b> → <b>+</b> → ponele de nombre <b>Anotar gasto</b>.</>)}
+        {paso(2, <>Agregá <b>Pedir entrada</b> (tipo Texto). Pregunta: <i>¿Qué gastaste?</i></>)}
+        {paso(3, <>Agregá <b>Obtener contenido de URL</b>. En URL pegá la <b>dirección</b>. Tocá la flechita: Método <b>POST</b>.</>)}
+        {paso(4, <>En <b>Encabezados</b> agregá dos: <b>apikey</b> = la apikey de arriba, y <b>Content-Type</b> = <b>application/json</b>.</>)}
+        {paso(5, <>En <b>Cuerpo de solicitud</b> elegí <b>JSON</b> y agregá dos campos de texto: <b>p_token</b> = tu clave, y <b>p_texto</b> = la variable <b>Entrada proporcionada</b>.</>)}
+        {paso(6, <>Agregá <b>Mostrar notificación</b> con <b>Contenido de URL</b>: así ves "Anotado: …".</>)}
+        {paso(7, <>Listo. Usalo con Siri, desde un ícono en la pantalla de inicio, el botón de acción o tocando dos veces la parte de atrás del iPhone (Configuración → Accesibilidad → Tocar → Toque posterior).</>)}
+      </div>
+    </div>
+  );
+}
+
+function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) {
   const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
   const hoy = hoyISO();
   const [rango, setRango] = useState("sueldo");   // sueldo | semana | mes
@@ -6117,6 +6259,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar }) {
   const aCaja = (g) => ((g.medio || "efectivo") === "efectivo" && g.pagadoPor !== "otro" && !g.sinAnotar
     ? Math.round(+g.monto || 0) : 0);
   const [aviso, setAviso] = useState("");
+  const [verAtajo, setVerAtajo] = useState(false);
   const guardar = (g) => {
     const viejo = lista.find((x) => x.id === g.id);
     const resto = aCaja(g);
@@ -6220,8 +6363,10 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar }) {
         </button>
       </div>
       <div style={{ fontSize: 12, color: T.tenue, marginTop: 3 }}>
-        Tu anotador del día a día. No toca la proyección.
+        Tu anotador del día a día.{" "}
+        {sesion && <button onClick={() => setVerAtajo(true)} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Anotar con Siri</button>}
       </div>
+      {verAtajo && <ConfigAtajo sesion={sesion} onCerrar={() => setVerAtajo(false)} />}
 
       <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
         {[["sueldo", "Este sueldo"], ["semana", "Semana"], ["mes", "Mes"]].map(([id, n]) => (
@@ -6352,6 +6497,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar }) {
                     <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 1 }}>
                       {nomCat(catDe(g))} · {nomMedio(g.medio)}
                       {g.cuotas > 1 ? ` · ${g.cuotas} cuotas` : ""}
+                      {g.origen === "siri" ? " · por Siri" : ""}
                       {g.persona ? (g.pagadoPor === "otro"
                         ? ` · pagó ${g.persona}`
                         : ` · ${g.persona} te debe ${corta((+g.monto || 0) * (+g.pct || 0))}`) : ""}
@@ -9085,6 +9231,45 @@ export default function App() {
   };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
 
+  // Gastos que llegaron por el Atajo (Siri): se levantan de la bandeja y pasan al anotador
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const movsRef = useRef(movs); movsRef.current = movs;
+  const traerBandeja = useCallback(async () => {
+    if (!sesion || !sesion.user || cargando) return;
+    try {
+      const { data, error } = await sb.from("bandeja").select("id, texto, creado").order("creado");
+      if (error || !data || !data.length) return;
+      const c0 = cfgRef.current;
+      const meds = c0.medios || MEDIOS_NUEVO;
+      const pers = [...new Set([...movsRef.current.filter((m) => m.persona).map((m) => m.persona),
+                                ...(c0.anotador || []).filter((g) => g.persona).map((g) => g.persona)])];
+      let lista = (c0.anotador || []).slice(), saldo = c0.saldoHoy || 0, apr = c0.anotadorAprende || {};
+      const hechos = [];
+      data.forEach((r) => {
+        hechos.push(r.id);
+        if (lista.some((g) => g.bandeja === r.id)) return;
+        const d = new Date(r.creado);
+        const f = isNaN(d.getTime()) ? hoyISO() : isoDe(d);
+        const g = interpretarGasto(r.texto, meds, apr, pers, f);
+        if (!g) return;
+        const resto = g.medio === "efectivo" && g.pagadoPor !== "otro" ? g.monto : 0;
+        lista.push({ id: "a" + r.id + "_" + Date.now(), ...g, origen: "siri", bandeja: r.id, textoOriginal: r.texto, restoCaja: resto });
+        saldo -= resto;
+        apr = aprender(apr, g.detalle, g.categoria);
+      });
+      const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null };
+      setCfgRaw(c); persistir(c, movsRef.current);
+      await sb.from("bandeja").delete().in("id", hechos);
+    } catch (e) { /* la tabla puede no existir todavía */ }
+  }, [sesion, cargando, persistir]);
+  useEffect(() => { traerBandeja(); }, [traerBandeja]);
+  useEffect(() => {
+    const f = () => { if (!document.hidden) traerBandeja(); };
+    document.addEventListener("visibilitychange", f);
+    return () => document.removeEventListener("visibilitychange", f);
+  }, [traerBandeja]);
+
+
   // Paquete de cambios armado afuera (por ejemplo, por Claude al revisar resúmenes).
   // Cada cambio se aplica por id y queda en cfg.registro; el paquete no se puede aplicar dos veces.
   const aplicarPaquete = (p) => {
@@ -9423,7 +9608,7 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "anot" && <Anotador cfg={cfgTC} onLiquidar={liquidarAnotador}
+      {tab === "anot" && <Anotador cfg={cfgTC} onLiquidar={liquidarAnotador} sesion={sesion}
                               setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador,
                                 anotadorAprende: c.anotadorAprende || cfg.anotadorAprende,
                                 saldoHoy: c.saldoHoy != null ? c.saldoHoy : cfg.saldoHoy,
