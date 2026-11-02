@@ -6613,7 +6613,15 @@ function Simular({ cfg, movs, medios }) {
 }
 
 /* ===================== AJUSTES ===================== */
-function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onReportar, onCerrar }) {
+function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImportar, onAbrirMedios, onAbrirImportar, onCargarEjemplo, onReportar, onCerrar, onAplicarCambios }) {
+  const [paqTexto, setPaqTexto] = useState("");
+  const [paqMsg, setPaqMsg] = useState("");
+  const [verRegistro, setVerRegistro] = useState(false);
+  let paq = null;
+  try { paq = paqTexto.trim() ? JSON.parse(paqTexto) : null; } catch (e) { paq = null; }
+  const paqValido = paq && Array.isArray(paq.cambios) && paq.cambios.length > 0;
+  const yaAplicado = paqValido && paq.id && (cfg.paquetes || []).includes(paq.id);
+  const registro = (cfg.registro || []).slice().reverse();
   const [texto, setTexto] = useState("");
   const [modo, setModo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -6779,6 +6787,60 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
                 Restaurar estos datos
               </button>
             )}
+          </div>
+        )}
+
+        <div style={{ marginTop: 28, marginBottom: 6, fontSize: 14.5, fontWeight: 620 }}>Aplicar un paquete de cambios</div>
+        <div style={{ fontSize: 12, color: T.suave, marginBottom: 10, lineHeight: 1.5 }}>
+          Pegá el paquete que te armó Claude. Antes de aplicar ves la lista de cambios, y cada uno queda en el registro.
+        </div>
+        <label className="btn ghost" style={{ display: "block", textAlign: "center", marginBottom: 8, fontSize: 14.5, fontWeight: 500 }}>
+          Elegir el archivo del paquete
+          <input type="file" accept=".json,application/json,text/plain" style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files && e.target.files[0];
+              if (!f) return;
+              f.text().then((t) => { setPaqTexto(t); setPaqMsg(""); });
+              e.target.value = "";
+            }} />
+        </label>
+        <textarea value={paqTexto} onChange={(e) => { setPaqTexto(e.target.value); setPaqMsg(""); }}
+          placeholder="O pegá acá el texto del paquete"
+          style={{ minHeight: 90, fontSize: 12, fontFamily: "ui-monospace, monospace" }} />
+        {paqTexto.trim() && !paqValido && (
+          <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 6 }}>Ese texto no es un paquete de cambios válido.</div>
+        )}
+        {paqValido && (
+          <div className="card" style={{ padding: "11px 13px", marginTop: 8 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{paq.titulo || "Paquete de cambios"}</div>
+            <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>{paq.cambios.length} cambios</div>
+            <ol style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: T.suave }}>
+              {paq.cambios.map((c, i) => <li key={i}>{c.motivo || c.op}</li>)}
+            </ol>
+            <button className="btn" style={{ marginTop: 10, opacity: yaAplicado ? 0.4 : 1 }} disabled={yaAplicado}
+              onClick={() => {
+                const r = onAplicarCambios(paq);
+                setPaqMsg(r); if (r && r.startsWith("Listo")) setPaqTexto("");
+              }}>
+              {yaAplicado ? "Este paquete ya está aplicado" : `Aplicar ${paq.cambios.length} cambios`}
+            </button>
+          </div>
+        )}
+        {paqMsg && <div style={{ fontSize: 12.5, color: T.ambar, marginTop: 8, lineHeight: 1.5 }}>{paqMsg}</div>}
+
+        <button onClick={() => setVerRegistro(!verRegistro)}
+          style={{ marginTop: 14, fontSize: 13.5, color: T.ambar, fontWeight: 600 }}>
+          {verRegistro ? "Ocultar" : "Ver"} el registro de cambios ({registro.length})
+        </button>
+        {verRegistro && (
+          <div className="card" style={{ marginTop: 8, overflow: "hidden" }}>
+            {registro.length === 0 && <div style={{ padding: 13, fontSize: 12.5, color: T.tenue }}>Todavía no hay cambios registrados.</div>}
+            {registro.slice(0, 150).map((r, i) => (
+              <div key={i} style={{ padding: "9px 13px", borderTop: i ? `1px solid ${T.linea}` : "none" }}>
+                <div style={{ fontSize: 11, color: T.tenue }}>{r.fecha} · {r.origen}{r.paquete ? ` · ${r.paquete}` : ""}</div>
+                <div style={{ fontSize: 12.5, marginTop: 2, color: r.error ? T.rojo : T.tinta, lineHeight: 1.45 }}>{r.texto}</div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -9023,6 +9085,48 @@ export default function App() {
   };
   const setM = (m) => { setMovs(m); persistir(cfg, m); };
 
+  // Paquete de cambios armado afuera (por ejemplo, por Claude al revisar resúmenes).
+  // Cada cambio se aplica por id y queda en cfg.registro; el paquete no se puede aplicar dos veces.
+  const aplicarPaquete = (p) => {
+    if (!p || !Array.isArray(p.cambios)) return "Paquete inválido.";
+    if (p.id && (cfg.paquetes || []).includes(p.id)) return "Este paquete ya estaba aplicado.";
+    let m = movs.slice();
+    let c = { ...cfg, ajustes: { ...(cfg.ajustes || {}) }, resumenes: { ...(cfg.resumenes || {}) },
+              medios: (cfg.medios || medios).map((x) => ({ ...x, ciclos: (x.ciclos || []).slice() })) };
+    const fecha = new Date().toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+    const log = [];
+    const anota = (texto, error) => log.push({ fecha, origen: p.origen || "Claude", paquete: p.titulo || "", texto, ...(error ? { error: true } : {}) });
+    let ok = 0;
+    p.cambios.forEach((o) => {
+      const motivo = o.motivo || o.op;
+      const i = o.id ? m.findIndex((x) => x.id === o.id) : -1;
+      if (["editar", "terminar", "borrar"].includes(o.op) && i < 0) { anota(`No encontré el movimiento ${o.id}: ${motivo}`, true); return; }
+      if (o.op === "editar") m[i] = { ...m[i], ...(o.cambios || {}) };
+      else if (o.op === "terminar") m[i] = { ...m[i], hasta: o.hasta };
+      else if (o.op === "borrar") m.splice(i, 1);
+      else if (o.op === "agregar") {
+        if (!o.mov || !o.mov.id) { anota(`Movimiento sin id: ${motivo}`, true); return; }
+        if (m.some((x) => x.id === o.mov.id)) { anota(`Ya existía ${o.mov.id}, no lo dupliqué: ${motivo}`, true); return; }
+        m.push(o.mov);
+      } else if (o.op === "ciclo") {
+        const md = c.medios.find((x) => x.id === o.medio);
+        if (!md) { anota(`No encontré la tarjeta ${o.medio}: ${motivo}`, true); return; }
+        const j = md.ciclos.findIndex((x) => x.cierre === o.cierre);
+        if (j >= 0) md.ciclos[j] = { cierre: o.cierre, vto: o.vto }; else md.ciclos.push({ cierre: o.cierre, vto: o.vto });
+        Object.assign(md, normalizarCiclos(md));
+      } else if (o.op === "resumen") c.resumenes[o.medio + "|" + o.mes] = true;
+      else if (o.op === "ajuste") c.ajustes[o.mes] = { ...(c.ajustes[o.mes] || {}), [o.id]: o.monto };
+      else { anota(`No sé hacer "${o.op}": ${motivo}`, true); return; }
+      ok++; anota(motivo);
+    });
+    marcarUndo("el paquete " + (p.titulo || "de cambios"));
+    c = { ...c, registro: [...(cfg.registro || []), ...log].slice(-500),
+          paquetes: p.id ? [...(cfg.paquetes || []), p.id] : (cfg.paquetes || []), desdeMes: null };
+    setMovs(m); setCfgRaw(c); persistir(c, m);
+    const err = log.filter((x) => x.error).length;
+    return `Listo: ${ok} cambios aplicados${err ? `, ${err} con aviso (miralos en el registro)` : ""}. Si algo no te gusta, tocá Deshacer en Hoy.`;
+  };
+
   // Pasa gastos del anotador al flujo. Efectivo/débito: entra como gasto YA pagado del período
   // (la caja ya bajó al anotarlo). Tarjeta: va a su resumen. Compartidos: generan la cuenta con esa persona.
   const liquidarAnotador = (ids) => {
@@ -9497,6 +9601,7 @@ export default function App() {
           onAbrirMedios={() => { setVerAjustes(false); setVerMedios(true); }}
           onAbrirImportar={() => { setVerAjustes(false); setVerImportar(true); }}
           onReportar={() => { setVerAjustes(false); setVerReporte(true); }}
+          onAplicarCambios={aplicarPaquete}
           onCerrar={() => setVerAjustes(false)}
         />
       )}
