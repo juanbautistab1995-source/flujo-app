@@ -5347,23 +5347,36 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 620 }}>
-                      {nombrePeriodo(f.mk)}{f.mk === mesAct ? " · lo que falta" : cerrado ? " · cerrado" : ""}
+                      {nombrePeriodo(f.mk)}{f.mk === mesAct ? " · en curso" : cerrado ? " · cerrado" : ""}
                     </div>
                     <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 2 }}>
-                      {f.mk === mesAct ? `en curso · ${rangoPeriodo(f.mk)}`
+                      {f.mk === mesAct ? `${rangoPeriodo(f.mk)} · al cierre`
                         : DIA_CORTE && !cerrado ? `${rangoPeriodo(f.mk)} · paga ${etiqMesLargo(f.mk)}`
                         : cerrado ? "ya pasó"
                         : `cobrado el 28 de ${etiqMes(sumaMes(f.mk, -1))}`}
                     </div>
                   </div>
+                  {/* Lo que importa es con cuánto terminás: eso va grande. El movimiento del mes, chico.
+                      En el mes en curso el sueldo ya está en tu saldo, así que "lo que falta" casi
+                      siempre da negativo y asusta sin decir nada útil. */}
                   <div style={{ textAlign: "right" }}>
-                    <div className="num" style={{ fontSize: 16.5, fontWeight: 640, color: f.resultado < 0 ? T.rojo : T.verde }}>
-                      {f.resultado > 0 ? "+" : ""}{corta(f.resultado)}
-                    </div>
-                    {!cerrado && (
-                      <div className="num" style={{ fontSize: 12, color: f.saldo < 0 ? T.rojo : T.tenue, marginTop: 2 }}>
-                        queda {corta(f.saldo)}
+                    {cerrado ? (
+                      <div className="num" style={{ fontSize: 16.5, fontWeight: 640, color: f.resultado < 0 ? T.rojo : T.verde }}>
+                        {f.resultado > 0 ? "+" : ""}{corta(f.resultado)}
                       </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 10.5, color: T.tenue, letterSpacing: ".02em" }}>te queda</div>
+                        <div className="num" style={{ fontSize: 17, fontWeight: 660, color: f.saldo < 0 ? T.rojo : T.tinta }}>
+                          {corta(f.saldo)}
+                        </div>
+                        {f.mk !== mesAct && (
+                          <div className="num" style={{ fontSize: 11.5, marginTop: 1,
+                                color: f.resultado < 0 ? T.rojo : T.tenue }}>
+                            {f.resultado > 0 ? "+" : ""}{corta(f.resultado)} en el mes
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -5380,8 +5393,8 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6,
                                     fontSize: 11.5, color: T.tenue }}>
-                        <span>entra <span className="num">{corta(f.ingresos)}</span></span>
-                        <span>sale <span className="num">{corta(f.egresos)}</span></span>
+                        <span>{f.mk === mesAct ? "falta entrar" : "entra"} <span className="num">{corta(f.ingresos)}</span></span>
+                        <span>{f.mk === mesAct ? "falta salir" : "sale"} <span className="num">{corta(f.egresos)}</span></span>
                       </div>
                     </div>
                   );
@@ -5392,6 +5405,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                 <div style={{ borderTop: `1px solid ${T.linea}` }}>
                   {(f.ingresos || f.tarjetas || f.efvo) > 0 && (
                   <div style={{ padding: "13px 15px", fontSize: 13.5 }}>
+                    {f.mk === mesAct && (
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 8px",
+                                    marginBottom: 4, borderBottom: `1px solid ${T.linea}` }}>
+                        <span style={{ fontWeight: 600 }}>Tenés hoy</span>
+                        <span className="num" style={{ fontWeight: 600 }}>{plata(cfg.saldoHoy || 0)}</span>
+                      </div>
+                    )}
                     {[["Ingresos", f.ingresos - f.totalReint - (f.devCaja || 0)],
                       ["Tarjetas", -f.tarjetas],
                       ["Efectivo y débito", -(f.efvo - f.totalDeudas - f.ahorro)],
@@ -5406,6 +5426,13 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                           <span className="num" style={{ color: v < 0 ? T.rojo : T.verde }}>{plata(v)}</span>
                         </div>
                       ))}
+                    {f.mk === mesAct && (
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px",
+                                    marginTop: 4, borderTop: `1px solid ${T.linea}` }}>
+                        <span style={{ fontWeight: 600 }}>Te queda al {DIA_CORTE ? `${DIA_CORTE - 1}/${f.mk.slice(5, 7)}` : "fin de mes"}</span>
+                        <span className="num" style={{ fontWeight: 650, color: f.saldo < 0 ? T.rojo : T.tinta }}>{plata(f.saldo)}</span>
+                      </div>
+                    )}
                     {f.ahorro > 0 && (
                       <div style={{ marginTop: 10, padding: "9px 11px", background: T.ambarBg,
                                     borderRadius: 9, fontSize: 12.5, lineHeight: 1.5 }}>
