@@ -4835,6 +4835,20 @@ function ReglaSueldo({ ini, fin, hoy, marcas }) {
   );
 }
 
+// Resúmenes de tarjeta que vencieron (y la app ya da por pagados) desde el último "Ajustar con el banco".
+// Esa plata salió de la cuenta por la tarjeta: al ajustar no son gastos sin anotar.
+function resumenesPagadosDesde(mes, medios, mesAct, desde) {
+  if (!mes || !desde) return [];
+  const por = {};
+  (mes.items || []).forEach((x) => {
+    if (x.autoPagado && x.mv && x.mv.medio) por[x.mv.medio] = (por[x.mv.medio] || 0) + (+x.base || 0);
+  });
+  return (medios || []).filter((m) => por[m.id] > 0).map((m) => {
+    const vto = ciclosDe(m).map((c) => c && c.vto).filter((v) => v && periodoDe(v) === mesAct).sort().pop();
+    return vto && vto >= desde ? { id: m.id, corto: m.corto || m.nombre, monto: Math.round(por[m.id]), vto } : null;
+  }).filter(Boolean);
+}
+
 function PanelSueldo({ cfg, setCfg, mes, mesAct, medios, movs, onVerGastos }) {
   const hoy = hoyISO();
   const { ini, fin } = rangoDelPeriodo(mesAct, cfg.diaCobro);
@@ -4885,10 +4899,13 @@ function PanelSueldo({ cfg, setCfg, mes, mesAct, medios, movs, onVerGastos }) {
   const ultimo = cfg.ultimoAjuste;
   const diasSinAjustar = ultimo ? Math.round((new Date(hoy + "T12:00:00") - new Date(ultimo + "T12:00:00")) / 86400000) : null;
 
+  const pagadas = resumenesPagadosDesde(mes, medios, mesAct, cfg.ultimoAjuste);
+  const yaPagado = pagadas.reduce((a, p) => a + p.monto, 0);
+  const esperado = (cfg.saldoHoy || 0) - yaPagado;   // lo que debería haber en la cuenta
   const confirmarAjuste = () => {
     const r = parseInt(String(real).replace(/[^\d-]/g, "") || "", 10);
     if (!isFinite(r)) return;
-    const dif = Math.round((cfg.saldoHoy || 0) - r);
+    const dif = Math.round(esperado - r);
     const lista = cfg.anotador || [];
     const nuevo = dif > 0 ? [...lista, { id: "a" + Date.now(), fecha: hoy, monto: dif, detalle: "Gastos sin anotar",
       medio: "efectivo", categoria: "Otros", catManual: true, sinAnotar: true }] : lista;
@@ -4922,17 +4939,24 @@ function PanelSueldo({ cfg, setCfg, mes, mesAct, medios, movs, onVerGastos }) {
       {ajustando ? (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 12.5, color: suave, lineHeight: 1.5 }}>
-            Poné lo que tenés hoy en cuenta, billetera virtual y efectivo. Si es menos de lo que la app
-            calcula, la diferencia queda anotada como <b style={{ color: "#EAF0EC" }}>gastos sin anotar</b>.
+            Poné lo que tenés hoy en cuenta, billetera virtual y efectivo, con la plata de las tarjetas que todavía
+            no pagaste incluida. Si es menos de lo que la app calcula, la diferencia queda anotada como{" "}
+            <b style={{ color: "#EAF0EC" }}>gastos sin anotar</b>.
           </div>
           <input className="num" inputMode="numeric" autoFocus value={real}
             onChange={(e) => setReal(e.target.value.replace(/[^\d]/g, ""))}
             style={{ marginTop: 10, fontSize: 28, fontWeight: 660, textAlign: "right",
                      background: "rgba(255,255,255,.09)", border: "none", color: "#EAF0EC" }} />
-          {real !== "" && +real !== cfg.saldoHoy && (
+          {pagadas.length > 0 && (
+            <div style={{ fontSize: 12, color: suave, marginTop: 7, lineHeight: 1.5 }}>
+              Ya descuento lo que pagaste de tarjetas desde el último ajuste:{" "}
+              {pagadas.map((p) => `${p.corto} ${plata(p.monto)} (venció ${ddmm(p.vto)})`).join(" · ")}
+            </div>
+          )}
+          {real !== "" && +real !== esperado && (
             <div className="num" style={{ fontSize: 12.5, color: suave, marginTop: 7, textAlign: "right" }}>
-              La app calculaba {plata(cfg.saldoHoy || 0)} ·{" "}
-              {+real < cfg.saldoHoy ? `sin anotar ${plata(cfg.saldoHoy - +real)}` : `tenés ${plata(+real - cfg.saldoHoy)} de más`}
+              La app calculaba {plata(esperado)} ·{" "}
+              {+real < esperado ? `sin anotar ${plata(esperado - +real)}` : `tenés ${plata(+real - esperado)} de más`}
             </div>
           )}
           <button className="btn" onClick={confirmarAjuste}
@@ -6813,7 +6837,8 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
       <label className="lbl">{etiq}</label>
       <input
         className="num" inputMode="decimal" value={cfg[k]}
-        onChange={(e) => setCfg({ ...cfg, [k]: +e.target.value.replace(/[^\d.-]/g, "") || 0 })}
+        onChange={(e) => setCfg({ ...cfg, [k]: +e.target.value.replace(/[^\d.-]/g, "") || 0,
+                                  ...(k === "saldoHoy" ? { ultimoAjuste: hoyISO() } : {}) })}
         style={{ textAlign: "right" }}
       />
       {nota && <div style={{ fontSize: 12, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>{nota}</div>}
