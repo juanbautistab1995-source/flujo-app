@@ -253,17 +253,45 @@ const riso = (d, m, y) => {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
 
+// Fecha que acompaña a una etiqueta: en la misma línea, o abajo en la misma columna.
+// El Hipotecario pone "VTO. ANTERIOR … PROXIMO CIERRE" y en la línea de abajo
+// "09 Oct 26 … 26 Nov 26": la buena es la que está debajo de la etiqueta, no la primera.
+const RFECHA_G = /\d{1,2}[\s\-.]+[A-Za-zÁ-úá-ú]{3,10}\.?[\s\-.]+\d{2,4}|\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}/g;
+function rFechaEtiqueta(t, re) {
+  const lineas = t.split("\n");
+  for (let i = 0; i < lineas.length; i++) {
+    const m = lineas[i].match(re);
+    if (!m) continue;
+    const resto = lineas[i].slice(m.index + m[0].length).replace(/^[\s:.]+/, "");
+    const f = rFecha(resto.slice(0, 20));
+    if (f) return f;
+    for (let j = i + 1; j <= i + 2 && j < lineas.length; j++) {
+      const cerca = [...lineas[j].matchAll(RFECHA_G)]
+        .map((x) => ({ f: rFecha(x[0]), d: Math.abs(x.index - m.index) }))
+        .filter((x) => x.f && x.d <= 25)
+        .sort((a, b) => a.d - b.d);
+      if (cerca.length) return cerca[0].f;
+    }
+  }
+  return null;
+}
+
 function rCiclos(t) {
   const b = (re) => { const m = t.match(re); return m ? rFecha(m[1]) : null; };
-  return {
+  const c = {
     cierre:    b(/CIERRE\s+ACTUAL:?\s*([^\n$]{6,20})/i) || b(/ESTADO DE CUENTA AL:?\s*([^\n$]{6,20})/i)
              || b(/\bCIERRE\s+(\d{1,2}[\s\-][A-Za-z]{3,4}[\s\-]\d{2})/i),
     vto:       b(/VENCIMIENTO\s+ACTUAL:?\s*([^\n$]{6,20})/i)
              || b(/VENCIMIENTO\s+(\d{1,2}\s+[A-Za-z]{3,4}\s+\d{2})/i)
              || b(/VENCIMIENTO\s+SALDO[^\n]*(?:\n[^\n]*){0,2}\n\s*(\d{1,2}\s+[A-Za-z]{3,4}\.?\s+\d{2})\s+\d/i),
-    proxCierre: b(/PROX(?:IMO)?\.?\s*CIERRE:?\s*([^\n$]{6,20})/i),
-    proxVto:    b(/PROX(?:IMO)?\.?\s*(?:VTO|VENCIMIENTO)\.?:?\s*([^\n$]{6,20})/i),
+    proxCierre: rFechaEtiqueta(t, /PROX(?:IMO)?\.?[ \t]*CIERRE/i),
+    proxVto:    rFechaEtiqueta(t, /PROX(?:IMO)?\.?[ \t]*(?:VTO|VENCIMIENTO)\.?/i),
   };
+  // Fechas que no pueden ser: mejor ninguna que una mala (se guardan como ciclos reales)
+  if (c.cierre && c.vto && c.vto <= c.cierre) c.vto = null;
+  if (c.proxCierre && c.cierre && c.proxCierre <= c.cierre) { c.proxCierre = null; c.proxVto = null; }
+  if (c.proxVto && c.proxVto <= (c.proxCierre || c.vto || "")) c.proxVto = null;
+  return c;
 }
 
 function rEmisor(t) {
@@ -279,7 +307,15 @@ function rEmisor(t) {
 // Ruido: impuestos, pagos, totales — no son consumos del usuario
 const RRUIDO = /IMPUESTO DE SELLOS|IIBB|IVA RG|DB\.RG|DEV\.?IMP|PERCEP|SU PAGO|SALDO ANTERIOR|SALDO ACTUAL|PAGO MINIMO|Total Consumos|TOTAL TITULAR|COM\.POR MANT|MEMBRESIA|LIMITES|CUOTAS A VENCER|Cuotas a vencer|TNA|TEM|Plan V/i;
 
-function rMovs(t, molde) {
+// Un detalle de verdad tiene alguna palabra que no sea un mes ("26 Nov 26" o "-,--" no son compras)
+const rEsMes = (w) => {
+  const x = w.toLowerCase();
+  return !!RMESES[x.slice(0, 3)] && (x.length === 3 || Object.keys(RMESL).some((n) => n.startsWith(x)));
+};
+const rTienePalabra = (det) => (det.match(/[A-Za-zÁ-úá-ú]{3,}/g) || []).some((w) => !rEsMes(w));
+
+function rMovs(t, molde, ref) {
+  const anioRef = ref ? +ref.slice(0, 4) : null;
   const out = [];
   const creditos = [];   // anulaciones y bonificaciones dentro de los consumos
   let mesCtx = null, anioCtx = null;
@@ -294,7 +330,10 @@ function rMovs(t, molde) {
     if (cab) {
       const w = cab[2].toLowerCase();
       const esMes = RMESES[w.slice(0, 3)] && Object.keys(RMESL).some((n) => n.startsWith(w));
-      if (esMes) { anioCtx = 2000 + +cab[1]; mesCtx = RMESES[w.slice(0, 3)]; }
+      // "05 Nov 26" en la cabecera del Hipotecario es una fecha, no el año 2005
+      const anio = 2000 + +cab[1];
+      const anioOk = !anioRef || (anio >= anioRef - 4 && anio <= anioRef + 1);
+      if (esMes && anioOk) { anioCtx = anio; mesCtx = RMESES[w.slice(0, 3)]; }
       else cab = null;
     }
 
@@ -332,7 +371,7 @@ function rMovs(t, molde) {
     det = det.replace(/\s+\d{5}\s*$/, "").trim();          // comprobante al final (Mastercard)
     det = det.replace(/^\d{1,2}\s+\d{4,7}\s*[*K]?\s+/, "").trim();  // "07 006463 *" (ICBC)
     det = det.replace(/\s+\d{6,}\s*$/, "").trim();          // referencias largas
-    if (!det || det.length < 3) continue;
+    if (!det || det.length < 3 || !rTienePalabra(det)) continue;
 
     // Dólares: si hay dos importes y el último es chico, el consumo es en USD
     let monto = rnum(imps[imps.length - 1]), usd = null;
@@ -418,11 +457,17 @@ function rFinanciero(t) {
 
 function leerResumen(texto) {
   const em = rEmisor(texto);
-  const movs = rMovs(texto, em.molde);
+  const ciclos = rCiclos(texto);
+  const ref = ciclos.cierre;
+  // Fuera de la ventana razonable (más de 4 años antes del cierre o después) no es un consumo
+  const movs = rMovs(texto, em.molde, ref).filter((m) => !ref
+    || (m.fecha >= `${+ref.slice(0, 4) - 4}${ref.slice(4)}` && m.fecha <= sumaDias(ref, 31)));
   const dec = rTotal(texto);
-  const suma = movs.reduce((a, m) => a + m.monto - (m.bonif || 0), 0);
+  // "Total Consumos" no incluye intereses ni IVA: para controlar, sumamos solo las compras
+  const suma = movs.filter((m) => !esCargoResumen(m.detalle))
+    .reduce((a, m) => a + m.monto - (m.bonif || 0), 0);
   return {
-    ...em, ciclos: rCiclos(texto), movs, fin: rFinanciero(texto),
+    ...em, ciclos, movs, fin: rFinanciero(texto),
     control: { declarado: dec, sumado: Math.round(suma * 100) / 100,
                dif: dec ? Math.round((suma - dec) * 100) / 100 : null },
   };
@@ -2742,6 +2787,15 @@ function aplicarResumenImportado(cfg, movs, medios, d) {
   return { cfg: cfgN, movs: [...quedan, ...nuevos] };
 }
 
+// ¿Hay dos líneas sueltas del resumen que sumen exactamente este valor?
+function parQueSuma(valor, lineas) {
+  if (!(valor > 0)) return null;
+  for (let a = 0; a < lineas.length; a++)
+    for (let b = a + 1; b < lineas.length; b++)
+      if (Math.abs(lineas[a].v + lineas[b].v - valor) <= 1) return [lineas[a].i, lineas[b].i];
+  return null;
+}
+
 // ¿Ya hay importado un resumen más nuevo de esta tarjeta?
 function resumenMasNuevo(resumenes, medioId, mesRes) {
   if (!medioId || !mesRes) return false;
@@ -2862,16 +2916,24 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
     });
     // Lo que cargaste para ese resumen pero el banco no trae
     const cierre = res.ciclos && res.ciclos.cierre;
+    // Líneas del resumen que no se emparejaron con nada (para ver si algo cargado es la suma de dos)
+    const sueltas = res.movs.map((m, i) => ({ i, v: m.montoUsd ? 0 : +m.monto || 0 }))
+      .filter((x) => x.v > 0 && !match[x.i] && !yaEsta(res.movs[x.i]));
     const sinMatch = cands.filter((x) => !usados.has(x.id) && !x.detalleOrig).map((x) => {
       const fx = x.fechaCompra || x.fecha;
       // Si es posterior al cierre, va al próximo resumen. Si es anterior, debería estar
       // en este: seguramente figura con otro importe.
-      return { ...x, _dentro: !!(fx && cierre && fx <= cierre) };
+      const dentro = !!(fx && cierre && fx <= cierre);
+      // Lo cargado en una línea que el banco trae en dos (ej. "Intereses + IVA")
+      const suma = dentro && x.moneda !== "USD" ? parQueSuma(porCuota(x), sueltas) : null;
+      return { ...x, _dentro: dentro, _suma: suma };
     });
     return { match, sinMatch };
   }, [res, medio, movs, mesRes]);
 
   const gastosPlan = useMemo(() => planGastosResumen(res, medio, sel, anotador, tc), [res, medio, sel, anotador, tc]);
+  // Qué hacer con lo cargado que el banco no trae: lo que eligió el usuario o lo más probable
+  const accionDe = (x) => accion[x.id] || (x._suma ? "borrar" : x._dentro ? "dejar" : "mover");
   const hoyImp = hoyISO();
   const vencido = !!(res && res.ciclos && res.ciclos.vto && res.ciclos.vto < hoyImp);
   const hayMasNuevo = resumenMasNuevo(resumenes, medio, mesRes);
@@ -2984,7 +3046,7 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
     const vincular = {};
     Object.entries(gastosPlan.vincular).forEach(([gid, i]) => { if (idDe[i]) vincular[gid] = idDe[i]; });
     if (reemplazar) plan.sinMatch.forEach((x) => {
-      const a = accion[x.id] || (x._dentro ? "dejar" : "mover");
+      const a = accionDe(x);
       if (a === "borrar") cambios.push({ id: x.id, accion: "borrar" });
       if (a === "mover") cambios.push({ id: x.id, accion: "mover", mes: sumaMes(mesPago, 1) });
     });
@@ -3144,14 +3206,19 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
                           <span>{x.detalle}{x.persona ? ` · con ${x.persona}` : ""}</span>
                           <span className="num">{x.moneda === "USD" ? `USD ${x.montoUsd}` : plata(x.montoCuota || (x.monto || 0) / Math.max(1, x.cuotas || 1))}</span>
                         </div>
-                        {x._dentro && (
+                        {x._suma ? (
+                          <div style={{ fontSize: 11.5, color: T.verde, marginTop: 4, lineHeight: 1.45 }}>
+                            Es {x._suma.map((i) => limpiarComercio(res.movs[i].detalle)).join(" + ")} del resumen:
+                            lo borro para no contarlo dos veces.
+                          </div>
+                        ) : x._dentro && (
                           <div style={{ fontSize: 11.5, color: T.ambar, marginTop: 4, lineHeight: 1.45 }}>
                             Es de antes del cierre: si figura en el resumen con otro importe, borralo.
                           </div>
                         )}
                         <div style={{ display: "flex", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
                           {[["mover", "Al próximo resumen"], ["dejar", "Dejarlo"], ["borrar", "Borrarlo"]].map(([v, n]) => (
-                            <button key={v} className={"chip sm" + ((accion[x.id] || (x._dentro ? "dejar" : "mover")) === v ? " on" : "")}
+                            <button key={v} className={"chip sm" + (accionDe(x) === v ? " on" : "")}
                               onClick={() => setAccion({ ...accion, [x.id]: v })}>{n}</button>
                           ))}
                         </div>
