@@ -1177,7 +1177,9 @@ function proyectar(cfg, movs, medios, meses, extra) {
         return;
       }
       // El sueldo de este período ya lo cobraste (es lo que lo abre) y tu saldo de hoy ya lo tiene.
-      if (DIA_CORTE && mk === mesDeHoy() && mv.tipo === "ingreso" && mv.recurrente && esSueldo(mv) && !tocado) {
+      // Vale aunque le hayas corregido el monto este mes. Si lo marcaste "Ya lo cobré", ya quedó saldado arriba.
+      if (DIA_CORTE && mk === mesDeHoy() && mv.tipo === "ingreso" && esSueldo(mv)
+          && (mv.recurrente || String(mv.fecha || "").slice(0, 10) <= hoyISO())) {
         items.push({ mv, monto: 0, base: m, ingreso: true, saldado: true, autoCobrado: true });
         return;
       }
@@ -2681,7 +2683,119 @@ async function textoDelPdf(file, pass) {
   return out;
 }
 
-function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
+// Aplica un resumen importado. Sirve para el último y para uno viejo (ya vencido y pagado):
+// reemplaza lo cargado a mano, guarda las fechas del ciclo y suma a Gastos lo que no habías anotado.
+// Si ya hay un resumen más nuevo de esa tarjeta, no pisa las fechas que vienen después ni los datos de la tarjeta.
+function aplicarResumenImportado(cfg, movs, medios, d) {
+  const { nuevos = [], ciclos, medioId, fin, cambios = [], aGastos = [], vincular = {}, relink = {} } = d;
+  const porId = {};
+  cambios.forEach((c) => { porId[c.id] = c; });
+  const quedan = movs.flatMap((m) => {
+    const c = porId[m.id];
+    if (!c) return [m];
+    if (c.accion === "borrar") return [];
+    if (c.accion === "mover") return [{ ...m, mesInicio: c.mes }];
+    if (c.accion === "truncar") {
+      const n = Math.max(1, c.cuotas);
+      const unit = m.moneda === "USD" ? null : (+m.montoCuota || (+m.monto || 0) / Math.max(1, m.cuotas || 1));
+      const unitUsd = m.moneda === "USD" ? (+m.montoUsd || 0) / Math.max(1, m.cuotas || 1) : null;
+      return [{ ...m, cuotas: n,
+                ...(unit != null ? { monto: Math.round(unit * n) } : {}),
+                ...(unitUsd != null ? { montoUsd: Math.round(unitUsd * n * 100) / 100 } : {}) }];
+    }
+    return [m];
+  });
+  const cfgN = { ...cfg };
+  const mesRes = ciclos && ciclos.vto ? periodoDe(ciclos.vto) : null;
+  const viejo = resumenMasNuevo(cfg.resumenes, medioId, mesRes);
+  // Ese mes ya no se estima: tenemos el resumen real
+  if (medioId && mesRes) cfgN.resumenes = { ...(cfg.resumenes || {}), [medioId + "|" + mesRes]: true };
+  if (medioId && ((ciclos && (ciclos.cierre || ciclos.proxCierre)) || fin)) {
+    const lista = medios.map((m) => {
+      if (m.id !== medioId) return m;
+      const cs = (m.ciclos || []).slice();
+      [[ciclos && ciclos.cierre, ciclos && ciclos.vto, true],
+       [ciclos && ciclos.proxCierre, ciclos && ciclos.proxVto, false]].forEach(([c, v, propio]) => {
+        if (!c || !v) return;
+        const j = cs.findIndex((x) => x.cierre === c);
+        // El "próximo" que anunciaba un resumen viejo no pisa una fecha real que ya tenemos
+        if (j >= 0 && !propio && viejo && !cs[j].estimado) return;
+        if (j >= 0) cs[j] = { cierre: c, vto: v }; else cs.push({ cierre: c, vto: v });
+      });
+      // Tasa, mínimo y deuda de la tarjeta: solo del resumen más nuevo
+      const datos = viejo ? {} : {
+        tna: (fin && fin.tna) || m.tna, tem: (fin && fin.tem) || m.tem,
+        pagoMinimo: (fin && fin.pagoMinimo) || m.pagoMinimo,
+        saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo };
+      return normalizarCiclos({ ...m, ciclos: cs, ...datos });
+    });
+    cfgN.medios = lista.length ? lista : MEDIOS_NUEVO;
+  }
+  // Gastos: lo que anotaste y ahora vino en el resumen queda en el flujo; lo que no anotaste se suma
+  const anot = (cfg.anotador || []).map((g) => {
+    if (vincular[g.id]) return { ...g, mov: vincular[g.id] };
+    if (g.mov && relink[g.mov]) return { ...g, mov: relink[g.mov] };
+    return g;
+  });
+  if (aGastos.length || Object.keys(vincular).length || Object.keys(relink).length)
+    cfgN.anotador = [...anot, ...aGastos];
+  return { cfg: cfgN, movs: [...quedan, ...nuevos] };
+}
+
+// ¿Ya hay importado un resumen más nuevo de esta tarjeta?
+function resumenMasNuevo(resumenes, medioId, mesRes) {
+  if (!medioId || !mesRes) return false;
+  return Object.keys(resumenes || {}).some((k) =>
+    k.startsWith(medioId + "|") && k.slice(medioId.length + 1) > mesRes && resumenes[k]);
+}
+
+// Líneas de un resumen que no son compras: intereses, impuestos, cargos.
+const esCargoResumen = (t) =>
+  /intereses|\biva\b|impuesto|sellos|percep|comisi[oó]n|cargo|db\.?\s*rg|iibb|ganancias|bonif|seguro de vida|punitorio/i.test(t || "");
+
+// Compras de un resumen frente a lo que anotaste en Gastos: las que anotaste quedan en el flujo,
+// las que no anotaste se suman (ya liquidadas). Solo compras nuevas del ciclo (cuota 1), sin impuestos.
+function planGastosResumen(res, medio, sel, anotador, tc) {
+  const vacio = { nuevos: [], vincular: {}, ya: 0, total: 0 };
+  if (!res || !medio) return vacio;
+  const cierre = res.ciclos && res.ciclos.cierre;
+  const desde = cierre ? sumaDias(cierre, -75) : null;
+  const libres = (anotador || []).filter((g) => !g.medio || g.medio === medio);
+  const usadas = new Set(), vincular = {}, nuevos = [];
+  let ya = 0, total = 0;
+  res.movs.forEach((m, i) => {
+    if (!sel[i] || (m.cuota || 1) !== 1 || esCargoResumen(m.detalle) || !m.fecha) return;
+    if ((desde && m.fecha < desde) || (cierre && m.fecha > cierre)) return;
+    const n = Math.max(1, m.cuotas || 1);
+    const usd = m.montoUsd ? Math.round(m.montoUsd * n * 100) / 100 : 0;
+    const pesos = usd ? Math.round(usd * (tc || 0)) : Math.round((+m.monto || 0) * n);
+    if (!(pesos > 0)) return;
+    const pa = palabrasBusca(m.detalle + " " + limpiarComercio(m.detalle));
+    let mejor = null, pm = -1;
+    libres.forEach((g) => {
+      if (usadas.has(g.id)) return;
+      const d = diasEntre(g.fecha, m.fecha);
+      if (d > 3) return;
+      const dif = Math.abs((+g.monto || 0) - pesos);
+      const nombre = palabrasBusca(g.detalle).some((w) => pa.some((q) => q.includes(w) || w.includes(q)));
+      if (!(dif <= Math.max(1, pesos * 0.01) || (nombre && dif <= pesos * (usd ? 0.15 : 0.05)))) return;
+      const p = (dif <= 1 ? 3 : 1) + (3 - d) + (nombre ? 2 : 0);
+      if (p > pm) { pm = p; mejor = g; }
+    });
+    if (mejor) {
+      usadas.add(mejor.id); ya++;
+      if (!mejor.mov) vincular[mejor.id] = i;
+      return;
+    }
+    nuevos.push({ i, pesos, usd }); total += pesos;
+  });
+  return { nuevos, vincular, ya, total };
+}
+
+const diasEntre = (a, b) => (a && b) ? Math.abs((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000) : 99;
+const palabrasBusca = (t) => normBusca(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+
+function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumenes = {}, tc = 0, onImportar, onCerrar }) {
   const [etapa, setEtapa] = useState("elegir");   // elegir | leyendo | revisar
   const [error, setError] = useState("");
   const [pass, setPass] = useState("");
@@ -2700,7 +2814,10 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
   // El resumen es la verdad de ese mes para esa tarjeta. Buscamos lo que ya
   // tenías cargado a mano en ese mes y tarjeta, y lo emparejamos con las líneas del
   // resumen para no contarlo dos veces (y no perder con quién lo compartiste).
-  const mesRes = res && res.ciclos && res.ciclos.vto ? res.ciclos.vto.slice(0, 7) : null;
+  const mesRes = res && res.ciclos && res.ciclos.vto ? periodoDe(res.ciclos.vto) : null;
+  const [aGastosOn, setAGastosOn] = useState(true);
+  const dias = (a, b) => (a && b) ? Math.abs((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000) : 99;
+  const palabras = (t) => normBusca(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
   const plan = useMemo(() => {
     const vacio = { match: {}, sinMatch: [] };
     if (!res || !medio || !mesRes) return vacio;
@@ -2710,8 +2827,6 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
     const cands = movs.filter((x) => x.tipo === "gasto" && !x.recurrente && x.medio === medio
       && x.pagadoPor !== "otro" && x.mesInicio && distMes(x.mesInicio, mesRes) >= 0
       && distMes(x.mesInicio, mesRes) < Math.max(1, x.cuotas || 1));
-    const dias = (a, b) => (a && b) ? Math.abs((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000) : 99;
-    const palabras = (t) => normBusca(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
     // Todos los pares posibles con su puntaje; después se asignan de mejor a peor,
     // así un gasto que no cargaste no le "roba" la pareja a otro parecido.
     const pares = [];
@@ -2756,6 +2871,11 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
     return { match, sinMatch };
   }, [res, medio, movs, mesRes]);
 
+  const gastosPlan = useMemo(() => planGastosResumen(res, medio, sel, anotador, tc), [res, medio, sel, anotador, tc]);
+  const hoyImp = hoyISO();
+  const vencido = !!(res && res.ciclos && res.ciclos.vto && res.ciclos.vto < hoyImp);
+  const hayMasNuevo = resumenMasNuevo(resumenes, medio, mesRes);
+
   const procesar = async (file, clave) => {
     setEtapa("leyendo"); setError("");
     try {
@@ -2791,9 +2911,18 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
   };
 
   const importar = () => {
-    const mesPago = res.ciclos.vto ? res.ciclos.vto.slice(0, 7) : mesDeHoy();
+    const mesPago = res.ciclos.vto ? periodoDe(res.ciclos.vto) : mesDeHoy();
     const cambios = [];   // { id, accion: "borrar" | "truncar" | "mover", cuotas? }
+    const idDe = {}, relink = {};
+    const anotPorLinea = {};
+    Object.entries(gastosPlan.vincular).forEach(([gid, i]) => {
+      const g = (anotador || []).find((x) => x.id === gid);
+      if (g) anotPorLinea[i] = g;
+    });
+    const stamp = Date.now();
     const nuevos = res.movs.map((m, i) => [m, i]).filter(([, i]) => sel[i]).map(([m, i], k) => {
+      const id = "imp" + stamp + "_" + k;
+      idDe[i] = id;
       // El resumen muestra el valor de UNA cuota; la app guarda el total y lo reparte.
       const restantes = Math.max(1, m.cuotas - m.cuota + 1);
       const viejo = reemplazar ? plan.match[i] : null;
@@ -2801,7 +2930,15 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         // El viejo queda solo con los meses anteriores a este resumen
         const antes = distMes(viejo.mesInicio, mesPago);
         cambios.push(antes > 0 ? { id: viejo.id, accion: "truncar", cuotas: antes } : { id: viejo.id, accion: "borrar" });
+        if (!(antes > 0)) relink[viejo.id] = id;
       }
+      // Lo que anotaste en Gastos: le pasa con quién lo compartiste, la categoría y el nombre
+      const ag = !viejo && anotPorLinea[i];
+      const deGastos = ag ? {
+        ...(ag.persona ? { persona: ag.persona, pct: isFinite(+ag.pct) ? +ag.pct : 0.5 } : {}),
+        ...(ag.categoria ? { categoria: ag.categoria } : {}),
+        ...(ag.detalle ? { detalle: ag.detalle } : {}),
+      } : {};
       const hereda = viejo ? {
         ...(viejo.persona ? { persona: viejo.persona, pct: viejo.pct } : {}),
         ...(viejo.categoria ? { categoria: viejo.categoria } : {}),
@@ -2814,7 +2951,7 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         ...(viejo.detalle && !viejo.detalleOrig ? { detalle: viejo.detalle } : {}),
       } : {};
       return {
-        id: "imp" + Date.now() + "_" + k,
+        id,
         tipo: "gasto",
         detalle: limpiarComercio(m.detalle),
         detalleOrig: m.detalle,
@@ -2825,20 +2962,34 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
         moneda: m.montoUsd ? "USD" : "ARS",
         medio, cuotas: restantes,
         mesInicio: mesPago,
-        categoria: adivinarCategoria(limpiarComercio(m.detalle) + " " + m.detalle),
+        categoria: adivinarConAprendido(limpiarComercio(m.detalle) + " " + m.detalle, aprendido).cat,
         recurrente: false, pagadoPor: "yo",
         // Bonificación del comercio sobre una compra en cuotas: reintegro único en este resumen
         ...(m.bonif ? { devTope: Math.round(m.bonif), devDestino: "tarjeta", devMes: "mismo" } : {}),
+        ...deGastos,
         ...hereda,
       };
     });
+    const porLinea = {};
+    nuevos.forEach((x) => { porLinea[x.id] = x; });
+    const aGastos = aGastosOn ? gastosPlan.nuevos.filter(({ i }) => idDe[i]).map(({ i, pesos, usd }) => {
+      const m = res.movs[i], mv = porLinea[idDe[i]];
+      return { id: "a" + idDe[i], fecha: m.fecha, monto: pesos, detalle: mv.detalle, medio,
+               categoria: mv.categoria || "Otros", catManual: true,
+               ...(m.cuotas > 1 ? { cuotas: m.cuotas } : {}),
+               ...(mv.persona ? { persona: mv.persona, pct: mv.pct, pagadoPor: "yo" } : {}),
+               ...(usd ? { nota: `U$S ${usd}` } : {}),
+               mov: idDe[i], origen: "resumen", restoCaja: 0 };
+    }) : [];
+    const vincular = {};
+    Object.entries(gastosPlan.vincular).forEach(([gid, i]) => { if (idDe[i]) vincular[gid] = idDe[i]; });
     if (reemplazar) plan.sinMatch.forEach((x) => {
       const a = accion[x.id] || (x._dentro ? "dejar" : "mover");
       if (a === "borrar") cambios.push({ id: x.id, accion: "borrar" });
       if (a === "mover") cambios.push({ id: x.id, accion: "mover", mes: sumaMes(mesPago, 1) });
     });
     // Si el resumen trae fechas de ciclo, las guardamos: se acaba tener que cargarlas a mano
-    onImportar(nuevos, res.ciclos, medio, res.fin, cambios);
+    onImportar({ nuevos, ciclos: res.ciclos, medioId: medio, fin: res.fin, cambios, aGastos, vincular, relink });
     onCerrar();
   };
 
@@ -2934,6 +3085,33 @@ function ImportarResumen({ medios, movs, onImportar, onCerrar }) {
                   onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
               ))}
             </div>
+
+            {medio && vencido && (
+              <div className="aviso" style={{ marginBottom: 14, lineHeight: 1.55 }}>
+                Este resumen ya venció ({ddmm(res.ciclos.vto)}): lo tomo como pagado y no cambia tu saldo de hoy.
+                Queda en el historial y suma lo que realmente gastaste.
+                {hayMasNuevo && " Como ya tenés uno más nuevo de esta tarjeta, no toco las fechas que vienen ni los datos de la tarjeta."}
+              </div>
+            )}
+
+            {medio && (gastosPlan.nuevos.length > 0 || gastosPlan.ya > 0) && (
+              <div className="card" style={{ padding: 15, marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 620 }}>Sumar a Gastos lo que no anotaste</span>
+                  {gastosPlan.nuevos.length > 0 && (
+                    <button className={"chip sm" + (aGastosOn ? " on" : "")}
+                      onClick={() => setAGastosOn(!aGastosOn)}>{aGastosOn ? "Sí" : "No"}</button>
+                  )}
+                </div>
+                <div style={{ fontSize: 12.5, color: T.suave, marginTop: 6, lineHeight: 1.55 }}>
+                  {gastosPlan.nuevos.length > 0
+                    ? `${gastosPlan.nuevos.length} ${gastosPlan.nuevos.length === 1 ? "compra" : "compras"} por ${plata(gastosPlan.total)} van a Gastos con su fecha de compra, ya en el flujo.`
+                    : "Todas las compras nuevas de este resumen ya estaban en Gastos."}
+                  {gastosPlan.ya > 0 && ` ${gastosPlan.ya} ya ${gastosPlan.ya === 1 ? "estaba anotada" : "estaban anotadas"}: quedan en el flujo con lo que les pusiste (con quién, categoría).`}
+                  {" "}Impuestos, intereses y cuotas de compras viejas no se suman.
+                </div>
+              </div>
+            )}
 
             {medio && mesRes && (Object.keys(plan.match).length > 0 || plan.sinMatch.length > 0) && (
               <div className="card" style={{ padding: 15, marginBottom: 14 }}>
@@ -6268,7 +6446,14 @@ function ConfigAtajo({ sesion, onCerrar }) {
 }
 
 function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) {
-  const lista = Array.isArray(cfg.anotador) ? cfg.anotador : [];
+  // Lo que ya está en el flujo muestra la categoría que tiene allá: si la cambiás en Movimientos, cambia acá
+  const catMov = useMemo(() => {
+    const o = {};
+    (movs || []).forEach((m) => { if (m && m.categoria) o[m.id] = m.categoria; });
+    return o;
+  }, [movs]);
+  const lista = (Array.isArray(cfg.anotador) ? cfg.anotador : []).map((g) =>
+    g.mov && catMov[g.mov] && catMov[g.mov] !== g.categoria ? { ...g, categoria: catMov[g.mov] } : g);
   const hoy = hoyISO();
   const [rango, setRango] = useState("sueldo");   // sueldo | semana | mes
   const [mesVer, setMesVer] = useState(hoy.slice(0, 7));
@@ -6308,7 +6493,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) 
              saldoHoy: Math.round((cfg.saldoHoy || 0) + (viejo ? +viejo.restoCaja || 0 : 0)) });
   };
   const abrir = (g) => {
-    if (g.mov) { setAviso(`"${g.detalle}" ya está liquidado: cambialo desde Movimientos del flujo.`); return; }
+    if (g.mov) { setAviso(`"${g.detalle}" ya está en el flujo: cambialo (también la categoría) desde Movimientos.`); return; }
     setAviso(""); setAlta(g);
   };
 
@@ -9773,54 +9958,14 @@ export default function App() {
       )}
       {verImportar && (
         <ImportarResumen
-          medios={medios} movs={movs}
-          onImportar={(nuevos, ciclos, medioId, fin, cambios = []) => {
+          medios={medios} movs={movs} anotador={cfg.anotador || []} aprendido={cfg.anotadorAprende || {}}
+          resumenes={cfg.resumenes || {}} tc={cfgTC.tc || cfg.tc || 0}
+          onImportar={(datos) => {
             marcarUndo("la importación del resumen");
-            // El resumen reemplaza lo cargado a mano en ese mes y tarjeta
-            const porId = {};
-            cambios.forEach((c) => { porId[c.id] = c; });
-            const quedan = movs.flatMap((m) => {
-              const c = porId[m.id];
-              if (!c) return [m];
-              if (c.accion === "borrar") return [];
-              if (c.accion === "mover") return [{ ...m, mesInicio: c.mes }];
-              if (c.accion === "truncar") {
-                const n = Math.max(1, c.cuotas);
-                const unit = m.moneda === "USD" ? null : (+m.montoCuota || (+m.monto || 0) / Math.max(1, m.cuotas || 1));
-                const unitUsd = m.moneda === "USD" ? (+m.montoUsd || 0) / Math.max(1, m.cuotas || 1) : null;
-                return [{ ...m, cuotas: n,
-                          ...(unit != null ? { monto: Math.round(unit * n) } : {}),
-                          ...(unitUsd != null ? { montoUsd: Math.round(unitUsd * n * 100) / 100 } : {}) }];
-              }
-              return [m];
-            });
-            setMovs([...quedan, ...nuevos]);
-            // Todo en UN solo cambio de configuración. Antes se guardaban por separado y el
-            // segundo pisaba al primero: se perdía la marca de "resumen real" y los fijos
-            // estimados de esa tarjeta se contaban dos veces.
-            let cfgN = { ...cfg };
-            // Ese mes ya no se estima: tenemos el resumen real
-            if (medioId && ciclos && ciclos.vto) {
-              cfgN.resumenes = { ...(cfg.resumenes || {}), [medioId + "|" + ciclos.vto.slice(0, 7)]: true };
-            }
-            // El resumen trae las fechas de este ciclo y del próximo: quedan como reales
-            if (medioId && ((ciclos && ciclos.proxCierre) || fin)) {
-              const lista = medios.map((m) => {
-                if (m.id !== medioId) return m;
-                const cs = (m.ciclos || []).slice();
-                [[ciclos && ciclos.cierre, ciclos && ciclos.vto], [ciclos && ciclos.proxCierre, ciclos && ciclos.proxVto]].forEach(([c, v]) => {
-                  if (!c || !v) return;
-                  const j = cs.findIndex((x) => x.cierre === c);
-                  if (j >= 0) cs[j] = { cierre: c, vto: v }; else cs.push({ cierre: c, vto: v });
-                });
-                return normalizarCiclos({ ...m, ciclos: cs,
-                  tna: (fin && fin.tna) || m.tna, tem: (fin && fin.tem) || m.tem,
-                  pagoMinimo: (fin && fin.pagoMinimo) || m.pagoMinimo,
-                  saldo: (fin && fin.saldo) != null ? fin.saldo : m.saldo });
-              });
-              cfgN.medios = lista.length ? lista : MEDIOS_NUEVO;
-            }
-            setCfg(cfgN);
+            // Todo en UN solo cambio de configuración: si se guardan por separado, el segundo pisa al primero
+            const r = aplicarResumenImportado(cfg, movs, medios, datos);
+            setMovs(r.movs);
+            setCfg(r.cfg);
           }}
           onCerrar={() => setVerImportar(false)} />
       )}
