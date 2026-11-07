@@ -5693,6 +5693,19 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                                       </div>
                                     </>
                                   )}
+                                  {real.recurrente && onGuardarMov && (
+                                    <button onClick={() => {
+                                      // Deja de contar desde este mes: el último mes de consumo es el anterior
+                                      const mc = mesConsumo(real, f.mk, medios);
+                                      if (!window.confirm(`¿Dejás de pagar "${real.detalle}"? Deja de contar desde ${nombrePeriodo(f.mk).toLowerCase()}. Lo de meses anteriores queda como está.`)) return;
+                                      cambiar({ hasta: sumaMes(mc, -1) });
+                                      setEditItem(null);
+                                    }}
+                                      style={{ marginTop: 18, width: "100%", padding: "11px 0", borderRadius: 10,
+                                               border: `1px solid ${T.linea}`, fontSize: 13.5, fontWeight: 600, color: T.rojo }}>
+                                      Ya no lo pago más
+                                    </button>
+                                  )}
                                   {onEditarMov && (
                                     <button onClick={() => { setEditItem(null); onEditarMov(real); }}
                                       style={{ marginTop: 18, width: "100%", padding: "11px 0", fontSize: 13.5,
