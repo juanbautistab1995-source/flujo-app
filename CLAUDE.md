@@ -24,7 +24,7 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 - **Resúmenes vencidos del mes en curso se dan por pagados** (`tarjetasVencidasEnMes`, `cfg.autoPagado`).
   `cfg.saldoHoy` es el saldo real de la cuenta, que ya los tiene descontados.
 - **Personas** (Sol, Betty, Fede…): los gastos compartidos generan cuenta corriente. Al final del mes queda un
-  neto por persona. Las claves `per|Nombre` en `cfg.aplicados` y `cfg.ajustes` no cuelgan de ningún movimiento: no limpiarlas.
+  neto por persona, solo de ese mes: lo de meses anteriores no se arrastra (salvo `cfg.arrastrarPersonas`). Las claves `per|Nombre` en `cfg.aplicados` y `cfg.ajustes` no cuelgan de ningún movimiento: no limpiarlas.
 - **Ajustes puntuales** (`cfg.ajustes[mes][id]`) y **aplicados** (`cfg.aplicados[mes][id]`): marcar algo como pagado
   o cobrado mueve la caja una sola vez y se puede revertir.
 - **Préstamos** pueden ajustar por `fija`, `inflacion` o `sueldo` (`mv.ajustaPor`).

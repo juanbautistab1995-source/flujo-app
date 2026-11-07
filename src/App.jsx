@@ -1148,10 +1148,10 @@ function proyectar(cfg, movs, medios, meses, extra) {
   const conResumen = cfg.resumenes || {};
   const desde = cfg.desdeMes || mesDeHoy();
   const filas = [];
-  // Lo que quedó sin saldar con cada persona en meses que ya pasaron: entra en el
-  // primer mes de la proyección. En los meses que vienen se supone que se salda
-  // en el mismo mes.
-  const arrastre = arrastrePersonas(arr, cfg, medios, desde);
+  // Cada mes muestra solo lo de ese mes con cada persona: lo que quedó de meses que ya
+  // pasaron no se arrastra (se supone saldado por fuera). Se puede volver a prender con
+  // cfg.arrastrarPersonas = true.
+  const arrastre = cfg.arrastrarPersonas ? arrastrePersonas(arr, cfg, medios, desde) : {};
   for (let i = 0; i < meses; i++) {
     const mk = sumaMes(desde, i);
     const infl = Math.pow(1 + (cfg.ajuste || 0), i);
