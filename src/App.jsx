@@ -5295,8 +5295,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onVerGastos, onFinanciar,
                pendientesDeuda = 0, onVerPersonas, onConfirmarAuto, undo = null, onDeshacer,
-               escenariosCard = null }) {
+               escenariosCard = null, onGuardarMov, onEditarMov }) {
   const [editSaldo, setEditSaldo] = useState(false);
+  const personasHoy = useMemo(() => [...new Set((movs || []).filter((m) => m.persona).map((m) => m.persona))], [movs]);
   const [abierta, setAbierta] = useState(null);
   const [editItem, setEditItem] = useState(null);
   const [valor, setValor] = useState("");
@@ -5517,9 +5518,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                         );
                       }
                       return (
-                        <div key={mv.id} style={{ background: abierto ? T.papel : "transparent",
-                                                  borderRadius: abierto ? 10 : 0,
-                                                  padding: abierto ? "2px 10px 10px" : "0" }}>
+                        <div key={mv.id}>
                           <button
                             onClick={() => { setEditItem(abierto ? null : clave);
                                              setValor(String(Math.round(saldado ? base : monto))); }}
@@ -5562,8 +5561,36 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                                        : (ingreso ? "+" : "") + corta(monto)}
                             </span>
                           </button>
-                          {abierto && (
-                            <div>
+                          {abierto && (() => {
+                            // Hoja que sube desde abajo: no corre la lista y se cierra tocando afuera
+                            const real = (movs || []).find((x) => x.id === mv.id) || mv;
+                            const medioN = (medios.find((x) => x.id === (real.medio || "efectivo")) || {}).corto || "";
+                            const fc = real.fechaCompra || real.fecha;
+                            const cambiar = (c) => onGuardarMov && onGuardarMov({ ...real, ...c });
+                            return (
+                              <div onClick={() => setEditItem(null)}
+                                style={{ position: "fixed", inset: 0, background: "rgba(16,24,20,.38)", zIndex: 80,
+                                         display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+                                <div onClick={(e) => e.stopPropagation()} className="sube"
+                                  style={{ background: T.card, width: "100%", maxWidth: 520, borderRadius: "18px 18px 0 0",
+                                           padding: "10px 18px calc(20px + env(safe-area-inset-bottom))",
+                                           maxHeight: "86vh", overflowY: "auto", boxShadow: "0 -8px 30px rgba(0,0,0,.12)" }}>
+                                  <div style={{ width: 38, height: 4, borderRadius: 4, background: T.linea, margin: "0 auto 12px" }} />
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontSize: 16.5, fontWeight: 640 }}>
+                                        {real.detalle}{cuota && real.cuotas > 1 ? ` ${cuota}/${real.cuotas}` : ""}
+                                      </div>
+                                      <div style={{ fontSize: 12, color: T.tenue, marginTop: 3 }}>
+                                        {[fc && /^\d{4}-\d{2}-\d{2}/.test(fc) ? `${fc.slice(8, 10)}/${fc.slice(5, 7)}` : (real.recurrente ? "fijo" : ""),
+                                          medioN, real.persona ? `con ${real.persona}` : ""].filter(Boolean).join(" · ")}
+                                      </div>
+                                    </div>
+                                    <button onClick={() => setEditItem(null)} aria-label="Cerrar"
+                                      style={{ fontSize: 20, color: T.tenue, lineHeight: 1, padding: 4 }}>×</button>
+                                  </div>
+
+                                  <div className="lbl" style={{ marginTop: 16 }}>Este mes</div>
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 <input
                                   className="num" inputMode="decimal" value={valor}
@@ -5628,8 +5655,47 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                                   </button>
                                 )}
                               </div>
-                            </div>
-                          )}
+
+                                  {real.tipo === "gasto" && onGuardarMov && (
+                                    <>
+                                      <div className="lbl" style={{ marginTop: 18 }}>¿Compartido?</div>
+                                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                        <button className={"chip sm" + (!real.persona ? " on" : "")}
+                                          onClick={() => cambiar({ persona: null })}>No</button>
+                                        {personasHoy.map((pn) => (
+                                          <button key={pn} className={"chip sm" + (real.persona === pn ? " on" : "")}
+                                            onClick={() => cambiar({ persona: pn,
+                                              pct: real.persona === pn && isFinite(+real.pct) ? real.pct : 0.5 })}>{pn}</button>
+                                        ))}
+                                      </div>
+                                      {real.persona && (
+                                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                                          {[[0.5, "Mitad"], [1, `Todo de ${real.persona}`]].map(([v, n]) => (
+                                            <button key={v} className={"chip sm" + (+real.pct === v ? " on" : "")}
+                                              onClick={() => cambiar({ pct: v })}>{n}</button>
+                                          ))}
+                                        </div>
+                                      )}
+                                      <div className="lbl" style={{ marginTop: 18 }}>Categoría</div>
+                                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                        {CATEGORIAS.map((c) => (
+                                          <button key={c} className={"chip sm" + (real.categoria === c ? " on" : "")}
+                                            onClick={() => cambiar({ categoria: c })}>{c}</button>
+                                        ))}
+                                      </div>
+                                    </>
+                                  )}
+                                  {onEditarMov && (
+                                    <button onClick={() => { setEditItem(null); onEditarMov(real); }}
+                                      style={{ marginTop: 18, width: "100%", padding: "11px 0", fontSize: 13.5,
+                                               fontWeight: 600, color: T.ambar }}>
+                                      Editar todo el gasto (nombre, monto total, cuotas, tarjeta…)
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     };
@@ -9912,6 +9978,7 @@ export default function App() {
         <Hoy
           cfg={{ ...cfgTC, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
           onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar} onLiquidar={liquidar}
+          onGuardarMov={guardarMov} onEditarMov={(mv) => setEditando(mv)}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
           historial={historial} cerradas={[]} estimados={estimados}
           invertido={(() => {
