@@ -6333,7 +6333,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) 
     return `${DIAS_SEM[d.getDay()]} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
   };
 
-  // Traer lo que ya tenías cargado en la app (solo para arrancar; quedan como copias)
+  // Traer lo que ya tenías cargado en la app (solo para arrancar; quedan como copias).
+  // Ya están en el flujo: quedan marcadas con `mov` para no liquidarlas otra vez.
   const yaCargados = movs.filter((mv) => {
     if (mv.recurrente || mv.tipo !== "gasto") return false;
     const f = String(mv.fechaCompra || mv.fecha || "").slice(0, 10);
@@ -6345,7 +6346,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) 
       const cuotas = Math.max(1, +mv.cuotas || 1);
       const m = mv.moneda === "USD" ? (+mv.montoUsd || 0) * (cfg.tc || 0)
         : mv.fechaCompra && +mv.montoCuota ? +mv.montoCuota * cuotas : +mv.monto || 0;
-      return { id: "a" + mv.id, origen: mv.id, fecha: String(mv.fechaCompra || mv.fecha).slice(0, 10),
+      return { id: "a" + mv.id, origen: mv.id, mov: mv.id, fecha: String(mv.fechaCompra || mv.fecha).slice(0, 10),
                monto: Math.round(m), detalle: mv.detalle || "Gasto", medio: mv.medio || "efectivo",
                categoria: mv.categoria || adivinarCategoria(mv.detalle || ""),
                ...(mv.persona ? { persona: mv.persona, pct: isFinite(+mv.pct) ? +mv.pct : 0.5,
@@ -8983,6 +8984,66 @@ const ICONOS = {
 const TABS = [["hoy", "Hoy"], ["anot", "Gastos"], ["inv", "Invierto"], ["sim", "Simular"], ["rep", "Personas"]];
 const SEED_VERSION = 6;
 const APP_VERSION = "beta 1.0";
+// Aplica un paquete de cambios armado afuera (por ejemplo, por Claude al revisar resúmenes).
+// Función pura: devuelve cfg y movimientos nuevos, más el registro de cada cambio.
+// Ops: editar, terminar, borrar, agregar, ciclo, resumen, ajuste, anotar.
+function aplicarCambiosPaquete(cfg, movs, medios, p, fecha) {
+  const m = movs.slice();
+  const c = { ...cfg, ajustes: { ...(cfg.ajustes || {}) }, resumenes: { ...(cfg.resumenes || {}) },
+              anotador: (cfg.anotador || []).slice(),
+              medios: (cfg.medios || medios).map((x) => ({ ...x, ciclos: (x.ciclos || []).slice() })) };
+  const log = [];
+  const anota = (texto, error) => log.push({ fecha, origen: p.origen || "Claude", paquete: p.titulo || "", texto, ...(error ? { error: true } : {}) });
+  let ok = 0;
+  p.cambios.forEach((o) => {
+    const motivo = o.motivo || o.op;
+    const i = o.id ? m.findIndex((x) => x.id === o.id) : -1;
+    if (["editar", "terminar", "borrar"].includes(o.op) && i < 0) { anota(`No encontré el movimiento ${o.id}: ${motivo}`, true); return; }
+    if (o.op === "editar") m[i] = { ...m[i], ...(o.cambios || {}) };
+    else if (o.op === "terminar") m[i] = { ...m[i], hasta: o.hasta };
+    else if (o.op === "borrar") m.splice(i, 1);
+    else if (o.op === "agregar") {
+      if (!o.mov || !o.mov.id) { anota(`Movimiento sin id: ${motivo}`, true); return; }
+      if (m.some((x) => x.id === o.mov.id)) { anota(`Ya existía ${o.mov.id}, no lo dupliqué: ${motivo}`, true); return; }
+      m.push(o.mov);
+    } else if (o.op === "ciclo") {
+      const md = c.medios.find((x) => x.id === o.medio);
+      if (!md) { anota(`No encontré la tarjeta ${o.medio}: ${motivo}`, true); return; }
+      const j = md.ciclos.findIndex((x) => x.cierre === o.cierre);
+      if (j >= 0) md.ciclos[j] = { cierre: o.cierre, vto: o.vto }; else md.ciclos.push({ cierre: o.cierre, vto: o.vto });
+      Object.assign(md, normalizarCiclos(md));
+    } else if (o.op === "anotar") {
+      // Un gasto para el anotador (pestaña Gastos), igual que si lo cargaras a mano
+      const g = o.gasto || {};
+      const monto = Math.round((+g.monto || 0) * 100) / 100;
+      if (!g.id || !(monto > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(g.fecha || ""))) {
+        anota(`Gasto incompleto: ${motivo}`, true); return;
+      }
+      const igual = (x) => x.id === g.id || (x.fecha === g.fecha && Math.round(+x.monto || 0) === Math.round(monto)
+        && sinTildes(x.detalle) === sinTildes(g.detalle));
+      if (c.anotador.some(igual)) { anota(`Ya estaba anotado, no lo dupliqué: ${motivo}`, true); return; }
+      const medio = g.medio || "efectivo";
+      const cat = g.categoria || adivinarConAprendido(g.detalle || "", c.anotadorAprende).cat;
+      // Lo que salió de la cuenta después del último "Ajustar con el banco" baja el saldo.
+      // Lo anterior ya está en ese número.
+      const baja = medio === "efectivo" && g.pagadoPor !== "otro" && c.ultimoAjuste && g.fecha > c.ultimoAjuste
+        ? Math.round(monto) : 0;
+      c.anotador.push({ id: g.id, fecha: g.fecha, monto, detalle: g.detalle || "Gasto", medio, categoria: cat,
+        ...(g.categoria ? { catManual: true } : {}),
+        ...(+g.cuotas > 1 ? { cuotas: Math.round(+g.cuotas) } : {}),
+        ...(g.persona ? { persona: g.persona, pct: isFinite(+g.pct) ? +g.pct : 0.5,
+                          pagadoPor: g.pagadoPor === "otro" ? "otro" : "yo" } : {}),
+        ...(g.nota ? { nota: g.nota } : {}),
+        origen: "paquete", restoCaja: baja });
+      if (baja) c.saldoHoy = Math.round((c.saldoHoy || 0) - baja);
+    } else if (o.op === "resumen") c.resumenes[o.medio + "|" + o.mes] = true;
+    else if (o.op === "ajuste") c.ajustes[o.mes] = { ...(c.ajustes[o.mes] || {}), [o.id]: o.monto };
+    else { anota(`No sé hacer "${o.op}": ${motivo}`, true); return; }
+    ok++; anota(motivo);
+  });
+  return { c, m, log, ok };
+}
+
 const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [], anotador: [] };
 
 export default function App() {
@@ -9141,6 +9202,9 @@ export default function App() {
       c.resumenes = resum;
       // Ciclos repetidos de las tarjetas: uno por cierre
       if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
+      // Gastos que el anotador trajo del flujo sin marcar: ya están en el flujo, no se liquidan otra vez
+      if (Array.isArray(c.anotador)) c.anotador = c.anotador.map((g) =>
+        !g.mov && g.origen && vivos.has(g.origen) ? { ...g, mov: g.origen } : g);
       // Período de caja por sueldo: los gastos en efectivo recientes hechos desde el día de cobro
       // pasan al mes siguiente, con lo que ya hayas marcado de ellos (una sola vez).
       if (DIA_CORTE && !c.periodoV1) {
@@ -9275,41 +9339,14 @@ export default function App() {
   const aplicarPaquete = (p) => {
     if (!p || !Array.isArray(p.cambios)) return "Paquete inválido.";
     if (p.id && (cfg.paquetes || []).includes(p.id)) return "Este paquete ya estaba aplicado.";
-    let m = movs.slice();
-    let c = { ...cfg, ajustes: { ...(cfg.ajustes || {}) }, resumenes: { ...(cfg.resumenes || {}) },
-              medios: (cfg.medios || medios).map((x) => ({ ...x, ciclos: (x.ciclos || []).slice() })) };
     const fecha = new Date().toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
-    const log = [];
-    const anota = (texto, error) => log.push({ fecha, origen: p.origen || "Claude", paquete: p.titulo || "", texto, ...(error ? { error: true } : {}) });
-    let ok = 0;
-    p.cambios.forEach((o) => {
-      const motivo = o.motivo || o.op;
-      const i = o.id ? m.findIndex((x) => x.id === o.id) : -1;
-      if (["editar", "terminar", "borrar"].includes(o.op) && i < 0) { anota(`No encontré el movimiento ${o.id}: ${motivo}`, true); return; }
-      if (o.op === "editar") m[i] = { ...m[i], ...(o.cambios || {}) };
-      else if (o.op === "terminar") m[i] = { ...m[i], hasta: o.hasta };
-      else if (o.op === "borrar") m.splice(i, 1);
-      else if (o.op === "agregar") {
-        if (!o.mov || !o.mov.id) { anota(`Movimiento sin id: ${motivo}`, true); return; }
-        if (m.some((x) => x.id === o.mov.id)) { anota(`Ya existía ${o.mov.id}, no lo dupliqué: ${motivo}`, true); return; }
-        m.push(o.mov);
-      } else if (o.op === "ciclo") {
-        const md = c.medios.find((x) => x.id === o.medio);
-        if (!md) { anota(`No encontré la tarjeta ${o.medio}: ${motivo}`, true); return; }
-        const j = md.ciclos.findIndex((x) => x.cierre === o.cierre);
-        if (j >= 0) md.ciclos[j] = { cierre: o.cierre, vto: o.vto }; else md.ciclos.push({ cierre: o.cierre, vto: o.vto });
-        Object.assign(md, normalizarCiclos(md));
-      } else if (o.op === "resumen") c.resumenes[o.medio + "|" + o.mes] = true;
-      else if (o.op === "ajuste") c.ajustes[o.mes] = { ...(c.ajustes[o.mes] || {}), [o.id]: o.monto };
-      else { anota(`No sé hacer "${o.op}": ${motivo}`, true); return; }
-      ok++; anota(motivo);
-    });
+    const r = aplicarCambiosPaquete(cfg, movs, medios, p, fecha);
     marcarUndo("el paquete " + (p.titulo || "de cambios"));
-    c = { ...c, registro: [...(cfg.registro || []), ...log].slice(-500),
-          paquetes: p.id ? [...(cfg.paquetes || []), p.id] : (cfg.paquetes || []), desdeMes: null };
-    setMovs(m); setCfgRaw(c); persistir(c, m);
-    const err = log.filter((x) => x.error).length;
-    return `Listo: ${ok} cambios aplicados${err ? `, ${err} con aviso (miralos en el registro)` : ""}. Si algo no te gusta, tocá Deshacer en Hoy.`;
+    const c = { ...r.c, registro: [...(cfg.registro || []), ...r.log].slice(-500),
+                paquetes: p.id ? [...(cfg.paquetes || []), p.id] : (cfg.paquetes || []), desdeMes: null };
+    setMovs(r.m); setCfgRaw(c); persistir(c, r.m);
+    const err = r.log.filter((x) => x.error).length;
+    return `Listo: ${r.ok} cambios aplicados${err ? `, ${err} con aviso (miralos en el registro)` : ""}. Si algo no te gusta, tocá Deshacer en Hoy.`;
   };
 
   // Pasa gastos del anotador al flujo. Efectivo/débito: entra como gasto YA pagado del período

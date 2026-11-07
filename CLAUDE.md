@@ -36,6 +36,10 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   tarjeta a su resumen; compartidos con persona). El gasto queda con `mov` y no se puede volver a liquidar ni editar desde el anotador.
 - **Panel del sueldo** (`PanelSueldo` en Hoy): libre para gastar = saldo − falta pagar + falta cobrar, por día hasta el fin del período,
   con la regla de vencimientos.
+- **Paquetes de cambios** (`aplicarCambiosPaquete`, Ajustes → "Aplicar un paquete de cambios"): JSON
+  `{id, titulo, origen, cambios: [{op, …, motivo}]}` con ops editar/terminar/borrar/agregar/ciclo/resumen/ajuste/anotar.
+  Cada cambio queda en `cfg.registro` y el id en `cfg.paquetes` (no se aplica dos veces). `anotar` suma un gasto al anotador
+  sin duplicar (mismo id, o misma fecha + monto + nombre) y solo baja `saldoHoy` si la fecha es posterior a `cfg.ultimoAjuste`.
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo
