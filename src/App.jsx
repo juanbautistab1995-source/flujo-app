@@ -5302,6 +5302,7 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
   const [editItem, setEditItem] = useState(null);
   const [valor, setValor] = useState("");
   const [verSaldados, setVerSaldados] = useState(null);
+  const [grupoSald, setGrupoSald] = useState(null);   // qué tarjeta de lo ya saldado está abierta
   // Liquidar con una persona: qué grupo tiene abierto el "parcial" y cuánto
   const [liqAbierta, setLiqAbierta] = useState(null);
   const [liqValor, setLiqValor] = useState("");
@@ -5540,6 +5541,11 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                                 ) : null;
                               })()}
                               {mv.detalle}{cuota && mv.cuotas > 1 ? ` ${cuota}/${mv.cuotas}` : ""}
+                              {mv.persona && !enPersona ? (
+                                <span style={{ color: T.tenue, fontSize: 11.5, fontStyle: "normal" }}>
+                                  {"  "}· {+mv.pct === 1 ? `de ${mv.persona}` : `con ${mv.persona}`}
+                                </span>
+                              ) : null}
                               {estimado && !saldado ? "  ~" : ""}
                               {ajustado && !saldado ? "  ✎" : ""}
                               {it.usado > 0 ? (
@@ -5556,7 +5562,9 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                             <span className="num" style={{ fontSize: 13, flexShrink: 0,
                                   color: saldado ? T.tenue : (ingreso || aFavor) ? T.verde
                                        : ajustado ? T.ambar : T.tinta }}>
-                              {saldado ? (it.cubierto ? "cubierto" : ingreso ? "cobrado" : "pagado")
+                              {saldado ? (it.cubierto ? "cubierto"
+                                         : base > 0 ? `${corta(base)} ${ingreso ? "cobrado" : "✓"}`
+                                         : ingreso ? "cobrado" : "pagado")
                                        : aFavor ? "+" + corta(it.credito)
                                        : (ingreso ? "+" : "") + corta(monto)}
                             </span>
@@ -5920,7 +5928,53 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                               <span>Ya saldado · {sald.length} {sald.length === 1 ? "movimiento" : "movimientos"}</span>
                               <span style={{ color: T.ambar, fontWeight: 600 }}>{verS ? "Ocultar" : "Ver"}</span>
                             </button>
-                            {verS && <div style={{ marginTop: 6 }}>{sald.map(fila)}</div>}
+                            {verS && (() => {
+                              // Separado por tarjeta (en el orden en que venció), después efectivo y lo cobrado
+                              const gr = {};
+                              sald.forEach((it) => {
+                                const k = it.ingreso ? "~cobrado" : (it.mv.medio && it.mv.medio !== "efectivo") ? it.mv.medio : "~efectivo";
+                                (gr[k] = gr[k] || []).push(it);
+                              });
+                              const vtoDe = (id) => {
+                                const md = medios.find((x) => x.id === id);
+                                const c = md && ciclosDe(md).filter((x) => x.vto && periodoDe(x.vto) === f.mk).map((x) => x.vto).sort()[0];
+                                return c || "";
+                              };
+                              const claves = Object.keys(gr).sort((a, b) =>
+                                (a[0] === "~") - (b[0] === "~") || (vtoDe(a) < vtoDe(b) ? -1 : 1) || (a < b ? -1 : 1));
+                              const abiertoG = (k) => filtrando || grupoSald === f.mk + "|" + k || claves.length === 1;
+                              return (
+                                <div style={{ marginTop: 6 }}>
+                                  {claves.map((k) => {
+                                    const lista = gr[k];
+                                    const md = medios.find((x) => x.id === k);
+                                    const nombre = k === "~cobrado" ? "Cobrado" : k === "~efectivo" ? "Efectivo y débito"
+                                      : (md ? md.nombre || md.corto : k);
+                                    const v = vtoDe(k);
+                                    const tot = lista.reduce((a, x) => a + (+x.base || 0), 0);
+                                    const ab = abiertoG(k);
+                                    return (
+                                      <div key={k} style={{ borderTop: `1px solid ${T.linea}` }}>
+                                        <button onClick={() => setGrupoSald(ab && !filtrando ? null : f.mk + "|" + k)}
+                                          style={{ width: "100%", display: "flex", justifyContent: "space-between",
+                                                   alignItems: "baseline", padding: "10px 0", textAlign: "left" }}>
+                                          <span style={{ fontSize: 13, fontWeight: 600 }}>
+                                            {nombre}
+                                            <span style={{ fontWeight: 400, color: T.tenue, fontSize: 11.5 }}>
+                                              {v && md ? ` · venció ${ddmm(v)}` : ""} · {lista.length}
+                                            </span>
+                                          </span>
+                                          <span className="num" style={{ fontSize: 13, color: T.suave }}>
+                                            {tot > 0 ? corta(tot) : ""} <span style={{ color: T.ambar }}>{ab ? "▾" : "▸"}</span>
+                                          </span>
+                                        </button>
+                                        {ab && <div style={{ paddingBottom: 6 }}>{lista.map((it) => fila(it))}</div>}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
 
