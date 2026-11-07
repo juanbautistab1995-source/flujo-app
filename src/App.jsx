@@ -3179,14 +3179,15 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
               <div className="card" style={{ padding: 15, marginBottom: 14 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 14, fontWeight: 620 }}>
-                    Reemplazar lo cargado en {etiqMesLargo(mesRes)}
+                    Reemplazar lo cargado para este resumen
+                    {res.ciclos.vto ? ` (vence ${ddmm(res.ciclos.vto)})` : ` (${etiqMesLargo(mesRes)})`}
                   </span>
                   <button className={"chip sm" + (reemplazar ? " on" : "")}
                     onClick={() => setReemplazar(!reemplazar)}>{reemplazar ? "Sí" : "No"}</button>
                 </div>
                 <div style={{ fontSize: 12.5, color: T.suave, marginTop: 6, lineHeight: 1.55 }}>
                   {reemplazar
-                    ? "El resumen pasa a ser lo real de esta tarjeta en ese mes. Lo que cargaste a mano se reemplaza por la línea del banco, y se mantiene con quién lo compartiste, la categoría y el nombre que le pusiste."
+                    ? "Las compras conservan su fecha (pueden ser del mes anterior); en el flujo cuentan cuando vence el resumen, que es cuando sale la plata. El resumen pasa a ser lo real de esta tarjeta en ese mes. Lo que cargaste a mano se reemplaza por la línea del banco, y se mantiene con quién lo compartiste, la categoría y el nombre que le pusiste."
                     : "Se agregan las líneas marcadas y no se toca nada de lo que ya cargaste. Ojo que puede quedar duplicado."}
                 </div>
                 {reemplazar && Object.keys(plan.match).length > 0 && (
