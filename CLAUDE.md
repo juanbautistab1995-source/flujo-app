@@ -13,7 +13,7 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 ## Cómo piensa la app (no romper esto)
 - **Período de caja por sueldo** (`cfg.diaCobro`, `cfg.mesPorSueldo`, `DIA_CORTE`, `periodoDe()`). Si cobrás el 28,
   noviembre va del 28/10 al 27/11: el sueldo del 28/10 paga noviembre. `mesDeHoy()` devuelve el período, no el mes calendario.
-  En el período en curso el sueldo ya está cobrado (lo tiene `saldoHoy`).
+  En el período en curso el sueldo ya está cobrado (lo tiene `saldoHoy`), aunque se le haya corregido el monto ese mes.
 - **Flujo de fondos por vencimiento.** Un gasto con tarjeta va al mes en que vence el resumen,
   que es cuando sale la plata. La compra puede ser de otro mes. `mesDePago()` decide eso con los ciclos de la tarjeta.
 - **Ciclos de tarjeta** (`medio.ciclos = [{cierre, vto, estimado?}]`). Los reales vienen de los resúmenes.
@@ -40,6 +40,10 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   `{id, titulo, origen, cambios: [{op, …, motivo}]}` con ops editar/terminar/borrar/agregar/ciclo/resumen/ajuste/anotar.
   Cada cambio queda en `cfg.registro` y el id en `cfg.paquetes` (no se aplica dos veces). `anotar` suma un gasto al anotador
   sin duplicar (mismo id, o misma fecha + monto + nombre) y solo baja `saldoHoy` si la fecha es posterior a `cfg.ultimoAjuste`.
+- **Importar resumen** (`aplicarResumenImportado`, `planGastosResumen`): sirve también para resúmenes viejos, ya vencidos y pagados
+  (no cambian el saldo). Si ya hay un resumen más nuevo de esa tarjeta, no se pisan las fechas siguientes ni tasa/deuda.
+  Las compras nuevas del ciclo (cuota 1, sin impuestos) se cruzan con Gastos: lo anotado queda vinculado (`mov`) y le pasa
+  persona/categoría al movimiento; lo no anotado se suma a Gastos ya en el flujo. En Gastos, lo que está en el flujo muestra la categoría del movimiento.
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo
