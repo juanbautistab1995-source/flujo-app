@@ -6399,14 +6399,25 @@ function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
   }
   // Compartido: "con sol", "pagó betty", "mitad", "un tercio"
   let persona = "", pct = 0.5, pagadoPor = "yo";
-  for (const p of personas) {
-    const pp = sinTildes(p);
-    const rePago = new RegExp("pago\\s+" + pp + "(?=[^a-z]|$)");
-    const reCon = new RegExp("(con|de|a)\\s+" + pp + "(?=[^a-z]|$)");
-    if (rePago.test(t)) { persona = p; pagadoPor = "otro"; t = t.replace(rePago, " "); break; }
-    if (reCon.test(t)) { persona = p; t = t.replace(reCon, " "); break; }
+  // Se reconoce por el nombre completo, el primer nombre o el comienzo ("fede" → Federico)
+  const quienEs = (w) => personas.find((p) => sinTildes(p) === w)
+    || (w.length >= 3 && personas.find((p) => sinTildes(p).split(/\s+/).some((x) => x.startsWith(w))));
+  const rePer = /\b(pago|con|de|a)\s+(?=([a-z]+(?:\s+[a-z]+)?))/g;
+  let mp;
+  while ((mp = rePer.exec(t))) {
+    const dos = mp[2], uno = dos.split(" ")[0];
+    rePer.lastIndex = mp.index + mp[1].length;
+    const p = quienEs(dos) || quienEs(uno);
+    if (!p) continue;
+    persona = p;
+    if (mp[1] === "pago") pagadoPor = "otro";
+    const quitar = mp[1] + " " + (quienEs(dos) ? dos : uno);
+    t = t.slice(0, mp.index) + " " + t.slice(mp.index).replace(new RegExp(quitar.replace(/\s+/g, "\\s+")), " ");
+    break;
   }
   if (/\btercio\b/.test(t)) pct = 1 / 3;
+  // "visa" o "tarjeta" sueltos no son parte del nombre si ya sabemos qué tarjeta es
+  if (medio !== "efectivo") t = t.replace(/\b(visa|tarjeta|credito)\b/g, " ");
   if (/\btodo\b/.test(t) && persona) pct = 1;
   t = t.replace(/\b(mitad|tercio|un|todo|pague|gaste|en|de|del|la|el|los|las|con|por|y|para|pesos|\$)\b/g, " ");
   const palabras = original.split(/\s+/).filter((w) => {
