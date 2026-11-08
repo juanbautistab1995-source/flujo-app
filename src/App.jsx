@@ -9759,14 +9759,21 @@ export default function App() {
       if (error) return "Error al leer la bandeja: " + (error.message || JSON.stringify(error));
       if (!data || !data.length) return "La bandeja está vacía: no hay nada nuevo de Siri.";
       const c0 = cfgRef.current;
+      // Lo que ya trajimos queda anotado en cfg.bandejaVista. La fila se borra de la nube recién
+      // a los 3 días: si otra pestaña pisó los datos y el gasto se perdió, se vuelve a traer.
+      const vistas = new Set((c0.bandejaVista || []).map(Number));
       const meds = c0.medios || MEDIOS_NUEVO;
       const pers = [...new Set([...movsRef.current.filter((m) => m.persona).map((m) => m.persona),
                                 ...(c0.anotador || []).filter((g) => g.persona).map((g) => g.persona)])];
       let lista = (c0.anotador || []).slice(), saldo = c0.saldoHoy || 0, apr = c0.anotadorAprende || {};
-      const hechos = [];
+      const nuevos = [], viejos = [];
+      const hace3 = Date.now() - 3 * 86400000;
       data.forEach((r) => {
-        hechos.push(r.id);
-        if (lista.some((g) => g.bandeja === r.id)) return;
+        if (vistas.has(Number(r.id)) || lista.some((g) => g.bandeja === r.id)) {
+          if (new Date(r.creado).getTime() < hace3) viejos.push(r.id);
+          return;
+        }
+        nuevos.push(r.id);
         const d = new Date(r.creado);
         const f = isNaN(d.getTime()) ? hoyISO() : isoDe(d);
         const g = interpretarGasto(r.texto, meds, apr, pers, f);
@@ -9776,11 +9783,13 @@ export default function App() {
         saldo -= resto;
         apr = aprender(apr, g.detalle, g.categoria);
       });
-      const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null };
+      if (viejos.length) await sb.from("bandeja").delete().in("id", viejos);
+      if (!nuevos.length) return "No hay nada nuevo de Siri (lo último ya está en Gastos).";
+      const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null,
+                  bandejaVista: [...vistas, ...nuevos.map(Number)].slice(-300) };
       setCfgRaw(c); persistir(c, movsRef.current);
-      const del = await sb.from("bandeja").delete().in("id", hechos);
       const n = lista.length - (c0.anotador || []).length;
-      return `Traje ${n} ${n === 1 ? "gasto" : "gastos"} de Siri.` + (del && del.error ? " (No pude vaciar la bandeja: " + del.error.message + ")" : "");
+      return `Traje ${n} ${n === 1 ? "gasto" : "gastos"} de Siri.`;
     } catch (e) { return "Error: " + (e && e.message ? e.message : String(e)); }
   }, [sesion, cargando, persistir]);
   useEffect(() => { traerBandeja(); }, [traerBandeja]);
