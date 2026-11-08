@@ -6599,8 +6599,9 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
 // Configuración del Atajo de iPhone: crea una clave personal y explica cómo armar el atajo.
 // El atajo llama a una función de Supabase (anotar_por_atajo) que deja el texto en la tabla "bandeja";
 // la app la levanta al abrirse y lo pasa al anotador.
-function ConfigAtajo({ sesion, onCerrar }) {
+function ConfigAtajo({ sesion, onCerrar, onTraer }) {
   const [token, setToken] = useState("");
+  const [traido, setTraido] = useState("");
   const [estado, setEstado] = useState("");
   const [copiado, setCopiado] = useState("");
   const url = SUPABASE_URL + "/rest/v1/rpc/anotar_por_atajo";
@@ -6660,6 +6661,20 @@ function ConfigAtajo({ sesion, onCerrar }) {
         )}
         {estado && estado !== "creando" && <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 8 }}>{estado}</div>}
 
+        {onTraer && (
+          <div className="card" style={{ padding: 14, marginTop: 16 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>¿Ya lo armaste?</div>
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 4, lineHeight: 1.5 }}>
+              Lo que dictás se trae solo al abrir la app. Si no aparece, tocá acá y te digo qué pasa.
+            </div>
+            <button className="chip sm" style={{ marginTop: 10 }}
+              onClick={async () => { setTraido("Buscando…"); setTraido(String(await onTraer())); }}>
+              Traer lo de Siri ahora
+            </button>
+            {traido && <div style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.5 }}>{traido}</div>}
+          </div>
+        )}
+
         <div style={{ fontSize: 15, fontWeight: 620, marginTop: 24 }}>Cómo armar el atajo</div>
         {paso(1, <>Abrí la app <b>Atajos</b> → <b>+</b> → ponele de nombre <b>Anotar gasto</b>.</>)}
         {paso(2, <>Agregá <b>Pedir entrada</b> (tipo Texto). Pregunta: <i>¿Qué gastaste?</i></>)}
@@ -6673,7 +6688,7 @@ function ConfigAtajo({ sesion, onCerrar }) {
   );
 }
 
-function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) {
+function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, onTraerSiri }) {
   // Lo que ya está en el flujo muestra la categoría que tiene allá: si la cambiás en Movimientos, cambia acá
   const catMov = useMemo(() => {
     const o = {};
@@ -6804,7 +6819,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion }) 
         Tu anotador del día a día.{" "}
         {sesion && <button onClick={() => setVerAtajo(true)} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Anotar con Siri</button>}
       </div>
-      {verAtajo && <ConfigAtajo sesion={sesion} onCerrar={() => setVerAtajo(false)} />}
+      {verAtajo && <ConfigAtajo sesion={sesion} onTraer={onTraerSiri} onCerrar={() => setVerAtajo(false)} />}
 
       <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
         {[["sueldo", "Este sueldo"], ["semana", "Semana"], ["mes", "Mes"]].map(([id, n]) => (
@@ -9737,10 +9752,12 @@ export default function App() {
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const movsRef = useRef(movs); movsRef.current = movs;
   const traerBandeja = useCallback(async () => {
-    if (!sesion || !sesion.user || cargando) return;
+    if (!sesion || !sesion.user) return "No hay sesión iniciada.";
+    if (cargando) return "Todavía estoy cargando tus datos, probá en unos segundos.";
     try {
       const { data, error } = await sb.from("bandeja").select("id, texto, creado").order("creado");
-      if (error || !data || !data.length) return;
+      if (error) return "Error al leer la bandeja: " + (error.message || JSON.stringify(error));
+      if (!data || !data.length) return "La bandeja está vacía: no hay nada nuevo de Siri.";
       const c0 = cfgRef.current;
       const meds = c0.medios || MEDIOS_NUEVO;
       const pers = [...new Set([...movsRef.current.filter((m) => m.persona).map((m) => m.persona),
@@ -9761,8 +9778,10 @@ export default function App() {
       });
       const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null };
       setCfgRaw(c); persistir(c, movsRef.current);
-      await sb.from("bandeja").delete().in("id", hechos);
-    } catch (e) { /* la tabla puede no existir todavía */ }
+      const del = await sb.from("bandeja").delete().in("id", hechos);
+      const n = lista.length - (c0.anotador || []).length;
+      return `Traje ${n} ${n === 1 ? "gasto" : "gastos"} de Siri.` + (del && del.error ? " (No pude vaciar la bandeja: " + del.error.message + ")" : "");
+    } catch (e) { return "Error: " + (e && e.message ? e.message : String(e)); }
   }, [sesion, cargando, persistir]);
   useEffect(() => { traerBandeja(); }, [traerBandeja]);
   useEffect(() => {
@@ -10084,7 +10103,7 @@ export default function App() {
           onRevisar={(clave) => setCfg({ ...cfg, revisadas: { ...(cfg.revisadas || {}), [clave]: true } })}
         />
       )}
-      {tab === "anot" && <Anotador cfg={cfgTC} onLiquidar={liquidarAnotador} sesion={sesion}
+      {tab === "anot" && <Anotador cfg={cfgTC} onLiquidar={liquidarAnotador} sesion={sesion} onTraerSiri={traerBandeja}
                               setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador,
                                 anotadorAprende: c.anotadorAprende || cfg.anotadorAprende,
                                 saldoHoy: c.saldoHoy != null ? c.saldoHoy : cfg.saldoHoy,
