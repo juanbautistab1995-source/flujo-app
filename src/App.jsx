@@ -7162,7 +7162,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
             <span style={{ fontSize: 14, fontWeight: 620 }}>De Mercado Pago · {sugMP.length} {sugMP.length === 1 ? "nuevo" : "nuevos"}</span>
             <button onClick={cargarMP} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Actualizar</button>
           </div>
-          <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>✓ lo anota · ✕ lo descarta</div>
+          <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>✓ lo anota · ✕ lo descarta
+            {mp && mp.hasta ? " · datos hasta " + new Date(mp.hasta).toLocaleString("es-AR", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" }) : ""}</div>
           {(mpTodos ? sugMP : sugMP.slice(0, 5)).map((m) => {
             const g = gastoDeMP(m);
             return (

@@ -183,11 +183,22 @@ async function diagnostico(dias) {
         const p = await mp("/v1/payments/" + conId.SOURCE_ID);
         nombre = { status: p.status, nombre: p.ok ? nombreDe(p.json) : null };
       }
-      return { status: r.status, columnas: filas[0] ? Object.keys(filas[0]).slice(0, 16) : [], filas: filas.length,
-               salidas: salidas.length, tipos,
-               ejemplos: salidas.slice(-4).map((f) => ({ fecha: fechaAR(f.DATE), monto: f.NET_DEBIT_AMOUNT,
-                 tipo: f.DESCRIPTION, pago: f.PAYMENT_METHOD })),
-               nombreDelComercio: nombre };
+      // Detalle de las últimas salidas para ajustar los filtros (sin nombres de terceros)
+      const ult = salidas.slice(-10).map((f) => ({
+        fecha: String(f.DATE || "").slice(0, 16), monto: f.NET_DEBIT_AMOUNT, desc: f.DESCRIPTION,
+        reg: f.RECORD_TYPE, pago: f.PAYMENT_METHOD, id: String(f.SOURCE_ID || "").slice(-4),
+      }));
+      const det = [];
+      for (const f of salidas.slice(-4)) {
+        if (!/^\d+$/.test(String(f.SOURCE_ID || ""))) { det.push({ id: String(f.SOURCE_ID || "").slice(-4), sinId: true }); continue; }
+        const p = await mp("/v1/payments/" + f.SOURCE_ID);
+        const j = p.json || {};
+        det.push({ id: String(f.SOURCE_ID).slice(-4), status: p.status, op: j.operation_type, tipo: j.payment_type_id,
+                   mio: String(j.collector_id || (j.collector && j.collector.id) || "") === yo,
+                   nombre: p.ok ? nombreDe(j) : null });
+      }
+      return { status: r.status, columnas: filas[0] ? Object.keys(filas[0]).slice(0, 40) : [], filas: filas.length,
+               salidas: salidas.length, tipos, ultimas: ult, detalle: det };
     });
   }
   await paso("Movimientos (camino viejo)", async () => {
