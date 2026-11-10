@@ -6881,10 +6881,10 @@ function EditorPresupuestos({ presupuestos, onGuardar, onCerrar }) {
 }
 
 // ---- Mercado Pago: sugerencias de gastos (solo lectura, por /api/mp) ----
-async function pedirMP(sesion, modo, dias = 20) {
+async function pedirMP(sesion, modo, dias = 20, nuevo = false) {
   if (!sesion || !sesion.access_token) return { error: "Sin sesión." };
   try {
-    const r = await fetch(`/api/mp?modo=${modo}&dias=${dias}`, { headers: { Authorization: "Bearer " + sesion.access_token } });
+    const r = await fetch(`/api/mp?modo=${modo}&dias=${dias}${nuevo ? "&nuevo=1" : ""}`, { headers: { Authorization: "Bearer " + sesion.access_token } });
     const t = await r.text();
     try { return { ...JSON.parse(t), status: r.status }; }
     catch (e) { return { error: "La conexión con Mercado Pago no está publicada en esta dirección.", status: r.status }; }
@@ -7026,7 +7026,14 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const [verMP, setVerMP] = useState(false);
   const [mpTodos, setMpTodos] = useState(false);
   const [verPres, setVerPres] = useState(false);
-  const cargarMP = useCallback(async () => { setMp(await pedirMP(sesion, "traer")); }, [sesion]);
+  const cargarMP = useCallback(async () => {
+    // Pedimos un reporte nuevo a Mercado Pago como máximo cada 50 minutos
+    let nuevo = false;
+    try { nuevo = Date.now() - (+localStorage.getItem("mp:pedido") || 0) > 50 * 60 * 1000; } catch (e) { nuevo = true; }
+    const r = await pedirMP(sesion, "traer", 20, nuevo);
+    if (nuevo && r && r.pedido) { try { localStorage.setItem("mp:pedido", String(Date.now())); } catch (e) { /* nada */ } }
+    setMp(r);
+  }, [sesion]);
   useEffect(() => { if (sesion) cargarMP(); }, [sesion, cargarMP]);
   const [mpTransf, setMpTransf] = useState(false);
   const sugMP = mp && mp.movs ? sugerenciasMP(mp.movs, lista, cfg.mpVistos, mpTransf) : [];
@@ -7172,7 +7179,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
             <button onClick={cargarMP} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Actualizar</button>
           </div>
           <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>✓ lo anota · ✕ lo descarta
-            {mp && (mp.generado || mp.hasta) ? " · datos de " + new Date(mp.generado || mp.hasta).toLocaleString("es-AR", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" }) : ""}</div>
+</div>
           {(mpTodos ? sugMP : sugMP.slice(0, 5)).map((m) => {
             const g = gastoDeMP(m);
             return (

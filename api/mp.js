@@ -92,12 +92,13 @@ async function porBusqueda(dias, yo) {
 }
 
 // Camino B: el reporte de movimientos de la cuenta (lo que salió de tu dinero en cuenta)
-async function porReporte(dias, yo) {
+async function porReporte(dias, yo, nuevo) {
   const lista = await mp("/v1/account/release_report/list");
   const reportes = Array.isArray(lista.json) ? lista.json.slice()
     .sort((a, b) => (String(a.date_created) < String(b.date_created) ? 1 : -1)) : [];
   const ultimo = reportes[0];
-  const viejo = !ultimo || (Date.now() - new Date(ultimo.end_date || ultimo.date_created).getTime()) > 1 * 3600 * 1000;
+  // El cliente decide cuándo pedir uno nuevo (la fecha de fin del reporte es el cierre del día, no sirve para medir su edad)
+  const viejo = !!nuevo || !ultimo;
   let pedido = null;
   if (viejo) {
     const r = await mp("/v1/account/release_report", { method: "POST",
@@ -245,7 +246,7 @@ export default async function handler(req, res) {
     let movs = await porBusqueda(dias, yo.json.id);
     let fuente = "pagos", extra = {};
     if (!movs.length) {
-      const r = await porReporte(dias, yo.json.id);
+      const r = await porReporte(dias, yo.json.id, req.query.nuevo === "1");
       movs = r.movs; fuente = "reporte";
       extra = { pedido: r.pedido, hasta: r.hasta, generado: r.generado, sinReporte: !!r.sinReporte };
     }
