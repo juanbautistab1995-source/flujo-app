@@ -5389,7 +5389,7 @@ function PanelSueldo({ cfg, setCfg, mes, mesAct, medios, movs, onVerGastos }) {
   );
 }
 
-function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLiquidar, coti, estadoCoti, onRefrescar, tcVivo,
+function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onPagarVarios, onLiquidar, coti, estadoCoti, onRefrescar, tcVivo,
                historial = [], cerradas = [], revisadas = {}, onRevisar,
                estimados = [], onAbrirMedios, onAbrirImportar,
                invertido = { total: 0, porTipo: {} }, onVerInvertido, onVerGastos, onFinanciar,
@@ -5973,6 +5973,26 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onLi
                               </span>
                             </div>
                             {g.arr.map((it) => fila(it, g.persona))}
+                            {(() => {
+                              // Resumen de tarjeta del período en curso: un toque lo da por pagado
+                              const med = agrupar === "medio" && f.mk === mesAct && !filtrando && onPagarVarios
+                                ? medios.find((m) => m.id !== "efectivo" && m.nombre === g.titulo) : null;
+                              const lista = med ? g.arr.filter((i) => !i.deuda && !i.soloDeuda && !i.ahorro && !i.devolucion
+                                && !i.ingreso && i.monto > 0).map((i) => ({ id: i.mv.id, pesos: i.monto })) : [];
+                              const tot = lista.reduce((x, y) => x + y.pesos, 0);
+                              if (!med || !lista.length) return null;
+                              return (
+                                <div style={{ marginTop: 8 }}>
+                                  <button className="chip sm"
+                                    onClick={() => { if (window.confirm(`¿Ya pagaste el resumen de ${med.nombre}? Descuento ${plata(tot)} de tu caja (lo podés deshacer).`)) onPagarVarios(f.mk, lista, med.nombre); }}>
+                                    Ya pagué este resumen · {corta(tot)}
+                                  </button>
+                                  <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 6, lineHeight: 1.5 }}>
+                                    Si lo que pagaste fue otro monto, después usá "Ajustar con el banco" y queda parejo.
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             {g.per && onLiquidar && f.mk === mesAct && !filtrando && (() => {
                               const x = g.per;
                               const clave = f.mk + "|" + x.persona;
@@ -10363,6 +10383,28 @@ export default function App() {
              reservasUsd: Math.max(0, Math.round(res * 100) / 100) });
   };
 
+  // Marca como pagados varios gastos de una vez (el resumen entero de una tarjeta).
+  // Cada uno queda ajustado en 0 y aplicado, así que la caja baja UNA sola vez y se puede deshacer.
+  const pagarVarios = (mk, lista, nombre) => {
+    const ap = { ...(cfg.aplicados || {}) };
+    const apMes = { ...(ap[mk] || {}) };
+    const a = { ...(cfg.ajustes || {}) };
+    const delMes = { ...(a[mk] || {}) };
+    const conf = { ...(cfg.confirmados || {}) };
+    conf[mk] = { ...(conf[mk] || {}) };
+    let caja = cfg.saldoHoy || 0;
+    let n = 0;
+    lista.forEach(({ id, pesos }) => {
+      if (apMes[id] || !(pesos > 0)) return;
+      delMes[id] = 0; apMes[id] = { usd: 0, pesos: Math.round(pesos) };
+      conf[mk][id] = true; caja -= Math.round(pesos); n++;
+    });
+    if (!n) return;
+    marcarUndo("el pago del resumen " + (nombre || ""));
+    a[mk] = delMes; ap[mk] = apMes;
+    setCfg({ ...cfg, ajustes: a, aplicados: ap, confirmados: conf, saldoHoy: Math.round(caja) });
+  };
+
   // Registrar que una persona te pasó plata (+) o que se la pasaste vos (−).
   // total = lo liquidado ESE mes con esa persona, acumulado. null = deshacer.
   const liquidar = (mk, persona, total) => {
@@ -10470,7 +10512,7 @@ export default function App() {
       {tab === "hoy" && (
         <Hoy
           cfg={{ ...cfgTC, desdeMes: desde }} setCfg={setCfg} filas={filas} medios={medios} movs={movs}
-          onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar} onLiquidar={liquidar}
+          onAbrirAjustes={() => setVerAjustes(true)} onAjustar={ajustar} onPagarVarios={pagarVarios} onLiquidar={liquidar}
           onGuardarMov={guardarMov} onEditarMov={(mv) => setEditando(mv)}
           coti={coti} estadoCoti={estadoCoti} onRefrescar={refrescar} tcVivo={tcVivo}
           historial={historial} cerradas={[]} estimados={estimados}
