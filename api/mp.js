@@ -97,7 +97,7 @@ async function porReporte(dias) {
   const reportes = Array.isArray(lista.json) ? lista.json.slice()
     .sort((a, b) => (String(a.date_created) < String(b.date_created) ? 1 : -1)) : [];
   const ultimo = reportes[0];
-  const viejo = !ultimo || (Date.now() - new Date(ultimo.end_date || ultimo.date_created).getTime()) > 6 * 3600 * 1000;
+  const viejo = !ultimo || (Date.now() - new Date(ultimo.end_date || ultimo.date_created).getTime()) > 1 * 3600 * 1000;
   let pedido = null;
   if (viejo) {
     const r = await mp("/v1/account/release_report", { method: "POST",
