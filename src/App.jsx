@@ -6699,6 +6699,119 @@ function ConfigAtajo({ sesion, onCerrar, onTraer }) {
   );
 }
 
+// ---- Mercado Pago: sugerencias de gastos (solo lectura, por /api/mp) ----
+async function pedirMP(sesion, modo, dias = 20) {
+  if (!sesion || !sesion.access_token) return { error: "Sin sesión." };
+  try {
+    const r = await fetch(`/api/mp?modo=${modo}&dias=${dias}`, { headers: { Authorization: "Bearer " + sesion.access_token } });
+    const t = await r.text();
+    try { return { ...JSON.parse(t), status: r.status }; }
+    catch (e) { return { error: "La conexión con Mercado Pago no está publicada en esta dirección.", status: r.status }; }
+  } catch (e) { return { error: "Sin conexión." }; }
+}
+
+// Pagos de Mercado Pago que todavía no están en Gastos ni descartaste.
+// Lo pagado con tarjeta de crédito no se sugiere: eso llega por el resumen de la tarjeta.
+function sugerenciasMP(movsMP, anotador, vistos) {
+  const ya = new Set((vistos || []).map(String));
+  const lista = anotador || [];
+  const usados = new Set();
+  return (movsMP || []).filter((m) => {
+    if (!m || !(m.monto > 0) || m.pago === "credit_card" || ya.has(String(m.id))) return false;
+    if (lista.some((g) => g.mp === String(m.id))) return false;
+    const pa = palabrasBusca(m.detalle);
+    const igual = lista.find((g) => {
+      if (usados.has(g.id) || (g.medio && g.medio !== "efectivo") || diasEntre(g.fecha, m.fecha) > 1) return false;
+      const dif = Math.abs((+g.monto || 0) - m.monto);
+      const nombre = palabrasBusca(g.detalle).some((w) => pa.some((q) => q.includes(w) || w.includes(q)));
+      return dif <= Math.max(1, m.monto * 0.01) || (nombre && dif <= m.monto * 0.1);
+    });
+    if (igual) { usados.add(igual.id); return false; }
+    return true;
+  });
+}
+
+function ConfigMP({ sesion, estado, onRecargar, onCerrar }) {
+  const [diag, setDiag] = useState(null);
+  const [copiado, setCopiado] = useState(false);
+  const uid = (estado && estado.uid) || (sesion && sesion.user && sesion.user.id) || "";
+  const probar = async () => { setDiag({ cargando: true }); setDiag(await pedirMP(sesion, "diag")); };
+  const paso = (n, txt) => (
+    <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+      <span style={{ width: 22, height: 22, borderRadius: 11, background: T.tinta, color: "#fff", fontSize: 12,
+                     fontWeight: 650, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{n}</span>
+      <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{txt}</div>
+    </div>
+  );
+  const conectado = estado && estado.configurado && !estado.error;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 90, overflowY: "auto", maxWidth: 470, margin: "0 auto" }}>
+      <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 15, fontWeight: 620 }}>Mercado Pago</span>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Listo</button>
+      </div>
+      <div style={{ padding: "0 18px 40px" }}>
+        <div style={{ fontSize: 14, color: T.suave, lineHeight: 1.55 }}>
+          Lo que pagás con tu plata de Mercado Pago aparece en Gastos como sugerencia: con un toque lo anotás.
+          La app solo lee tus movimientos; no puede pagar ni mover plata.
+        </div>
+        <div className="card" style={{ padding: 14, marginTop: 14 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: conectado ? T.verde : T.tinta }}>
+            {conectado ? "Conectado" : estado && estado.configurado === false ? "Falta conectar" : "Sin conexión todavía"}
+          </div>
+          {estado && estado.falta && estado.falta.length > 0 && (
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 4 }}>Falta cargar en Vercel: {estado.falta.join(" y ")}.</div>
+          )}
+          {estado && estado.error && <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 4 }}>{estado.error}</div>}
+          {conectado && estado.fuente === "reporte" && (
+            <div style={{ fontSize: 12.5, color: T.suave, marginTop: 4, lineHeight: 1.5 }}>
+              Los movimientos salen del reporte de tu cuenta, que Mercado Pago arma cada tanto: puede tardar unas horas en aparecer lo último.
+              {estado.sinReporte ? " Acabo de pedir el primero: volvé a entrar en unos minutos." : ""}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button className="chip sm" onClick={probar}>Probar conexión</button>
+            <button className="chip sm" onClick={onRecargar}>Traer ahora</button>
+          </div>
+          {diag && diag.cargando && <div style={{ fontSize: 12.5, marginTop: 8 }}>Probando…</div>}
+          {diag && diag.error && <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 8 }}>{diag.error}</div>}
+          {diag && diag.configurado === false && <div style={{ fontSize: 12.5, marginTop: 8 }}>Todavía no están las dos variables en Vercel (o falta volver a publicar).</div>}
+          {diag && diag.diag && (
+            <div style={{ marginTop: 10 }}>
+              {diag.diag.map((x, i) => (
+                <div key={i} style={{ borderTop: `1px solid ${T.linea}`, padding: "8px 0", fontSize: 12 }}>
+                  <b>{x.nombre}</b>
+                  <pre style={{ margin: "4px 0 0", whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11,
+                                fontFamily: "ui-monospace, monospace", color: T.suave }}>
+                    {JSON.stringify({ ...x, nombre: undefined }, null, 1)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ fontSize: 15, fontWeight: 620, marginTop: 24 }}>Cómo conectarlo (una sola vez)</div>
+        {paso(1, <>Entrá a <b>mercadopago.com.ar/developers</b> con tu cuenta → <b>Tus integraciones</b> → <b>Crear aplicación</b>. Nombre: <i>Bancame</i>.</>)}
+        {paso(2, <>Dentro de la aplicación, andá a <b>Credenciales de producción</b> y copiá el <b>Access Token</b> (empieza con <i>APP_USR-</i>). Si te pide activarlas, completá el formulario.</>)}
+        {paso(3, <>En <b>vercel.com</b> → tu proyecto → <b>Settings → Environment Variables</b>, agregá dos, marcando <b>Production</b> y <b>Preview</b>:
+          <br />· <b>MP_ACCESS_TOKEN</b> = el Access Token
+          <br />· <b>MP_OWNER_UID</b> = tu ID de usuario (abajo)</>)}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0 0 32px" }}>
+          <div className="card" style={{ flex: 1, padding: "8px 10px", fontSize: 11.5, fontFamily: "ui-monospace, monospace", wordBreak: "break-all" }}>{uid}</div>
+          <button className="chip sm" onClick={async () => { try { await navigator.clipboard.writeText(uid); setCopiado(true); setTimeout(() => setCopiado(false), 1800); } catch (e) { /* nada */ } }}>
+            {copiado ? "Copiado" : "Copiar"}</button>
+        </div>
+        {paso(4, <>En Vercel → <b>Deployments</b> → los tres puntitos del último → <b>Redeploy</b>.</>)}
+        {paso(5, <>Volvé acá y tocá <b>Probar conexión</b>.</>)}
+        <div className="aviso" style={{ marginTop: 16, lineHeight: 1.5 }}>
+          El Access Token es como una llave de tu cuenta: va solo en Vercel. No lo pegues en un chat ni se lo pases a nadie.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, onTraerSiri }) {
   // Lo que ya está en el flujo muestra la categoría que tiene allá: si la cambiás en Movimientos, cambia acá
   const catMov = useMemo(() => {
@@ -6723,6 +6836,28 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
     ? Math.round(+g.monto || 0) : 0);
   const [aviso, setAviso] = useState("");
   const [verAtajo, setVerAtajo] = useState(false);
+  // Mercado Pago: se consulta al entrar a Gastos
+  const [mp, setMp] = useState(null);
+  const [verMP, setVerMP] = useState(false);
+  const [mpTodos, setMpTodos] = useState(false);
+  const cargarMP = useCallback(async () => { setMp(await pedirMP(sesion, "traer")); }, [sesion]);
+  useEffect(() => { if (sesion) cargarMP(); }, [sesion, cargarMP]);
+  const sugMP = mp && mp.movs ? sugerenciasMP(mp.movs, lista, cfg.mpVistos) : [];
+  const gastoDeMP = (m) => {
+    const det = (limpiarComercio(m.detalle) || m.detalle || "Mercado Pago").trim();
+    return { id: "mp" + m.id, mp: String(m.id), fecha: m.fecha, monto: Math.round(m.monto),
+             detalle: det.charAt(0).toUpperCase() + det.slice(1), medio: "efectivo",
+             categoria: adivinarConAprendido(det, aprendido).cat, origen: "mp",
+             // Baja el saldo solo si es posterior al último "Ajustar con el banco"
+             restoCaja: cfg.ultimoAjuste && m.fecha > cfg.ultimoAjuste ? Math.round(m.monto) : 0 };
+  };
+  const anotarMP = (items) => {
+    const nuevos = items.map(gastoDeMP);
+    setCfg({ ...cfg, anotador: [...lista, ...nuevos],
+             saldoHoy: Math.round((cfg.saldoHoy || 0) - nuevos.reduce((a, g) => a + g.restoCaja, 0)),
+             mpVistos: [...(cfg.mpVistos || []), ...items.map((m) => String(m.id))].slice(-600) });
+  };
+  const ignorarMP = (m) => setCfg({ ...cfg, mpVistos: [...(cfg.mpVistos || []), String(m.id)].slice(-600) });
   const guardar = (g) => {
     const viejo = lista.find((x) => x.id === g.id);
     const resto = aCaja(g);
@@ -6829,8 +6964,48 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
       <div style={{ fontSize: 12, color: T.tenue, marginTop: 3 }}>
         Tu anotador del día a día.{" "}
         {sesion && <button onClick={() => setVerAtajo(true)} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Anotar con Siri</button>}
+        {sesion && mp && mp.status !== 403 && (
+          <>{" · "}<button onClick={() => setVerMP(true)} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>
+            Mercado Pago{mp.configurado && !mp.error ? " ✓" : ""}</button></>
+        )}
       </div>
       {verAtajo && <ConfigAtajo sesion={sesion} onTraer={onTraerSiri} onCerrar={() => setVerAtajo(false)} />}
+      {verMP && <ConfigMP sesion={sesion} estado={mp} onRecargar={cargarMP} onCerrar={() => setVerMP(false)} />}
+
+      {sugMP.length > 0 && (
+        <div className="card" style={{ padding: 14, marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 14, fontWeight: 620 }}>De Mercado Pago · {sugMP.length} {sugMP.length === 1 ? "nuevo" : "nuevos"}</span>
+            <button onClick={cargarMP} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Actualizar</button>
+          </div>
+          <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>✓ lo anota · ✕ lo descarta</div>
+          {(mpTodos ? sugMP : sugMP.slice(0, 5)).map((m) => {
+            const g = gastoDeMP(m);
+            return (
+              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0",
+                                       borderTop: `1px solid ${T.linea}`, marginTop: 6 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.detalle}</div>
+                  <div style={{ fontSize: 11.5, color: T.tenue }}>{etiqDia(m.fecha)} · {nomCat(g.categoria)}</div>
+                </div>
+                <span className="num" style={{ fontSize: 13.5, fontWeight: 620 }}>{plata(m.monto)}</span>
+                <button onClick={() => anotarMP([m])} aria-label="Anotar"
+                  style={{ width: 30, height: 30, borderRadius: 15, background: T.verde, color: "#fff", fontSize: 15, flex: "none" }}>✓</button>
+                <button onClick={() => ignorarMP(m)} aria-label="Descartar"
+                  style={{ width: 30, height: 30, borderRadius: 15, border: `1px solid ${T.linea}`, color: T.tenue, fontSize: 13, flex: "none" }}>✕</button>
+              </div>
+            );
+          })}
+          {sugMP.length > 5 && !mpTodos && (
+            <button onClick={() => setMpTodos(true)} style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600, marginTop: 8 }}>
+              Ver los {sugMP.length}
+            </button>
+          )}
+          <button className="btn" style={{ marginTop: 10 }} onClick={() => anotarMP(sugMP)}>
+            Anotar {sugMP.length === 1 ? "el gasto" : `los ${sugMP.length}`} · {plata(sugMP.reduce((a, m) => a + m.monto, 0))}
+          </button>
+        </div>
+      )}
 
       <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", marginTop: 14 }}>
         {[["sueldo", "Este sueldo"], ["semana", "Semana"], ["mes", "Mes"]].map(([id, n]) => (
@@ -10127,7 +10302,9 @@ export default function App() {
                               setCfg={(c) => setCfg({ ...cfg, anotador: c.anotador,
                                 anotadorAprende: c.anotadorAprende || cfg.anotadorAprende,
                                 saldoHoy: c.saldoHoy != null ? c.saldoHoy : cfg.saldoHoy,
-                                ultimoAjuste: c.ultimoAjuste || cfg.ultimoAjuste })}
+                                ultimoAjuste: c.ultimoAjuste || cfg.ultimoAjuste,
+                                mpVistos: c.mpVistos || cfg.mpVistos,
+                                presupuestos: c.presupuestos || cfg.presupuestos })}
                               medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
       {tab === "movs" && (
         <div>
