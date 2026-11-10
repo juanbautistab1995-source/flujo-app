@@ -92,7 +92,7 @@ async function porBusqueda(dias, yo) {
 }
 
 // Camino B: el reporte de movimientos de la cuenta (lo que salió de tu dinero en cuenta)
-async function porReporte(dias) {
+async function porReporte(dias, yo) {
   const lista = await mp("/v1/account/release_report/list");
   const reportes = Array.isArray(lista.json) ? lista.json.slice()
     .sort((a, b) => (String(a.date_created) < String(b.date_created) ? 1 : -1)) : [];
@@ -109,25 +109,40 @@ async function porReporte(dias) {
   const filas = leerCSV(arch.texto).filter((f) => num(f.NET_DEBIT_AMOUNT) > 0
     && !/initial|balance/i.test(f.RECORD_TYPE || ""));
   const desde = isoHace(dias).slice(0, 10);
-  const base = filas.map((f) => ({
-    id: String(f.SOURCE_ID || f.EXTERNAL_REFERENCE || (f.DATE + "|" + f.NET_DEBIT_AMOUNT)),
-    fecha: fechaAR(f.DATE), monto: Math.round(num(f.NET_DEBIT_AMOUNT)),
-    detalle: "", tipo: String(f.DESCRIPTION || "").toLowerCase(), pago: String(f.PAYMENT_METHOD || "").toLowerCase(),
-  })).filter((m) => m.fecha >= desde && m.monto > 0)
-    // El reporte puede traer dos filas por el mismo movimiento: nos quedamos con una
-    .filter((m, i, l) => l.findIndex((x) => x.id === m.id && x.monto === m.monto) === i);
-  // El reporte no trae el nombre del comercio: lo pedimos pago por pago (hasta 40)
+  // Cada movimiento viene en dos filas: la "reserva" (reserve_for_x) y la real (x). Nos quedamos con una,
+  // prefiriendo la real. payment = pago/compra; payout = transferencia a una cuenta bancaria.
+  const porId = new Map();
+  filas.forEach((f) => {
+    const desc = String(f.DESCRIPTION || "").toLowerCase();
+    const reserva = desc.startsWith("reserve_for_");
+    const m = {
+      id: String(f.SOURCE_ID || f.EXTERNAL_REFERENCE || (f.DATE + "|" + f.NET_DEBIT_AMOUNT)),
+      fecha: fechaAR(f.DATE), monto: Math.round(num(f.NET_DEBIT_AMOUNT)), detalle: "",
+      tipo: desc.replace(/^reserve_for_/, ""), pago: String(f.PAYMENT_METHOD || "").toLowerCase(), reserva,
+    };
+    const k = m.id + "|" + m.monto;
+    const ya = porId.get(k);
+    if (!ya || (ya.reserva && !reserva)) porId.set(k, m);
+  });
+  let base = [...porId.values()].filter((m) => m.fecha >= desde && m.monto > 0 && m.tipo !== "refund" && m.tipo !== "cashback")
+    .sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  // El reporte no trae el nombre del comercio: lo pedimos pago por pago (los 40 más nuevos).
+  // Si el cobrador sos vos (reservas o pases entre tus cuentas), no es un gasto.
+  const propios = new Set();
   await Promise.all(base.slice(0, 40).map(async (m) => {
-    if (!/^\d+$/.test(m.id)) return;
+    if (m.tipo === "payout" || !/^\d+$/.test(m.id)) return;
     try {
       const r = await mp("/v1/payments/" + m.id);
-      if (r.ok && r.json) m.detalle = nombreDe(r.json);
+      if (r.ok && r.json) {
+        m.detalle = nombreDe(r.json);
+        const cob = String(r.json.collector_id || (r.json.collector && r.json.collector.id) || "");
+        if (yo && cob === String(yo)) propios.add(m.id);
+      }
     } catch (e) { /* sin nombre */ }
   }));
-  base.forEach((m) => {
-    if (!m.detalle) m.detalle = /withdraw|payout|transfer/.test(m.tipo) ? "Transferencia" : "Mercado Pago";
-  });
-  return { movs: base, pedido, hasta: ultimo.end_date || null };
+  base = base.filter((m) => !propios.has(m.id));
+  base.forEach((m) => { if (!m.detalle) m.detalle = m.tipo === "payout" ? "Transferencia a banco" : "Mercado Pago"; });
+  return { movs: base, pedido, hasta: ultimo.end_date || null, generado: ultimo.date_created || null };
 }
 
 async function diagnostico(dias) {
@@ -230,9 +245,9 @@ export default async function handler(req, res) {
     let movs = await porBusqueda(dias, yo.json.id);
     let fuente = "pagos", extra = {};
     if (!movs.length) {
-      const r = await porReporte(dias);
+      const r = await porReporte(dias, yo.json.id);
       movs = r.movs; fuente = "reporte";
-      extra = { pedido: r.pedido, hasta: r.hasta, sinReporte: !!r.sinReporte };
+      extra = { pedido: r.pedido, hasta: r.hasta, generado: r.generado, sinReporte: !!r.sinReporte };
     }
     movs.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
     return res.status(200).json({ configurado: true, fuente, movs, ...extra });

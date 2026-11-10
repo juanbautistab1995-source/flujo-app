@@ -6893,13 +6893,15 @@ async function pedirMP(sesion, modo, dias = 20) {
 
 // Pagos de Mercado Pago que todavía no están en Gastos ni descartaste.
 // Lo pagado con tarjeta de crédito no se sugiere: eso llega por el resumen de la tarjeta.
-function sugerenciasMP(movsMP, anotador, vistos) {
+function sugerenciasMP(movsMP, anotador, vistos, conTransf) {
   const ya = new Set((vistos || []).map(String));
   const lista = anotador || [];
   const usados = new Set();
   const unicos = (movsMP || []).filter((m, i, l) => m && l.findIndex((x) => x && String(x.id) === String(m.id) && x.monto === m.monto) === i);
   return unicos.filter((m) => {
     if (!(m.monto > 0) || m.pago === "credit_card" || ya.has(String(m.id))) return false;
+    // Transferencias a bancos: casi siempre son pases a tus propias cuentas, no gastos
+    if (m.tipo === "payout" && !conTransf) return false;
     if (lista.some((g) => g.mp === String(m.id))) return false;
     const pa = palabrasBusca(m.detalle);
     // Ya anotado a mano: mismo monto (1%) con hasta 2 días de diferencia, sin importar el medio que hayas puesto
@@ -7026,7 +7028,9 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const [verPres, setVerPres] = useState(false);
   const cargarMP = useCallback(async () => { setMp(await pedirMP(sesion, "traer")); }, [sesion]);
   useEffect(() => { if (sesion) cargarMP(); }, [sesion, cargarMP]);
-  const sugMP = mp && mp.movs ? sugerenciasMP(mp.movs, lista, cfg.mpVistos) : [];
+  const [mpTransf, setMpTransf] = useState(false);
+  const sugMP = mp && mp.movs ? sugerenciasMP(mp.movs, lista, cfg.mpVistos, mpTransf) : [];
+  const nTransfMP = mp && mp.movs && !mpTransf ? sugerenciasMP(mp.movs, lista, cfg.mpVistos, true).length - sugMP.length : 0;
   const gastoDeMP = (m) => {
     const det = (limpiarComercio(m.detalle) || m.detalle || "Mercado Pago").trim();
     return { id: "mp" + m.id, mp: String(m.id), fecha: m.fecha, monto: Math.round(m.monto),
@@ -7156,6 +7160,11 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
       {verAtajo && <ConfigAtajo sesion={sesion} onTraer={onTraerSiri} onCerrar={() => setVerAtajo(false)} />}
       {verMP && <ConfigMP sesion={sesion} estado={mp} onRecargar={cargarMP} onCerrar={() => setVerMP(false)} />}
 
+      {nTransfMP > 0 && (
+        <button onClick={() => setMpTransf(true)} style={{ fontSize: 12.5, color: T.suave, marginTop: 10, textAlign: "left", display: "block" }}>
+          {nTransfMP} {nTransfMP === 1 ? "transferencia a un banco" : "transferencias a bancos"} sin sugerir (suelen ser a tus cuentas) · <b style={{ color: T.ambar }}>Ver</b>
+        </button>
+      )}
       {sugMP.length > 0 && (
         <div className="card" style={{ padding: 14, marginTop: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -7163,7 +7172,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
             <button onClick={cargarMP} style={{ fontSize: 12, color: T.ambar, fontWeight: 600 }}>Actualizar</button>
           </div>
           <div style={{ fontSize: 12, color: T.tenue, marginTop: 2 }}>✓ lo anota · ✕ lo descarta
-            {mp && mp.hasta ? " · datos hasta " + new Date(mp.hasta).toLocaleString("es-AR", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" }) : ""}</div>
+            {mp && (mp.generado || mp.hasta) ? " · datos de " + new Date(mp.generado || mp.hasta).toLocaleString("es-AR", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" }) : ""}</div>
           {(mpTodos ? sugMP : sugMP.slice(0, 5)).map((m) => {
             const g = gastoDeMP(m);
             return (
