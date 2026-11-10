@@ -113,7 +113,9 @@ async function porReporte(dias) {
     id: String(f.SOURCE_ID || f.EXTERNAL_REFERENCE || (f.DATE + "|" + f.NET_DEBIT_AMOUNT)),
     fecha: fechaAR(f.DATE), monto: Math.round(num(f.NET_DEBIT_AMOUNT)),
     detalle: "", tipo: String(f.DESCRIPTION || "").toLowerCase(), pago: String(f.PAYMENT_METHOD || "").toLowerCase(),
-  })).filter((m) => m.fecha >= desde && m.monto > 0);
+  })).filter((m) => m.fecha >= desde && m.monto > 0)
+    // El reporte puede traer dos filas por el mismo movimiento: nos quedamos con una
+    .filter((m, i, l) => l.findIndex((x) => x.id === m.id && x.monto === m.monto) === i);
   // El reporte no trae el nombre del comercio: lo pedimos pago por pago (hasta 40)
   await Promise.all(base.slice(0, 40).map(async (m) => {
     if (!/^\d+$/.test(m.id)) return;

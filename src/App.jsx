@@ -6877,12 +6877,14 @@ function sugerenciasMP(movsMP, anotador, vistos) {
   const ya = new Set((vistos || []).map(String));
   const lista = anotador || [];
   const usados = new Set();
-  return (movsMP || []).filter((m) => {
-    if (!m || !(m.monto > 0) || m.pago === "credit_card" || ya.has(String(m.id))) return false;
+  const unicos = (movsMP || []).filter((m, i, l) => m && l.findIndex((x) => x && String(x.id) === String(m.id) && x.monto === m.monto) === i);
+  return unicos.filter((m) => {
+    if (!(m.monto > 0) || m.pago === "credit_card" || ya.has(String(m.id))) return false;
     if (lista.some((g) => g.mp === String(m.id))) return false;
     const pa = palabrasBusca(m.detalle);
+    // Ya anotado a mano: mismo monto (1%) con hasta 2 días de diferencia, sin importar el medio que hayas puesto
     const igual = lista.find((g) => {
-      if (usados.has(g.id) || (g.medio && g.medio !== "efectivo") || diasEntre(g.fecha, m.fecha) > 1) return false;
+      if (usados.has(g.id) || g.pagadoPor === "otro" || diasEntre(g.fecha, m.fecha) > 2) return false;
       const dif = Math.abs((+g.monto || 0) - m.monto);
       const nombre = palabrasBusca(g.detalle).some((w) => pa.some((q) => q.includes(w) || w.includes(q)));
       return dif <= Math.max(1, m.monto * 0.01) || (nombre && dif <= m.monto * 0.1);
@@ -7163,6 +7165,10 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
               Ver los {sugMP.length}
             </button>
           )}
+          <button onClick={() => { if (window.confirm(`¿Descartar los ${sugMP.length}? Usalo si ya los tenés anotados.`)) setCfg({ ...cfg, mpVistos: [...(cfg.mpVistos || []), ...sugMP.map((m) => String(m.id))].slice(-600) }); }}
+            style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600, marginTop: 10, display: "block" }}>
+            Ya los tengo anotados · descartar todos
+          </button>
           <button className="btn" style={{ marginTop: 10 }} onClick={() => anotarMP(sugMP)}>
             Anotar {sugMP.length === 1 ? "el gasto" : `los ${sugMP.length}`} · {plata(sugMP.reduce((a, m) => a + m.monto, 0))}
           </button>
