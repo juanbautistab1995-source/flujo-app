@@ -44,6 +44,11 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   (no cambian el saldo). Si ya hay un resumen más nuevo de esa tarjeta, no se pisan las fechas siguientes ni tasa/deuda.
   Las compras nuevas del ciclo (cuota 1, sin impuestos) se cruzan con Gastos: lo anotado queda vinculado (`mov`) y le pasa
   persona/categoría al movimiento; lo no anotado se suma a Gastos ya en el flujo. En Gastos, lo que está en el flujo muestra la categoría del movimiento.
+- **Mercado Pago** (`api/mp.js`, función de Vercel, solo lectura): sugiere en Gastos los pagos hechos desde la cuenta.
+  La clave va en Vercel (`MP_ACCESS_TOKEN`) y solo responde al dueño (`MP_OWNER_UID`); nunca en el código ni en el chat.
+  `sugerenciasMP` no repite lo ya anotado ni lo descartado (`cfg.mpVistos`).
+- **Meta de ahorro** (`cfg.meta`, `estadoMeta`): lee `reservasUsd` y las compras de dólares programadas (`tipo: "ahorro"`); no cambia la proyección.
+- **Presupuestos** (`cfg.presupuestos = [{k: "cat:…" | "txt:…", monto}]`): topes por sueldo sobre lo anotado en Gastos (solo la parte propia).
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo
