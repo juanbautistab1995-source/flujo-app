@@ -47,6 +47,15 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
 - **Mercado Pago** (`api/mp.js`, función de Vercel, solo lectura): sugiere en Gastos los pagos hechos desde la cuenta.
   La clave va en Vercel (`MP_ACCESS_TOKEN`) y solo responde al dueño (`MP_OWNER_UID`); nunca en el código ni en el chat.
   `sugerenciasMP` no repite lo ya anotado ni lo descartado (`cfg.mpVistos`).
+- **Mercado Pago, compras con tarjeta y transferencias** (`api/mp.js`): se combinan dos fuentes. La búsqueda de pagos trae compras con crédito
+  (el pagador viene oculto: sirve todo pago aprobado cuyo cobrador no es el dueño) y las transferencias a bancos pagadas con tarjeta, que MP guarda como
+  `account_fund` con tarjeta (cobrador = dueño) + un `payout` en el reporte: se emparejan por monto/fecha y queda UN gasto con el total cobrado.
+  El reporte de la cuenta (`release_report`) trae lo que sale del saldo; cada movimiento viene dos veces (`reserve_for_x` y `x`), se deja uno.
+  Los `payout` sueltos (pases a bancos, casi siempre a cuentas propias) no se sugieren salvo que se toque "Ver". El cliente pide un reporte nuevo cada ~50 min (`localStorage mp:pedido`).
+  Cada tarjeta (últimos 4) se asocia una vez a un medio de pago (`cfg.mpTarjetas`); las compras con crédito no tocan `saldoHoy`.
+- **Comprobantes por Atajo** (`esComprobante`, `interpretarComprobante`): el Atajo "leer imagen gasto" (hoja de compartir, imágenes y PDF) lee el texto de una captura/comprobante
+  de Mercado Pago o MODO y lo manda a la bandeja; la app arma el gasto (monto, comercio, fecha, tarjeta/banco, cuotas). Si el comprobante no dice con qué se pagó,
+  se supone la única tarjeta asociada a MP y queda una nota, o no toca el saldo. `supabase/atajo_comprobantes.sql` amplía el largo del texto (1500).
 - **Meta de ahorro** (`cfg.meta`, `estadoMeta`): lee `reservasUsd` y las compras de dólares programadas (`tipo: "ahorro"`); no cambia la proyección.
 - **Presupuestos** (`cfg.presupuestos = [{k: "cat:…" | "txt:…", monto}]`): topes por sueldo sobre lo anotado en Gastos (solo la parte propia).
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
