@@ -167,6 +167,42 @@ async function diagnostico(dias, pagoId) {
     catch (e) { pasos.push({ nombre, error: String(e && e.message ? e.message : e) }); }
   };
   if (/^\d{6,}$/.test(String(pagoId || ""))) {
+    // Rastro: ¿en qué puertas de la API aparece (o no) este número de operación?
+    await paso("Rastro del pago", async () => {
+      const out = {};
+      const compacto = (p) => ({ id: String(p.id).slice(-5), fecha: String(p.date_created || "").slice(0, 16), monto: p.transaction_amount,
+        tipo: p.operation_type, medio: p.payment_type_id, estado: p.status, cobradorEsYo: String(p.collector_id || "") === String(yoId || "") });
+      // 1) Búsqueda sin rango de fechas, lo más nuevo primero: ¿aparece algo de hoy entre 30.000 y 40.000?
+      const r1 = await mp("/v1/payments/search?sort=date_created&criteria=desc&limit=30");
+      const l1 = (r1.json && r1.json.results) || [];
+      out.masNuevos = l1.slice(0, 8).map(compacto);
+      out.parecidos = l1.filter((p) => Math.abs((+p.transaction_amount || 0) - 35000) < 2500 || String(p.id) === String(pagoId)).map(compacto);
+      // 2) Todas las transferencias que ve la búsqueda
+      const r2 = await mp("/v1/payments/search?sort=date_created&criteria=desc&operation_type=money_transfer&limit=50");
+      const l2 = (r2.json && r2.json.results) || [];
+      out.transferencias = { total: l2.length, masNueva: l2[0] ? compacto(l2[0]) : null, conTarjeta: l2.filter((p) => p.payment_type_id === "credit_card").map(compacto).slice(0, 5) };
+      // 3) Tarjeta de crédito, lo más nuevo
+      const r3 = await mp("/v1/payments/search?sort=date_created&criteria=desc&payment_type_id=credit_card&limit=10");
+      const l3 = (r3.json && r3.json.results) || [];
+      out.conTarjeta = { status: r3.status, total: l3.length, masNuevos: l3.slice(0, 5).map(compacto) };
+      // 4) Reporte de la cuenta: ¿hay alguna fila con ese número o con un monto parecido?
+      try {
+        const lista = await mp("/v1/account/release_report/list");
+        const reps = Array.isArray(lista.json) ? lista.json.slice().sort((a, b) => (String(a.date_created) < String(b.date_created) ? 1 : -1)) : [];
+        if (reps[0] && reps[0].file_name) {
+          const arch = await mp("/v1/account/release_report/" + encodeURIComponent(reps[0].file_name));
+          const filas = leerCSV(arch.texto);
+          out.reporte = { filas: filas.length,
+            conElNumero: filas.filter((f) => JSON.stringify(f).includes(String(pagoId))).slice(0, 3).map((f) => ({ fecha: String(f.DATE || "").slice(0, 16), desc: f.DESCRIPTION, debito: f.NET_DEBIT_AMOUNT, credito: f.NET_CREDIT_AMOUNT })),
+            montoParecido: filas.filter((f) => { const m = num(f.NET_DEBIT_AMOUNT) || num(f.NET_CREDIT_AMOUNT); return Math.abs(m - 35000) < 2500 || Math.abs(m - 37285.5) < 50; })
+              .slice(0, 5).map((f) => ({ fecha: String(f.DATE || "").slice(0, 16), desc: f.DESCRIPTION, debito: f.NET_DEBIT_AMOUNT, credito: f.NET_CREDIT_AMOUNT, id: String(f.SOURCE_ID || "").slice(-4) })),
+            ultimaFila: filas.length ? String(filas[filas.length - 1].DATE || "").slice(0, 16) : null };
+        }
+      } catch (e) { out.reporte = { error: String(e.message || e) }; }
+      return out;
+    });
+  }
+  if (/^\d{6,}$/.test(String(pagoId || ""))) {
     await paso("Un pago puntual", async () => {
       const r = await mp("/v1/payments/" + pagoId);
       let cob = null;
