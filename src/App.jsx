@@ -7287,7 +7287,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
           {mpCargando ? "Mercado Pago: consultando…"
             : mp.error ? "Mercado Pago: " + mp.error
             : `Mercado Pago · actualizado ${mpCuando ? mpCuando.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) : ""}`
-              + ` · ${(mp.movs || []).length} movimientos (${(mp.movs || []).filter((m) => m.pago === "credit_card").length} con tarjeta) · ${sugMP.length} por anotar`}
+              + ` · ${(mp.movs || []).length} movimientos (${(mp.movs || []).filter((m) => m.pago === "credit_card").length} con tarjeta) · ${sugMP.length} por anotar`
+              + (mp.cargas != null ? ` · cargas con tarjeta: ${mp.cargas} (${mp.emparejadas} con salida a banco)` : "")}
         </div>
       )}
       {nTransfMP > 0 && (
