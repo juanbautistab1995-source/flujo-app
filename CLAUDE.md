@@ -49,7 +49,7 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   `sugerenciasMP` no repite lo ya anotado ni lo descartado (`cfg.mpVistos`).
 - **Mercado Pago, compras con tarjeta y transferencias** (`api/mp.js`): se combinan dos fuentes. La búsqueda de pagos trae compras con crédito
   (el pagador viene oculto: sirve todo pago aprobado cuyo cobrador no es el dueño) y las transferencias a bancos pagadas con tarjeta, que MP guarda como
-  `account_fund` con tarjeta (cobrador = dueño) + un `payout` en el reporte: se emparejan por monto/fecha y queda UN gasto con el total cobrado.
+  `account_fund` con tarjeta (cobrador = dueño) + un `payout` en el reporte: si hay un `payout` del mismo monto se emparejan y queda UN gasto con el total cobrado; lo normal es que no haya (esas transferencias no pasan por el saldo), y la carga se sugiere igual.
   El reporte de la cuenta (`release_report`) trae lo que sale del saldo; cada movimiento viene dos veces (`reserve_for_x` y `x`), se deja uno.
   Los `payout` sueltos (pases a bancos, casi siempre a cuentas propias) no se sugieren salvo que se toque "Ver". El cliente pide un reporte nuevo cada ~50 min (`localStorage mp:pedido`).
   Cada tarjeta (últimos 4) se asocia una vez a un medio de pago (`cfg.mpTarjetas`); las compras con crédito no tocan `saldoHoy`.
