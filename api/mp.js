@@ -354,10 +354,15 @@ export default async function handler(req, res) {
     const cargas = movs.filter((m) => m.fondeo);
     movs = movs.filter((m) => !m.fondeo);
     let salidas = r.movs.slice();
+    let emparejadas = 0;
     cargas.forEach((c) => {
-      const i = salidas.findIndex((x) => x.tipo === "payout" && Math.abs(x.monto - c.monto0) <= 1 && dias1(x.fecha, c.fecha) <= 1);
-      if (i >= 0) { salidas.splice(i, 1); movs.push(c); }
+      const i = salidas.findIndex((x) => x.tipo === "payout" && (Math.abs(x.monto - c.monto0) <= 1 || Math.abs(x.monto - c.monto) <= 1)
+        && dias1(x.fecha, c.fecha) <= 1);
+      if (i >= 0) { salidas.splice(i, 1); emparejadas++; movs.push(c); }
+      // Sin salida al banco a la vista (el reporte puede tardar): se muestra igual, marcada, y decidís vos
+      else movs.push({ ...c, detalle: "Carga con tarjeta (sin salida a banco todavía)", sinPar: true });
     });
+    extra.cargas = cargas.length; extra.emparejadas = emparejadas;
     const ids = new Set(movs.map((m) => m.id));
     salidas.forEach((m) => { if (!ids.has(m.id)) movs.push(m); });
     fuente = "pagos+reporte";
