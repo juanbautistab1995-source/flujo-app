@@ -81,6 +81,18 @@ async function porBusqueda(dias, yo) {
     lista.forEach((p) => {
       const pagador = String((p.payer && p.payer.id) || "");
       const cobrador = String(p.collector_id || (p.collector && p.collector.id) || "");
+      // Transferencia a un banco pagada con tarjeta: Mercado Pago la arma como una carga de saldo con la tarjeta
+      // (acá el cobrador sos vos) y después manda esa plata al banco. La carga es lo que cobra la tarjeta.
+      if (p.status === "approved" && cobrador === String(yo) && p.operation_type === "account_fund" && p.payment_type_id === "credit_card") {
+        const total = p.transaction_details && p.transaction_details.total_paid_amount;
+        vistos.set(String(p.id), {
+          id: String(p.id), fecha: fechaAR(p.date_approved || p.date_created), fondeo: true,
+          monto0: Math.round(num(p.transaction_amount)), monto: Math.round(num(total || p.transaction_amount)),
+          detalle: "Transferencia con tarjeta", cobrador, tipo: "transfer", pago: "credit_card",
+          tarjeta: (p.card && p.card.last_four_digits) || "", marca: p.payment_method_id || "",
+        });
+        return;
+      }
       if (p.status !== "approved" || (pagador && pagador !== String(yo)) || cobrador === String(yo)) return;
       vistos.set(String(p.id), {
         id: String(p.id), fecha: fechaAR(p.date_approved || p.date_created),
@@ -337,8 +349,17 @@ export default async function handler(req, res) {
     try { movs = await porBusqueda(dias, yo.json.id); } catch (e) { movs = []; }
     const r = await porReporte(dias, yo.json.id, req.query.nuevo === "1");
     extra = { pedido: r.pedido, hasta: r.hasta, generado: r.generado, sinReporte: !!r.sinReporte };
+    // Cargas con tarjeta: cuentan solo si salieron enseguida a un banco por el mismo monto (si no, la plata quedó en tu cuenta)
+    const dias1 = (a, b) => Math.abs((new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000);
+    const cargas = movs.filter((m) => m.fondeo);
+    movs = movs.filter((m) => !m.fondeo);
+    let salidas = r.movs.slice();
+    cargas.forEach((c) => {
+      const i = salidas.findIndex((x) => x.tipo === "payout" && Math.abs(x.monto - c.monto0) <= 1 && dias1(x.fecha, c.fecha) <= 1);
+      if (i >= 0) { salidas.splice(i, 1); movs.push(c); }
+    });
     const ids = new Set(movs.map((m) => m.id));
-    r.movs.forEach((m) => { if (!ids.has(m.id)) movs.push(m); });
+    salidas.forEach((m) => { if (!ids.has(m.id)) movs.push(m); });
     fuente = "pagos+reporte";
     movs.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
     return res.status(200).json({ configurado: true, fuente, movs, ...extra });
