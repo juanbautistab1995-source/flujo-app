@@ -6554,6 +6554,88 @@ function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
            ...(persona ? { persona, pct, pagadoPor } : {}) };
 }
 
+// ---- Comprobantes: texto leído de la captura de un pago (Mercado Pago o MODO) ----
+const MESES_ABR = { ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6, jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12 };
+function esComprobante(texto) {
+  const t = sinTildes(texto);
+  const marcas = [/\bpagaste\b/, /id de pago/, /n\.?\s?o de operacion/, /transferencia enviada/, /nombre en el resumen/,
+                  /compartir comprobante/, /\baprobado\b/, /en \d+ pagos?\b/, /con (visa|master|amex)/];
+  return /\$\s*\d/.test(t) && marcas.filter((r) => r.test(t)).length >= 2;
+}
+// "40.629,99" / "22.080" / "37.285" → entero
+function plataArg(x) {
+  let n = String(x || "").trim();
+  if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, "").replace(",", ".");
+  else n = n.replace(/[.,](?=\d{3}(\D|$))/g, "");
+  const v = Math.round(parseFloat(n));
+  return isFinite(v) ? v : 0;
+}
+function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, fechaBase) {
+  const original = String(texto || "");
+  const lineas = original.split(/\r?\n|\s\|\s/).map((l) => l.trim()).filter(Boolean);
+  const t = " " + sinTildes(original).replace(/\s+/g, " ") + " ";
+  // Monto: el primer importe en pesos (los siguientes son promos, reintegros, etc.)
+  const mm = original.match(/\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/);
+  const monto = mm ? plataArg(mm[1]) : 0;
+  if (!(monto > 0)) return null;
+  // Fecha: "El 14/10/2026 a las 20:13", "10/nov - 16:25", "Pagaste · 7 oct"
+  const base = fechaBase || hoyISO();
+  let fecha = base;
+  const f1 = original.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  const f2 = sinTildes(original).match(/(\d{1,2})\s*[\/ ]\s*(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)\b/);
+  if (f1) fecha = `${f1[3]}-${String(f1[2]).padStart(2, "0")}-${String(f1[1]).padStart(2, "0")}`;
+  else if (f2) {
+    let y = +base.slice(0, 4);
+    let c = `${y}-${String(MESES_ABR[f2[2]]).padStart(2, "0")}-${String(f2[1]).padStart(2, "0")}`;
+    if (c > base) c = `${y - 1}-${c.slice(5)}`;
+    fecha = c;
+  }
+  // Tarjeta (últimos 4) y cuotas
+  const mt = original.match(/(?:cr[eé]dito|d[eé]bito|visa|master(?:card)?|amex|[*•·]{2,}|terminada en)\s*[·•.\-*]*\s*(\d{4})\b/i);
+  const ult4 = mt ? mt[1] : "";
+  const mq = t.match(/ en (\d{1,2}) pagos? /);
+  const cuotas = mq ? +mq[1] : 1;
+  const conTarjeta = /(credito|debito|visa|master|amex)/.test(t) && !/dinero disponible/.test(t);
+  // Medio: primero por la tarjeta que ya asociaste, después por el banco que figura (icbc, nacion…)
+  const genericas = new Set(["visa", "master", "mastercard", "amex", "credito", "debito", "tarjeta", "banco", "pago"]);
+  let medio = "";
+  if (ult4 && mpTarjetas[ult4] && medios.some((m) => m.id === mpTarjetas[ult4])) medio = mpTarjetas[ult4];
+  if (!medio && conTarjeta) {
+    const puntaje = medios.filter((m) => m.id !== "efectivo").map((m) => {
+      const pal = [...new Set(sinTildes([m.id, m.corto, m.nombre].filter(Boolean).join(" ")).split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 3 && !genericas.has(w)))];
+      return [m, pal.filter((w) => new RegExp("(^|[^a-z0-9])" + w).test(t) || (w === "hipo" && /hipotecario/.test(t))
+        || (w === "bna" && /nacion/.test(t))).length];
+    }).sort((a, b) => b[1] - a[1]);
+    if (puntaje.length && puntaje[0][1] > 0 && (puntaje.length < 2 || puntaje[1][1] < puntaje[0][1])) medio = puntaje[0][0].id;
+  }
+  const efec = (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo";
+  const sinMedio = conTarjeta && !medio;
+  if (!medio) medio = efec;
+  // Comercio: la línea anterior a "Pagaste", o la que sigue al importe; si es una transferencia, el nombre del resumen
+  let nombre = "";
+  const iPag = lineas.findIndex((l) => /^pagaste\b/i.test(sinTildes(l)));
+  const resumen = original.match(/nombre en el resumen de la tarjeta\s*[:\n ]\s*([^\n|]+)/i);
+  const malas = /^(detalle|comprobante|compartir|aprobado|pago|transferencia|origen|con promo|promo|[-$\d.,\s]+)/i;
+  if (iPag > 0) nombre = lineas[iPag - 1];
+  else {
+    const iImp = lineas.findIndex((l) => /\$\s*\d/.test(l));
+    for (let i = iImp + 1; i < lineas.length && i <= iImp + 4; i++) {
+      if (!malas.test(sinTildes(lineas[i]).trim())) { nombre = lineas[i]; break; }
+    }
+  }
+  if (!nombre && resumen) nombre = resumen[1].replace(/^MERPAGO\*/i, "");
+  nombre = limpiarComercio(nombre) || nombre || "";
+  nombre = nombre.replace(/\s+/g, " ").trim();
+  let detalle = nombre || "Pago";
+  if (/transferencia enviada/.test(t) && nombre) detalle = nombre;   // a quién se la mandaste
+  detalle = detalle.charAt(0).toUpperCase() + detalle.slice(1);
+  const categoria = adivinarConAprendido(detalle, aprendido).cat;
+  return { monto, detalle, medio, fecha, categoria,
+           ...(cuotas > 1 && medio !== efec ? { cuotas } : {}),
+           ...(ult4 ? { tarjeta: ult4 } : {}), ...(sinMedio ? { sinMedio: true } : {}) };
+}
+
 function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
   const ini = inicial || {};
   const [monto, setMonto] = useState(inicial ? String(Math.round(ini.monto)) : "");
@@ -10218,6 +10300,7 @@ export default function App() {
       const pers = [...new Set([...movsRef.current.filter((m) => m.persona).map((m) => m.persona),
                                 ...(c0.anotador || []).filter((g) => g.persona).map((g) => g.persona)])];
       let lista = (c0.anotador || []).slice(), saldo = c0.saldoHoy || 0, apr = c0.anotadorAprende || {};
+      const tarjMP = { ...(c0.mpTarjetas || {}) };
       const nuevos = [], viejos = [];
       const hace3 = Date.now() - 3 * 86400000;
       data.forEach((r) => {
@@ -10228,16 +10311,21 @@ export default function App() {
         nuevos.push(r.id);
         const d = new Date(r.creado);
         const f = isNaN(d.getTime()) ? hoyISO() : isoDe(d);
-        const g = interpretarGasto(r.texto, meds, apr, pers, f);
+        const compro = esComprobante(r.texto);
+        const g = compro ? interpretarComprobante(r.texto, meds, c0.mpTarjetas || {}, apr, f) : interpretarGasto(r.texto, meds, apr, pers, f);
         if (!g) return;
-        const resto = g.medio === "efectivo" && g.pagadoPor !== "otro" ? g.monto : 0;
-        lista.push({ id: "a" + r.id + "_" + Date.now(), ...g, origen: "siri", bandeja: r.id, textoOriginal: r.texto, restoCaja: resto });
+        // Un pago en efectivo/dinero disponible baja el saldo solo si es posterior al último ajuste con el banco
+        const resto = g.medio === "efectivo" && g.pagadoPor !== "otro" && !g.sinMedio
+          && (!compro || (c0.ultimoAjuste && g.fecha > c0.ultimoAjuste)) ? g.monto : 0;
+        lista.push({ id: "a" + r.id + "_" + Date.now(), ...g, origen: compro ? "comprobante" : "siri", bandeja: r.id, textoOriginal: r.texto, restoCaja: resto });
         saldo -= resto;
         apr = aprender(apr, g.detalle, g.categoria);
+        // Si el comprobante dice qué tarjeta es (····4180 → ICBC), la recordamos para los próximos
+        if (compro && g.tarjeta && !g.sinMedio && g.medio !== "efectivo" && !tarjMP[g.tarjeta]) tarjMP[g.tarjeta] = g.medio;
       });
       if (viejos.length) await sb.from("bandeja").delete().in("id", viejos);
       if (!nuevos.length) return "No hay nada nuevo de Siri (lo último ya está en Gastos).";
-      const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null,
+      const c = { ...c0, anotador: lista, saldoHoy: Math.round(saldo), anotadorAprende: apr, desdeMes: null, mpTarjetas: tarjMP,
                   bandejaVista: [...vistas, ...nuevos.map(Number)].slice(-300) };
       setCfgRaw(c); persistir(c, movsRef.current);
       const n = lista.length - (c0.anotador || []).length;
