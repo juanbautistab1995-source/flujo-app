@@ -6558,8 +6558,9 @@ function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
 const MESES_ABR = { ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6, jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12 };
 function esComprobante(texto) {
   const t = sinTildes(texto);
-  const marcas = [/\bpagaste\b/, /id de pago/, /n\.?\s?o de operacion/, /transferencia enviada/, /nombre en el resumen/,
-                  /compartir comprobante/, /\baprobado\b/, /en \d+ pagos?\b/, /con (visa|master|amex)/];
+  const marcas = [/\bpagaste\b/, /id de pago/, /\bn\S{0,3} de operacion/, /transferencia enviada/, /nombre en el resumen/,
+                  /compartir comprobante/, /\baprobado\b/, /en \d+ pagos?\b/, /con (visa|master|amex)/,
+                  /comprobante de (transferencia|pago)/, /origen y destino/, /\b(cvu|cbu)\b/, /codigo de identificacion/, /\bmotivo\b/];
   return /\$\s*\d/.test(t) && marcas.filter((r) => r.test(t)).length >= 2;
 }
 // "40.629,99" / "22.080" / "37.285" → entero
@@ -6582,12 +6583,12 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
   const base = fechaBase || hoyISO();
   let fecha = base;
   const f1 = original.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  const f2 = sinTildes(original).match(/(\d{1,2})\s*[\/ ]\s*(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)\b/);
+  const f2 = sinTildes(original).match(/(\d{1,2})\s*[\/ ]\s*(ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)[a-z]*(?:\s*[\/ ]\s*(\d{4}))?/);
   if (f1) fecha = `${f1[3]}-${String(f1[2]).padStart(2, "0")}-${String(f1[1]).padStart(2, "0")}`;
   else if (f2) {
-    let y = +base.slice(0, 4);
+    let y = f2[3] ? +f2[3] : +base.slice(0, 4);
     let c = `${y}-${String(MESES_ABR[f2[2]]).padStart(2, "0")}-${String(f2[1]).padStart(2, "0")}`;
-    if (c > base) c = `${y - 1}-${c.slice(5)}`;
+    if (!f2[3] && c > base) c = `${y - 1}-${c.slice(5)}`;
     fecha = c;
   }
   // Tarjeta (últimos 4) y cuotas
@@ -6610,14 +6611,27 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
     if (puntaje.length && puntaje[0][1] > 0 && (puntaje.length < 2 || puntaje[1][1] < puntaje[0][1])) medio = puntaje[0][0].id;
   }
   const efec = (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo";
-  const sinMedio = conTarjeta && !medio;
+  // Sin ninguna pista de con qué se pagó (por ejemplo un comprobante de transferencia): no tocamos el saldo
+  const dineroDisp = /dinero disponible/.test(t);
+  const sinMedio = !medio && (conTarjeta || !dineroDisp);
   if (!medio) medio = efec;
   // Comercio: la línea anterior a "Pagaste", o la que sigue al importe; si es una transferencia, el nombre del resumen
   let nombre = "";
   const iPag = lineas.findIndex((l) => /^pagaste\b/i.test(sinTildes(l)));
   const resumen = original.match(/nombre en el resumen de la tarjeta\s*[:\n ]\s*([^\n|]+)/i);
-  const malas = /^(detalle|comprobante|compartir|aprobado|pago|transferencia|origen|con promo|promo|[-$\d.,\s]+)/i;
-  if (iPag > 0) nombre = lineas[iPag - 1];
+  const malas = /^(detalle|comprobante|compartir|aprobado|pago|transferencia|origen|destino|motivo|con promo|promo|[-$\d.,\s]+)/i;
+  // "Comprobante de transferencia": el nombre es el de DESTINO (el segundo bloque de "Origen y destino")
+  const iOD = lineas.findIndex((l) => /^origen y destino/i.test(sinTildes(l)));
+  if (iOD >= 0) {
+    let vioCuit = false;
+    for (let i = iOD + 1; i < lineas.length; i++) {
+      const l = lineas[i], n = sinTildes(l);
+      if (/cuit|cuil/.test(n)) { vioCuit = true; continue; }
+      if (vioCuit && !/\d/.test(l) && !/^(mercado pago|n\S{0,3} de operacion|codigo|motivo|origen|destino)/.test(n)) { nombre = l; break; }
+    }
+  }
+  if (nombre) { /* ya lo tenemos */ }
+  else if (iPag > 0) nombre = lineas[iPag - 1];
   else {
     const iImp = lineas.findIndex((l) => /\$\s*\d/.test(l));
     for (let i = iImp + 1; i < lineas.length && i <= iImp + 4; i++) {
@@ -6633,7 +6647,8 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
   const categoria = adivinarConAprendido(detalle, aprendido).cat;
   return { monto, detalle, medio, fecha, categoria,
            ...(cuotas > 1 && medio !== efec ? { cuotas } : {}),
-           ...(ult4 ? { tarjeta: ult4 } : {}), ...(sinMedio ? { sinMedio: true } : {}) };
+           ...(ult4 ? { tarjeta: ult4 } : {}),
+           ...(sinMedio ? { sinMedio: true, nota: "Revisá con qué pagaste (el comprobante no lo dice)" } : {}) };
 }
 
 function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
