@@ -359,8 +359,8 @@ export default async function handler(req, res) {
       const i = salidas.findIndex((x) => x.tipo === "payout" && (Math.abs(x.monto - c.monto0) <= 1 || Math.abs(x.monto - c.monto) <= 1)
         && dias1(x.fecha, c.fecha) <= 1);
       if (i >= 0) { salidas.splice(i, 1); emparejadas++; movs.push(c); }
-      // Sin salida al banco a la vista (el reporte puede tardar): se muestra igual, marcada, y decidís vos
-      else movs.push({ ...c, detalle: "Carga con tarjeta (sin salida a banco todavía)", sinPar: true });
+      // Lo normal: MP no pasa estas transferencias por el saldo, así que no hay salida que emparejar. La carga es la única huella.
+      else movs.push({ ...c, detalle: "Transferencia con tarjeta", sinPar: true });
     });
     extra.cargas = cargas.length; extra.emparejadas = emparejadas;
     const ids = new Set(movs.map((m) => m.id));
