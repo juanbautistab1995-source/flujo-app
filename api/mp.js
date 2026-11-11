@@ -148,12 +148,25 @@ async function porReporte(dias, yo, nuevo) {
   return { movs: base, pedido, hasta: ultimo.end_date || null, generado: ultimo.date_created || null };
 }
 
-async function diagnostico(dias) {
+async function diagnostico(dias, pagoId) {
   const pasos = [];
   const paso = async (nombre, f) => {
     try { pasos.push({ nombre, ...(await f()) }); }
     catch (e) { pasos.push({ nombre, error: String(e && e.message ? e.message : e) }); }
   };
+  if (/^\d{6,}$/.test(String(pagoId || ""))) {
+    await paso("Un pago puntual", async () => {
+      const r = await mp("/v1/payments/" + pagoId);
+      const j = r.json || {};
+      const sub = (o) => o ? { id: o.id, tipo: o.type, nick: o.nickname ? "(tiene)" : undefined } : null;
+      return { status: r.status, error: r.ok ? undefined : (j.message || j.error || r.texto.slice(0, 120)),
+               estado: j.status, monto: j.transaction_amount, fecha: j.date_approved || j.date_created,
+               operacion: j.operation_type, medio: j.payment_method_id, tipoMedio: j.payment_type_id,
+               tarjeta: j.card && { ultimos4: j.card.last_four_digits },
+               pagador: sub(j.payer), cobradorId: j.collector_id, descripcion: j.description,
+               descriptor: j.statement_descriptor };
+    });
+  }
   let yo = "";
   await paso("Tu cuenta", async () => {
     const r = await mp("/users/me");
@@ -240,7 +253,7 @@ export default async function handler(req, res) {
 
   const dias = Math.min(60, Math.max(3, parseInt(req.query.dias, 10) || 20));
   try {
-    if (req.query.modo === "diag") return res.status(200).json({ configurado: true, diag: await diagnostico(dias) });
+    if (req.query.modo === "diag") return res.status(200).json({ configurado: true, diag: await diagnostico(dias, req.query.pago) });
     const yo = await mp("/users/me");
     if (!yo.ok || !yo.json || !yo.json.id) {
       return res.status(200).json({ configurado: true, error: "Mercado Pago rechazó la clave (" + yo.status + "). Revisá MP_ACCESS_TOKEN." });
