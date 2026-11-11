@@ -6881,10 +6881,10 @@ function EditorPresupuestos({ presupuestos, onGuardar, onCerrar }) {
 }
 
 // ---- Mercado Pago: sugerencias de gastos (solo lectura, por /api/mp) ----
-async function pedirMP(sesion, modo, dias = 20, nuevo = false) {
+async function pedirMP(sesion, modo, dias = 20, nuevo = false, pago = "") {
   if (!sesion || !sesion.access_token) return { error: "Sin sesión." };
   try {
-    const r = await fetch(`/api/mp?modo=${modo}&dias=${dias}${nuevo ? "&nuevo=1" : ""}`, { headers: { Authorization: "Bearer " + sesion.access_token } });
+    const r = await fetch(`/api/mp?modo=${modo}&dias=${dias}${nuevo ? "&nuevo=1" : ""}${pago ? "&pago=" + encodeURIComponent(pago) : ""}`, { headers: { Authorization: "Bearer " + sesion.access_token } });
     const t = await r.text();
     try { return { ...JSON.parse(t), status: r.status }; }
     catch (e) { return { error: "La conexión con Mercado Pago no está publicada en esta dirección.", status: r.status }; }
@@ -6920,7 +6920,8 @@ function ConfigMP({ sesion, estado, onRecargar, onCerrar }) {
   const [diag, setDiag] = useState(null);
   const [copiado, setCopiado] = useState(false);
   const uid = (estado && estado.uid) || (sesion && sesion.user && sesion.user.id) || "";
-  const probar = async () => { setDiag({ cargando: true }); setDiag(await pedirMP(sesion, "diag")); };
+  const [pagoId, setPagoId] = useState("");
+  const probar = async () => { setDiag({ cargando: true }); setDiag(await pedirMP(sesion, "diag", 20, false, pagoId.trim())); };
   const paso = (n, txt) => (
     <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
       <span style={{ width: 22, height: 22, borderRadius: 11, background: T.tinta, color: "#fff", fontSize: 12,
@@ -6958,6 +6959,8 @@ function ConfigMP({ sesion, estado, onRecargar, onCerrar }) {
             <button className="chip sm" onClick={probar}>Probar conexión</button>
             <button className="chip sm" onClick={onRecargar}>Traer ahora</button>
           </div>
+          <input value={pagoId} onChange={(e) => setPagoId(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric"
+            placeholder="Opcional: N.º de operación de un pago para mirarlo" style={{ marginTop: 10, fontSize: 13 }} />
           {diag && diag.cargando && <div style={{ fontSize: 12.5, marginTop: 8 }}>Probando…</div>}
           {diag && diag.error && <div style={{ fontSize: 12.5, color: T.rojo, marginTop: 8 }}>{diag.error}</div>}
           {diag && diag.configurado === false && <div style={{ fontSize: 12.5, marginTop: 8 }}>Todavía no están las dos variables en Vercel (o falta volver a publicar).</div>}
