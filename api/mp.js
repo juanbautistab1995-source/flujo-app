@@ -131,13 +131,15 @@ async function porReporte(dias, yo, nuevo) {
   // Si el cobrador sos vos (reservas o pases entre tus cuentas), no es un gasto.
   const propios = new Set();
   await Promise.all(base.slice(0, 40).map(async (m) => {
-    if (m.tipo === "payout" || !/^\d+$/.test(m.id)) return;
+    if (!/^\d+$/.test(m.id)) return;
     try {
       const r = await mp("/v1/payments/" + m.id);
       if (r.ok && r.json) {
         m.detalle = nombreDe(r.json);
         const cob = String(r.json.collector_id || (r.json.collector && r.json.collector.id) || "");
         if (yo && cob === String(yo)) propios.add(m.id);
+        // Una transferencia a un banco que se puede identificar y no es a vos: es un pago más
+        else if (m.tipo === "payout" && cob) { m.tipo = "transfer"; if (!m.detalle) m.detalle = "Transferencia"; }
       }
     } catch (e) { /* sin nombre */ }
   }));
