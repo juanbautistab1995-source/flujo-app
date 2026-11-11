@@ -167,6 +167,12 @@ async function diagnostico(dias, pagoId) {
   if (/^\d{6,}$/.test(String(pagoId || ""))) {
     await paso("Un pago puntual", async () => {
       const r = await mp("/v1/payments/" + pagoId);
+      let cob = null;
+      try {
+        const cid = r.json && (r.json.collector_id || (r.json.collector && r.json.collector.id));
+        if (cid) { const u = await mp("/users/" + cid); cob = u.ok && u.json ? { nick: u.json.nickname, nombre: u.json.first_name, apellido: u.json.last_name,
+          tienda: u.json.company && u.json.company.brand_name, razon: u.json.company && u.json.company.corporate_name } : { status: u.status }; }
+      } catch (e) { /* sin dato */ }
       const j = r.json || {};
       const sub = (o) => o ? { id: o.id, tipo: o.type, nick: o.nickname ? "(tiene)" : undefined } : null;
       return { status: r.status, error: r.ok ? undefined : (j.message || j.error || r.texto.slice(0, 120)),
@@ -174,7 +180,13 @@ async function diagnostico(dias, pagoId) {
                operacion: j.operation_type, medio: j.payment_method_id, tipoMedio: j.payment_type_id,
                tarjeta: j.card && { ultimos4: j.card.last_four_digits },
                pagador: sub(j.payer), cobradorId: j.collector_id, descripcion: j.description,
-               descriptor: j.statement_descriptor };
+               descriptor: j.statement_descriptor, cobrador: cob,
+               claves: Object.keys(j).filter((k) => j[k] !== null && j[k] !== "" && !(Array.isArray(j[k]) && !j[k].length)).slice(0, 60),
+               extra: { ref: j.external_reference, pos: j.pos_id, tienda: j.store_id, orden: j.order && j.order.type,
+                        metadata: j.metadata && JSON.stringify(j.metadata).slice(0, 200),
+                        info: j.additional_info && JSON.stringify(j.additional_info).slice(0, 300),
+                        interaccion: j.point_of_interaction && JSON.stringify(j.point_of_interaction).slice(0, 300),
+                        sponsor: j.sponsor_id, collector: j.collector && JSON.stringify(j.collector).slice(0, 200) } };
     });
   }
   let yo = "";
