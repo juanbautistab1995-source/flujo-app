@@ -6892,14 +6892,14 @@ async function pedirMP(sesion, modo, dias = 20, nuevo = false, pago = "") {
 }
 
 // Pagos de Mercado Pago que todavía no están en Gastos ni descartaste.
-// Lo pagado con tarjeta de crédito no se sugiere: eso llega por el resumen de la tarjeta.
+// Lo pagado con tarjeta de crédito también se sugiere (va a la tarjeta que elijas, sin tocar tu saldo).
 function sugerenciasMP(movsMP, anotador, vistos, conTransf) {
   const ya = new Set((vistos || []).map(String));
   const lista = anotador || [];
   const usados = new Set();
   const unicos = (movsMP || []).filter((m, i, l) => m && l.findIndex((x) => x && String(x.id) === String(m.id) && x.monto === m.monto) === i);
   return unicos.filter((m) => {
-    if (!(m.monto > 0) || m.pago === "credit_card" || ya.has(String(m.id))) return false;
+    if (!(m.monto > 0) || ya.has(String(m.id))) return false;
     // Transferencias a bancos: casi siempre son pases a tus propias cuentas, no gastos
     if (m.tipo === "payout" && !conTransf) return false;
     if (lista.some((g) => g.mp === String(m.id))) return false;
@@ -7041,13 +7041,18 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const [mpTransf, setMpTransf] = useState(false);
   const sugMP = mp && mp.movs ? sugerenciasMP(mp.movs, lista, cfg.mpVistos, mpTransf) : [];
   const nTransfMP = mp && mp.movs && !mpTransf ? sugerenciasMP(mp.movs, lista, cfg.mpVistos, true).length - sugMP.length : 0;
+  // Compras con tarjeta de crédito: la tarjeta (últimos 4) se asocia una vez a uno de tus medios de pago
+  const medioDeTarjeta = (m) => (m.pago === "credit_card" && m.tarjeta ? (cfg.mpTarjetas || {})[m.tarjeta] : null);
+  const faltaTarjeta = (m) => m.pago === "credit_card" && m.tarjeta && !medioDeTarjeta(m);
+  const elegirTarjeta = (ult4, medioId) => setCfg({ ...cfg, mpTarjetas: { ...(cfg.mpTarjetas || {}), [ult4]: medioId } });
   const gastoDeMP = (m) => {
     const det = (limpiarComercio(m.detalle) || m.detalle || "Mercado Pago").trim();
+    const medioT = medioDeTarjeta(m);
     return { id: "mp" + m.id, mp: String(m.id), fecha: m.fecha, monto: Math.round(m.monto),
-             detalle: det.charAt(0).toUpperCase() + det.slice(1), medio: "efectivo",
+             detalle: det.charAt(0).toUpperCase() + det.slice(1), medio: medioT || "efectivo",
              categoria: adivinarConAprendido(det, aprendido).cat, origen: "mp",
-             // Baja el saldo solo si es posterior al último "Ajustar con el banco"
-             restoCaja: cfg.ultimoAjuste && m.fecha > cfg.ultimoAjuste ? Math.round(m.monto) : 0 };
+             // Baja el saldo solo si es posterior al último "Ajustar con el banco" y no fue con tarjeta de crédito
+             restoCaja: !medioT && cfg.ultimoAjuste && m.fecha > cfg.ultimoAjuste ? Math.round(m.monto) : 0 };
   };
   const anotarMP = (items) => {
     const nuevos = items.map(gastoDeMP);
@@ -7190,11 +7195,20 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
                                        borderTop: `1px solid ${T.linea}`, marginTop: 6 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.detalle}</div>
-                  <div style={{ fontSize: 11.5, color: T.tenue }}>{etiqDia(m.fecha)} · {nomCat(g.categoria)}</div>
+                  <div style={{ fontSize: 11.5, color: T.tenue }}>{etiqDia(m.fecha)} · {nomCat(g.categoria)}
+                    {m.pago === "credit_card" ? ` · ${nomMedio(g.medio) === "Otro" || g.medio === "efectivo" ? "tarjeta" : nomMedio(g.medio)}${m.tarjeta ? " ····" + m.tarjeta : ""}` : ""}</div>
+                  {faltaTarjeta(m) && (
+                    <select value="" onChange={(e) => e.target.value && elegirTarjeta(m.tarjeta, e.target.value)}
+                      style={{ marginTop: 4, fontSize: 12, padding: "4px 6px" }}>
+                      <option value="">¿Qué tarjeta es ····{m.tarjeta}?</option>
+                      {medios.filter((x) => x.id !== "efectivo").map((x) => <option key={x.id} value={x.id}>{x.nombre}</option>)}
+                    </select>
+                  )}
                 </div>
                 <span className="num" style={{ fontSize: 13.5, fontWeight: 620 }}>{plata(m.monto)}</span>
-                <button onClick={() => anotarMP([m])} aria-label="Anotar"
-                  style={{ width: 30, height: 30, borderRadius: 15, background: T.verde, color: "#fff", fontSize: 15, flex: "none" }}>✓</button>
+                <button onClick={() => anotarMP([m])} aria-label="Anotar" disabled={faltaTarjeta(m)}
+                  style={{ width: 30, height: 30, borderRadius: 15, background: T.verde, color: "#fff", fontSize: 15, flex: "none",
+                           opacity: faltaTarjeta(m) ? 0.35 : 1 }}>✓</button>
                 <button onClick={() => ignorarMP(m)} aria-label="Descartar"
                   style={{ width: 30, height: 30, borderRadius: 15, border: `1px solid ${T.linea}`, color: T.tenue, fontSize: 13, flex: "none" }}>✕</button>
               </div>
@@ -7209,8 +7223,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
             style={{ fontSize: 12.5, color: T.ambar, fontWeight: 600, marginTop: 10, display: "block" }}>
             Ya los tengo anotados · descartar todos
           </button>
-          <button className="btn" style={{ marginTop: 10 }} onClick={() => anotarMP(sugMP)}>
-            Anotar {sugMP.length === 1 ? "el gasto" : `los ${sugMP.length}`} · {plata(sugMP.reduce((a, m) => a + m.monto, 0))}
+          <button className="btn" style={{ marginTop: 10 }} onClick={() => anotarMP(sugMP.filter((m) => !faltaTarjeta(m)))}>
+            Anotar {sugMP.filter((m) => !faltaTarjeta(m)).length === 1 ? "el gasto" : `los ${sugMP.filter((m) => !faltaTarjeta(m)).length}`} · {plata(sugMP.filter((m) => !faltaTarjeta(m)).reduce((a, m) => a + m.monto, 0))}
           </button>
         </div>
       )}
@@ -10578,6 +10592,7 @@ export default function App() {
                                 saldoHoy: c.saldoHoy != null ? c.saldoHoy : cfg.saldoHoy,
                                 ultimoAjuste: c.ultimoAjuste || cfg.ultimoAjuste,
                                 mpVistos: c.mpVistos || cfg.mpVistos,
+                                mpTarjetas: c.mpTarjetas || cfg.mpTarjetas,
                                 presupuestos: Array.isArray(c.presupuestos) ? c.presupuestos : cfg.presupuestos })}
                               medios={medios} movs={movs} onVerMovs={() => setTab("movs")} />}
       {tab === "movs" && (
