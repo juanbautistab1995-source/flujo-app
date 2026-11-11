@@ -160,6 +160,8 @@ async function porReporte(dias, yo, nuevo) {
 
 async function diagnostico(dias, pagoId) {
   const pasos = [];
+  let yoId = "";
+  try { const me = await mp("/users/me"); yoId = me.json && me.json.id ? String(me.json.id) : ""; } catch (e) { /* nada */ }
   const paso = async (nombre, f) => {
     try { pasos.push({ nombre, ...(await f()) }); }
     catch (e) { pasos.push({ nombre, error: String(e && e.message ? e.message : e) }); }
@@ -187,6 +189,20 @@ async function diagnostico(dias, pagoId) {
                         info: j.additional_info && JSON.stringify(j.additional_info).slice(0, 300),
                         interaccion: j.point_of_interaction && JSON.stringify(j.point_of_interaction).slice(0, 300),
                         sponsor: j.sponsor_id, collector: j.collector && JSON.stringify(j.collector).slice(0, 200) } };
+    });
+  }
+  await paso("Transferencias (búsqueda)", async () => {
+    const r = await mp(`/v1/payments/search?sort=date_created&criteria=desc&operation_type=money_transfer&limit=10`);
+    const res = (r.json && r.json.results) || [];
+    return { status: r.status, total: res.length, error: r.ok ? undefined : (r.json && (r.json.message || r.json.error)) || r.texto.slice(0, 120),
+             ejemplos: res.slice(0, 5).map((p) => ({ id: String(p.id).slice(-4), fecha: fechaAR(p.date_created), monto: p.transaction_amount,
+               medio: p.payment_type_id, estado: p.status, cobradorEsYo: String(p.collector_id || "") === String(yoId || "") })) };
+  });
+  if (/^\d{6,}$/.test(String(pagoId || ""))) {
+    await paso("¿La búsqueda ve ese pago?", async () => {
+      const r = await mp(`/v1/payments/search?id=${pagoId}`);
+      const res = (r.json && r.json.results) || [];
+      return { status: r.status, encontrado: res.length > 0, error: r.ok ? undefined : (r.json && (r.json.message || r.json.error)) || r.texto.slice(0, 120) };
     });
   }
   let yo = "";
