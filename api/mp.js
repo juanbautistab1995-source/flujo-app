@@ -69,7 +69,8 @@ const nombreDe = (p) => (p && (p.description || p.statement_descriptor
   || (p.collector && p.collector.nickname) || (p.additional_info && p.additional_info.items
     && p.additional_info.items[0] && p.additional_info.items[0].title))) || "";
 
-// Camino A: la búsqueda de pagos, quedándonos con los que pagaste vos
+// Camino A: la búsqueda de pagos. Trae también las compras con tarjeta hechas con Mercado Pago:
+// ahí el pagador viene oculto, así que sirve todo pago aprobado donde el cobrador NO sos vos.
 async function porBusqueda(dias, yo) {
   const base = `/v1/payments/search?sort=date_created&criteria=desc&range=date_created`
     + `&begin_date=NOW-${dias}DAYS&end_date=NOW&limit=100`;
@@ -80,15 +81,24 @@ async function porBusqueda(dias, yo) {
     lista.forEach((p) => {
       const pagador = String((p.payer && p.payer.id) || "");
       const cobrador = String(p.collector_id || (p.collector && p.collector.id) || "");
-      if (p.status !== "approved" || pagador !== String(yo) || cobrador === String(yo)) return;
+      if (p.status !== "approved" || (pagador && pagador !== String(yo)) || cobrador === String(yo)) return;
       vistos.set(String(p.id), {
         id: String(p.id), fecha: fechaAR(p.date_approved || p.date_created),
-        monto: Math.round(num(p.transaction_amount)), detalle: nombreDe(p) || "Mercado Pago",
+        monto: Math.round(num(p.transaction_amount)), detalle: nombreDe(p), cobrador,
         tipo: p.operation_type || "", pago: p.payment_type_id || "",
+        tarjeta: (p.card && p.card.last_four_digits) || "", marca: p.payment_method_id || "",
       });
     });
   }
-  return [...vistos.values()];
+  const lista = [...vistos.values()];
+  // El nombre del comercio es el usuario de Mercado Pago que cobró
+  const nombres = new Map();
+  await Promise.all([...new Set(lista.filter((m) => !m.detalle && m.cobrador).map((m) => m.cobrador))].slice(0, 25)
+    .map(async (id) => {
+      try { const r = await mp("/users/" + id); if (r.ok && r.json) nombres.set(id, r.json.nickname || ""); } catch (e) { /* sin nombre */ }
+    }));
+  lista.forEach((m) => { if (!m.detalle) m.detalle = nombres.get(m.cobrador) || "Mercado Pago"; });
+  return lista;
 }
 
 // Camino B: el reporte de movimientos de la cuenta (lo que salió de tu dinero en cuenta)
@@ -258,13 +268,14 @@ export default async function handler(req, res) {
     if (!yo.ok || !yo.json || !yo.json.id) {
       return res.status(200).json({ configurado: true, error: "Mercado Pago rechazó la clave (" + yo.status + "). Revisá MP_ACCESS_TOKEN." });
     }
-    let movs = await porBusqueda(dias, yo.json.id);
-    let fuente = "pagos", extra = {};
-    if (!movs.length) {
-      const r = await porReporte(dias, yo.json.id, req.query.nuevo === "1");
-      movs = r.movs; fuente = "reporte";
-      extra = { pedido: r.pedido, hasta: r.hasta, generado: r.generado, sinReporte: !!r.sinReporte };
-    }
+    // Dos fuentes que se complementan: la búsqueda (compras con tarjeta y pagos) y el reporte de tu saldo
+    let movs = [], fuente = "pagos", extra = {};
+    try { movs = await porBusqueda(dias, yo.json.id); } catch (e) { movs = []; }
+    const r = await porReporte(dias, yo.json.id, req.query.nuevo === "1");
+    extra = { pedido: r.pedido, hasta: r.hasta, generado: r.generado, sinReporte: !!r.sinReporte };
+    const ids = new Set(movs.map((m) => m.id));
+    r.movs.forEach((m) => { if (!ids.has(m.id)) movs.push(m); });
+    fuente = "pagos+reporte";
     movs.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
     return res.status(200).json({ configurado: true, fuente, movs, ...extra });
   } catch (e) {
