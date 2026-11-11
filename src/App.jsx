@@ -6613,6 +6613,12 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
   const efec = (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo";
   // Sin ninguna pista de con qué se pagó (por ejemplo un comprobante de transferencia): no tocamos el saldo
   const dineroDisp = /dinero disponible/.test(t);
+  // Si con Mercado Pago usás una sola tarjeta, es la que se supone cuando el comprobante no dice con qué se pagó
+  let supuesto = false;
+  if (!medio && !dineroDisp) {
+    const unicas = [...new Set(Object.values(mpTarjetas || {}).filter((id) => medios.some((m) => m.id === id)))];
+    if (unicas.length === 1) { medio = unicas[0]; supuesto = true; }
+  }
   const sinMedio = !medio && (conTarjeta || !dineroDisp);
   if (!medio) medio = efec;
   // Comercio: la línea anterior a "Pagaste", o la que sigue al importe; si es una transferencia, el nombre del resumen
@@ -6648,6 +6654,7 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
   return { monto, detalle, medio, fecha, categoria,
            ...(cuotas > 1 && medio !== efec ? { cuotas } : {}),
            ...(ult4 ? { tarjeta: ult4 } : {}),
+           ...(supuesto ? { nota: "Medio supuesto (el comprobante no dice con qué pagaste): revisalo" } : {}),
            ...(sinMedio ? { sinMedio: true, nota: "Revisá con qué pagaste (el comprobante no lo dice)" } : {}) };
 }
 
@@ -10336,7 +10343,7 @@ export default function App() {
         saldo -= resto;
         apr = aprender(apr, g.detalle, g.categoria);
         // Si el comprobante dice qué tarjeta es (····4180 → ICBC), la recordamos para los próximos
-        if (compro && g.tarjeta && !g.sinMedio && g.medio !== "efectivo" && !tarjMP[g.tarjeta]) tarjMP[g.tarjeta] = g.medio;
+        if (compro && g.tarjeta && !g.sinMedio && g.medio !== "efectivo" && !tarjMP[g.tarjeta] && /mercado ?pago/i.test(r.texto)) tarjMP[g.tarjeta] = g.medio;
       });
       if (viejos.length) await sb.from("bandeja").delete().in("id", viejos);
       if (!nuevos.length) return "No hay nada nuevo de Siri (lo último ya está en Gastos).";
