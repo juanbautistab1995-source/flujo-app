@@ -6628,12 +6628,12 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
   const malas = /^(detalle|comprobante|compartir|aprobado|pago|transferencia|origen|destino|motivo|con promo|promo|[-$\d.,\s]+)/i;
   // "Comprobante de transferencia": el nombre es el de DESTINO (el segundo bloque de "Origen y destino")
   const iOD = lineas.findIndex((l) => /^origen y destino/i.test(sinTildes(l)));
-  if (iOD >= 0) {
+  if (iOD >= 0 && /comprobante de transferencia/.test(t)) {
     let vioCuit = false;
     for (let i = iOD + 1; i < lineas.length; i++) {
       const l = lineas[i], n = sinTildes(l);
       if (/cuit|cuil/.test(n)) { vioCuit = true; continue; }
-      if (vioCuit && !/\d/.test(l) && !/^(mercado pago|n\S{0,3} de operacion|codigo|motivo|origen|destino)/.test(n)) { nombre = l; break; }
+      if (vioCuit && !/\d/.test(l) && !/^(mercado pago|n\S{0,3} de operacion|codigo|motivo|origen|destino|nombre en el resumen|referencia|acciones)/.test(n)) { nombre = l; break; }
     }
   }
   if (nombre) { /* ya lo tenemos */ }
