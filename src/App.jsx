@@ -7130,6 +7130,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const [verAtajo, setVerAtajo] = useState(false);
   // Mercado Pago: se consulta al entrar a Gastos
   const [mp, setMp] = useState(null);
+  const [mpCargando, setMpCargando] = useState(false);
+  const [mpCuando, setMpCuando] = useState(null);
   const [verMP, setVerMP] = useState(false);
   const [mpTodos, setMpTodos] = useState(false);
   const [verPres, setVerPres] = useState(false);
@@ -7137,9 +7139,10 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
     // Pedimos un reporte nuevo a Mercado Pago como máximo cada 50 minutos
     let nuevo = false;
     try { nuevo = Date.now() - (+localStorage.getItem("mp:pedido") || 0) > 50 * 60 * 1000; } catch (e) { nuevo = true; }
+    setMpCargando(true);
     const r = await pedirMP(sesion, "traer", 20, nuevo);
     if (nuevo && r && r.pedido) { try { localStorage.setItem("mp:pedido", String(Date.now())); } catch (e) { /* nada */ } }
-    setMp(r);
+    setMp(r); setMpCuando(new Date()); setMpCargando(false);
   }, [sesion]);
   useEffect(() => { if (sesion) cargarMP(); }, [sesion, cargarMP]);
   const [mpTransf, setMpTransf] = useState(false);
@@ -7279,6 +7282,14 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
       {verAtajo && <ConfigAtajo sesion={sesion} onTraer={onTraerSiri} onCerrar={() => setVerAtajo(false)} />}
       {verMP && <ConfigMP sesion={sesion} estado={mp} onRecargar={cargarMP} onCerrar={() => setVerMP(false)} />}
 
+      {mp && (
+        <div style={{ fontSize: 11.5, color: T.tenue, marginTop: 8 }}>
+          {mpCargando ? "Mercado Pago: consultando…"
+            : mp.error ? "Mercado Pago: " + mp.error
+            : `Mercado Pago · actualizado ${mpCuando ? mpCuando.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) : ""}`
+              + ` · ${(mp.movs || []).length} movimientos (${(mp.movs || []).filter((m) => m.pago === "credit_card").length} con tarjeta) · ${sugMP.length} por anotar`}
+        </div>
+      )}
       {nTransfMP > 0 && (
         <button onClick={() => setMpTransf(true)} style={{ fontSize: 12.5, color: T.suave, marginTop: 10, textAlign: "left", display: "block" }}>
           {nTransfMP} {nTransfMP === 1 ? "transferencia a un banco" : "transferencias a bancos"} sin sugerir (suelen ser a tus cuentas) · <b style={{ color: T.ambar }}>Ver</b>
