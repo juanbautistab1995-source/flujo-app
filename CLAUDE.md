@@ -32,6 +32,10 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   Es independiente: no toca `movs` ni la proyección. La lista completa del flujo (Movimientos) se abre desde ahí.
 - **Saldo vivo**: anotar un gasto en efectivo/débito baja `saldoHoy` en el momento (`restoCaja` guarda cuánto, para revertir).
   "Ajustar con el banco" pone el saldo real y la diferencia queda como "Gastos sin anotar" (`sinAnotar`).
+- **Reintegros en Gastos**: el gasto del anotador puede llevar `devPct`/`devTope`/`devDestino` ("tarjeta" o "caja")/`devMes`. Liquidar e importar resumen
+  se los pasan al movimiento (el motor los calcula con `devolucionDe`). El texto de Siri entiende "reintegro del 25% (tope X) a la primer cuota / a la caja".
+- **Editar una tarjeta** (Mis medios de pago) conserva sus ciclos y demás datos. Si a una tarjeta le falta el ciclo de un mes con resumen importado,
+  la carga lo rearma hacia atrás como estimado (`completarCiclosPerdidos`).
 - **Liquidar** (`liquidarAnotador`): pasa gastos del anotador a `movs` (efectivo como ya pagado: ajuste 0 + aplicado 0;
   tarjeta a su resumen; compartidos con persona). El gasto queda con `mov` y no se puede volver a liquidar ni editar desde el anotador.
 - **Panel del sueldo** (`PanelSueldo` en Hoy): libre para gastar = saldo − falta pagar + falta cobrar, por día hasta el fin del período,
