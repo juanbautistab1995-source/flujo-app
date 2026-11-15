@@ -2346,7 +2346,7 @@ function Medios({ medios, movs, onGuardar, onCerrar }) {
       // Lo que el form no muestra (ciclos reales, tasa, deuda…) se conserva tal cual
       ...orig,
       id, nombre: e.nombre.trim(),
-      corto: (e.corto || e.nombre).trim().slice(0, 8),
+      corto: (e.corto || e.nombre).trim().slice(0, 12),
       banco: e.banco, marca: e.marca,
       cierre: Math.min(31, Math.max(1, +e.cierre || 25)),
       vto: Math.min(28, Math.max(1, +e.vto || 10)),
@@ -6734,9 +6734,30 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
            ...(sinMedio ? { sinMedio: true, nota: "Revisá con qué pagaste (el comprobante no lo dice)" } : {}) };
 }
 
+// Alto real de la pantalla visible. En iPhone, con el teclado abierto, Safari achica y corre el "viewport visual":
+// si la pantalla fija no lo sigue, el cursor de los campos queda flotando en otro lado.
+function useViewportVisible() {
+  const leer = () => {
+    const vv = typeof window !== "undefined" && window.visualViewport;
+    return vv ? { top: vv.offsetTop, alto: vv.height } : { top: 0, alto: typeof window !== "undefined" ? window.innerHeight : 800 };
+  };
+  const [v, setV] = useState(leer);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    const f = () => setV(leer());
+    vv.addEventListener("resize", f); vv.addEventListener("scroll", f);
+    return () => { vv.removeEventListener("resize", f); vv.removeEventListener("scroll", f); };
+  }, []);
+  return v;
+}
+
 function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, onBorrar, onCerrar }) {
   const ini = inicial || {};
+  const vista = useViewportVisible();
   const [monto, setMonto] = useState(inicial ? String(Math.round(ini.monto)) : "");
+  // Al editar, el monto arranca "seleccionado": el primer número que tocás lo reemplaza
+  const [reemplazar, setReemplazar] = useState(!!inicial);
   const [detalle, setDetalle] = useState(ini.detalle || "");
   const [medio, setMedio] = useState(ini.medio || (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo");
   // La categoría queda "fija" solo si la elegiste a mano; si no, sigue lo que escribís
@@ -6755,21 +6776,32 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   const [devTope, setDevTope] = useState(ini.devTope ? String(ini.devTope) : "");
   const [devDestino, setDevDestino] = useState(ini.devDestino === "tarjeta" ? "tarjeta" : "caja");
   const [devMes, setDevMes] = useState(ini.devMes || "");
-  const [verMas, setVerMas] = useState(!!(ini.persona || ini.nota || (ini.cuotas || 1) > 1 || ini.devPct || ini.devTope));
+  // Qué opción extra está abierta (una por vez) y si estás escribiendo con el teclado del iPhone
+  const [abierto, setAbierto] = useState("");
+  const [escribiendo, setEscribiendo] = useState(false);
+  const [confirmaBorrar, setConfirmaBorrar] = useState(false);
 
   const n = parseInt(monto || "0", 10);
   const sug = adivinarConAprendido(detalle, aprendido);
   const catFinal = cat || sug.cat;
   const tecla = (t) => {
+    if (reemplazar) {
+      setReemplazar(false);
+      if (t === "b") return setMonto("");
+      if (t === "000") return setMonto("");
+      return setMonto(t === "0" ? "" : t);
+    }
     if (t === "b") return setMonto(monto.slice(0, -1));
     if (t === "000") return setMonto(monto && monto.length < 8 ? monto + "000" : monto);
     if (monto.length < 10) setMonto((monto === "0" ? "" : monto) + t);
   };
+  const esTarjeta = medio !== "efectivo";
   const quien = (agregandoPersona ? nuevaPersona.trim() : persona) || "";
   const parte = quien ? Math.round(n * (pct / 100)) : 0;
+  const cuotasOk = esTarjeta ? cuotas : 1;
   const dPct = Math.min(100, +devPct || 0), dTope = +devTope || 0;
   const hayDev = !pagoOtro && (dPct > 0 || dTope > 0);
-  const destinoDev = medio === "efectivo" ? "caja" : devDestino;
+  const destinoDev = esTarjeta ? devDestino : "caja";
   const cuandoDev = devMes || (destinoDev === "caja" ? "mismo" : "siguiente");
   const montoDev = hayDev ? Math.round(dPct > 0 ? Math.min(n * dPct / 100, dTope > 0 ? dTope : Infinity) : dTope) : 0;
   const guardar = () => {
@@ -6784,7 +6816,7 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
       id: ini.id || "a" + Date.now(),
       fecha, monto: n, detalle: detalle.trim() || nomCat(catFinal),
       medio, categoria: catFinal, ...(cat ? { catManual: true } : {}),
-      ...(medio !== "efectivo" && cuotas > 1 ? { cuotas } : {}),
+      ...(cuotasOk > 1 ? { cuotas: cuotasOk } : {}),
       ...(quien ? { persona: quien, pct: pct / 100, pagadoPor: pagoOtro ? "otro" : "yo" } : {}),
       ...(nota.trim() ? { nota: nota.trim() } : {}),
       ...(hayDev ? { ...(dPct > 0 ? { devPct: dPct } : {}), ...(dTope > 0 ? { devTope: dTope } : {}),
@@ -6795,181 +6827,243 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   const ayer = sumaDias(hoy, -1);
   // Las categorías: la sugerida primero, después el resto
   const cats = [catFinal, ...CATEGORIAS.filter((c) => c !== catFinal && c !== "Préstamos")];
-  const fila = { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 };
-  const rotulo = { fontSize: 11.5, color: T.tenue, margin: "12px 0 6px", fontWeight: 560 };
+  // "Provinci" (nombre corto recortado) se muestra como el banco entero
+  const etiq = (m) => (m.banco && m.banco !== "Otro" && m.corto && m.corto.length === 8 && m.banco.length > 8
+    && m.banco.length <= 12 && sinTildes(m.banco).startsWith(sinTildes(m.corto)) ? m.banco : m.corto || m.nombre);
+  const medioSel = medios.find((m) => m.id === medio);
+  const fechaTxt = fecha === hoy ? "Hoy" : fecha === ayer ? "Ayer"
+    : new Date(fecha + "T12:00:00").toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" });
+
+  // Resumen de una línea debajo del monto
+  const resumen = [
+    medioSel ? etiq(medioSel) : "",
+    cuotasOk > 1 && n > 0 ? `${cuotasOk} cuotas de ${plata(Math.round(n / cuotasOk))}` : "",
+    quien && n > 0 ? (pagoOtro ? `pagó ${quien}` : `${quien} te debe ${plata(parte)}`) : "",
+    hayDev && n > 0 ? `te devuelven ${plata(montoDev)}` : "",
+  ].filter(Boolean).join(" · ");
+
+  const fila = { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2,
+                 WebkitMaskImage: "linear-gradient(90deg, #000 93%, transparent)", maskImage: "linear-gradient(90deg, #000 93%, transparent)" };
+  const rotulo = { fontSize: 11.5, color: T.tenue, margin: "16px 0 7px", fontWeight: 600, letterSpacing: ".02em", textTransform: "uppercase" };
+  const foco = { onFocus: () => setEscribiendo(true), onBlur: () => setEscribiendo(false) };
+  const alListo = (e) => { if (e.key === "Enter") e.currentTarget.blur(); };
+
+  // Opciones extra: una fila por opción, con lo elegido a la derecha; se abre de a una
+  const opcion = (k, titulo, valor, activo, cuerpo) => (
+    <div key={k} style={{ borderTop: `1px solid ${T.linea}` }}>
+      <button onClick={() => setAbierto(abierto === k ? "" : k)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "13px 2px", textAlign: "left" }}>
+        <span style={{ fontSize: 14.5, fontWeight: 560, flex: "0 0 auto" }}>{titulo}</span>
+        <span style={{ flex: 1, minWidth: 0, textAlign: "right", fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis",
+                       whiteSpace: "nowrap", color: activo ? T.verde : T.tenue, fontWeight: activo ? 600 : 400 }}>{valor}</span>
+        <span style={{ color: T.tenue, fontSize: 13, transform: abierto === k ? "rotate(90deg)" : "none",
+                       transition: "transform .15s" }}>›</span>
+      </button>
+      {abierto === k && <div style={{ paddingBottom: 14 }}>{cuerpo}</div>}
+    </div>
+  );
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
-                  display: "flex", flexDirection: "column", maxWidth: 470, margin: "0 auto" }}>
-      <div style={{ padding: "12px 16px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
+    <div style={{ position: "fixed", left: 0, right: 0, top: vista.top, height: vista.alto, background: T.papel,
+                                 zIndex: 85, display: "flex", flexDirection: "column", maxWidth: 470, margin: "0 auto",
+                                 minHeight: 0 }}>
+      <div style={{ padding: "12px 16px 4px", display: "flex", justifyContent: "space-between", alignItems: "center", flex: "0 0 auto" }}>
+        <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave, minWidth: 64, textAlign: "left" }}>Cancelar</button>
         <span style={{ fontSize: 14.5, fontWeight: 620 }}>{inicial ? "Editar gasto" : "Anotar gasto"}</span>
         {inicial
-          ? <button onClick={() => { onBorrar(ini.id); onCerrar(); }} style={{ fontSize: 14, color: T.rojo, fontWeight: 600 }}>Borrar</button>
-          : <span style={{ width: 52 }} />}
+          ? <button onClick={() => setConfirmaBorrar(true)}
+              style={{ fontSize: 14, color: T.rojo, fontWeight: 600, minWidth: 64, textAlign: "right" }}>Borrar</button>
+          : <span style={{ minWidth: 64 }} />}
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px", minHeight: 0 }}>
-        <div className="plata" style={{ fontSize: 40, textAlign: "center", marginTop: 6, color: n > 0 ? T.tinta : T.tenue }}>
-          {n > 0 ? plata(n) : "$0"}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px", minHeight: 0, WebkitOverflowScrolling: "touch" }}>
+        <button onClick={() => { if (document.activeElement) document.activeElement.blur(); }}
+          style={{ display: "block", width: "100%", textAlign: "center", padding: "8px 0 2px" }} aria-label="Monto">
+          <span className="plata" style={{ fontSize: 44, padding: "0 10px", borderRadius: 12,
+                 color: n > 0 ? T.tinta : T.tenue, background: reemplazar && n > 0 ? T.ambarBg : "transparent" }}>
+            {n > 0 ? plata(n) : "$0"}
+          </span>
+        </button>
+        <div style={{ textAlign: "center", fontSize: 12.5, color: T.suave, minHeight: 18, marginTop: 2 }}>
+          {reemplazar && n > 0 ? "Tocá un número para cambiar el monto" : resumen || " "}
         </div>
-        {quien && n > 0 && (
-          <div style={{ textAlign: "center", fontSize: 12.5, color: T.suave, marginTop: 3 }}>
-            {pagoOtro ? `Pagó ${quien} · tu parte ${plata(n - parte)}` : `${quien} te debe ${plata(parte)}`}
-          </div>
-        )}
-        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="Nombre del gasto (ej: Verdulería, Uber)"
-          style={{ marginTop: 10, textAlign: "center", fontSize: 16, background: "transparent",
-                   border: "none", borderBottom: `1px solid ${T.linea}`, borderRadius: 0 }} />
 
-        <div style={rotulo}>Categoría {!cat && detalle.trim() && (sug.aprendida ? "· la aprendí de vos" : "· sugerida")}</div>
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} {...foco} onKeyDown={alListo}
+          placeholder="¿En qué? (ej: verdulería, Uber)" enterKeyHint="done" autoCapitalize="sentences" autoComplete="off"
+          style={{ marginTop: 12, fontSize: 16, padding: "12px 14px", borderRadius: 12 }} />
+
+        <div style={rotulo}>Categoría{!cat && detalle.trim() ? (sug.aprendida ? " · la aprendí de vos" : " · sugerida") : ""}</div>
         <div className="scroll" style={fila}>
           {cats.map((c) => (
             <button key={c} className={"chip sm" + (catFinal === c ? " on" : "")}
-              onClick={() => setCat(c === cat ? "" : c)}>{nomCat(c)}</button>
+              onClick={() => setCat(c === cat ? "" : c)} style={{ flex: "0 0 auto" }}>{nomCat(c)}</button>
           ))}
+          <span style={{ flex: "0 0 18px" }} />
         </div>
 
         <div style={rotulo}>Con qué</div>
         <div className="scroll" style={fila}>
           {medios.map((m) => (
             <button key={m.id} className={"chip sm" + (medio === m.id ? " on" : "")}
-              onClick={() => setMedio(m.id)}>{m.corto || m.nombre}</button>
+              onClick={() => setMedio(m.id)} style={{ flex: "0 0 auto" }}>{etiq(m)}</button>
           ))}
+          <span style={{ flex: "0 0 18px" }} />
         </div>
 
         <div style={rotulo}>Cuándo</div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button className={"chip sm" + (fecha === hoy ? " on" : "")} onClick={() => setFecha(hoy)}>Hoy</button>
           <button className={"chip sm" + (fecha === ayer ? " on" : "")} onClick={() => setFecha(ayer)}>Ayer</button>
-          <input type="date" value={fecha} max={hoy} onChange={(e) => e.target.value && setFecha(e.target.value)}
-            style={{ flex: 1, padding: "5px 9px", fontSize: 14, borderRadius: 999 }} />
+          <label className={"chip sm" + (fecha !== hoy && fecha !== ayer ? " on" : "")}
+            style={{ position: "relative", flex: 1, textAlign: "center", overflow: "hidden" }}>
+            {fecha !== hoy && fecha !== ayer ? fechaTxt : "Otro día"}
+            <input type="date" value={fecha} max={hoy} onChange={(e) => e.target.value && setFecha(e.target.value)}
+              aria-label="Elegir fecha" style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%" }} />
+          </label>
         </div>
 
-        {!verMas && (
-          <button onClick={() => setVerMas(true)}
-            style={{ marginTop: 12, fontSize: 13, color: T.ambar, fontWeight: 600, width: "100%" }}>
-            + Compartido, cuotas, reintegro o nota
-          </button>
-        )}
-        {verMas && (
-          <>
-            <div style={rotulo}>¿Compartido?</div>
-            <div className="scroll" style={fila}>
-              <button className={"chip sm" + (!quien ? " on" : "")}
-                onClick={() => { setPersona(""); setAgregandoPersona(false); }}>Solo mío</button>
-              {personas.map((p) => (
-                <button key={p} className={"chip sm" + (!agregandoPersona && persona === p ? " on" : "")}
-                  onClick={() => { setPersona(p); setAgregandoPersona(false); }}>{p}</button>
+        <div style={{ marginTop: 18 }}>
+          {opcion("comp", "Compartido",
+            quien ? (pagoOtro ? `Pagó ${quien}` : `${quien} · ${pct}%`) : "Solo mío", !!quien,
+            <>
+              <div className="scroll" style={fila}>
+                <button className={"chip sm" + (!quien ? " on" : "")} style={{ flex: "0 0 auto" }}
+                  onClick={() => { setPersona(""); setAgregandoPersona(false); }}>Solo mío</button>
+                {personas.map((p) => (
+                  <button key={p} className={"chip sm" + (!agregandoPersona && persona === p ? " on" : "")} style={{ flex: "0 0 auto" }}
+                    onClick={() => { setPersona(p); setAgregandoPersona(false); }}>{p}</button>
+                ))}
+                <button className={"chip sm" + (agregandoPersona ? " on" : "")} style={{ flex: "0 0 auto" }}
+                  onClick={() => setAgregandoPersona(true)}>+ Otra persona</button>
+                <span style={{ flex: "0 0 18px" }} />
+              </div>
+              {agregandoPersona && (
+                <input value={nuevaPersona} onChange={(e) => setNuevaPersona(e.target.value)} {...foco} onKeyDown={alListo}
+                  placeholder="Nombre" enterKeyHint="done" style={{ marginTop: 8, padding: "10px 12px", fontSize: 16 }} />
+              )}
+              {quien && (
+                <>
+                  <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    {[50, 33, 100].map((v) => (
+                      <button key={v} className={"chip sm" + (pct === v ? " on" : "")} onClick={() => setPct(v)}>
+                        {v === 100 ? "Todo de " + quien : v === 50 ? "Mitad" : "Un tercio"}
+                      </button>
+                    ))}
+                    <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: T.suave }}>
+                      <input inputMode="numeric" value={pct} {...foco}
+                        onChange={(e) => setPct(Math.min(100, Math.max(0, parseInt(e.target.value.replace(/\D/g, "") || "0", 10))))}
+                        style={{ width: 54, padding: "6px 8px", fontSize: 16, textAlign: "center" }} />%
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button className={"chip sm" + (!pagoOtro ? " on" : "")} onClick={() => setPagoOtro(false)}>Pagué yo</button>
+                    <button className={"chip sm" + (pagoOtro ? " on" : "")} onClick={() => setPagoOtro(true)}>Pagó {quien}</button>
+                  </div>
+                </>
+              )}
+            </>)}
+
+          {esTarjeta && opcion("cuo", "Cuotas",
+            cuotasOk > 1 ? `${cuotasOk} de ${plata(Math.round(n / cuotasOk))}` : "1 pago", cuotasOk > 1,
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[1, 3, 6, 9, 12, 18].map((c) => (
+                <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
+                  onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c}</button>
               ))}
-              <button className={"chip sm" + (agregandoPersona ? " on" : "")}
-                onClick={() => setAgregandoPersona(true)}>+ Otra persona</button>
-            </div>
-            {agregandoPersona && (
-              <input value={nuevaPersona} onChange={(e) => setNuevaPersona(e.target.value)} placeholder="Nombre"
-                style={{ marginTop: 8, padding: "8px 12px", fontSize: 15 }} />
-            )}
-            {quien && (
-              <>
-                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                  {[50, 33, 100].map((v) => (
-                    <button key={v} className={"chip sm" + (pct === v ? " on" : "")} onClick={() => setPct(v)}>
-                      {v === 100 ? "Todo de " + quien : v === 50 ? "Mitad y mitad" : "Un tercio"}
-                    </button>
-                  ))}
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: T.suave }}>
-                    <input inputMode="numeric" value={pct}
-                      onChange={(e) => setPct(Math.min(100, Math.max(0, parseInt(e.target.value.replace(/\D/g, "") || "0", 10))))}
-                      style={{ width: 56, padding: "5px 8px", fontSize: 14, textAlign: "center" }} />% de {quien}
-                  </span>
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button className={"chip sm" + (!pagoOtro ? " on" : "")} onClick={() => setPagoOtro(false)}>Pagué yo</button>
-                  <button className={"chip sm" + (pagoOtro ? " on" : "")} onClick={() => setPagoOtro(true)}>Pagó {quien}</button>
-                </div>
-              </>
-            )}
-            {medio !== "efectivo" && (
-              <>
-                <div style={rotulo}>Cuotas</div>
-                <div className="scroll" style={fila}>
-                  {[1, 3, 6, 9, 12, 18].map((c) => (
-                    <button key={c} className={"chip sm" + (cuotas === c ? " on" : "")}
-                      onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
-                  ))}
-                </div>
-              </>
-            )}
-            {!pagoOtro && (
-              <>
-                <div style={rotulo}>¿El banco te devuelve parte?</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  {[10, 20, 25, 30].map((v) => (
-                    <button key={v} className={"chip sm" + (dPct === v ? " on" : "")}
-                      onClick={() => setDevPct(dPct === v ? "" : String(v))}>{v}%</button>
-                  ))}
-                  <input inputMode="numeric" value={devPct} placeholder="%"
-                    onChange={(e) => setDevPct(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                    style={{ width: 54, padding: "5px 8px", fontSize: 14, textAlign: "center" }} />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                  <span style={{ fontSize: 13, color: T.suave }}>Tope $</span>
-                  <input inputMode="numeric" value={devTope} placeholder="sin tope"
-                    onChange={(e) => setDevTope(e.target.value.replace(/\D/g, ""))}
-                    style={{ flex: 1, padding: "6px 10px", fontSize: 14 }} />
-                </div>
-                {hayDev && (
-                  <>
-                    {medio !== "efectivo" && (
-                      <div className="scroll" style={{ ...fila, marginTop: 8 }}>
-                        {[["tarjeta", "Al resumen de la tarjeta"], ["caja", "A mi caja de ahorro"]].map(([v, t]) => (
-                          <button key={v} className={"chip sm" + (destinoDev === v ? " on" : "")}
-                            onClick={() => { setDevDestino(v); setDevMes(""); }}>{t}</button>
-                        ))}
-                      </div>
-                    )}
-                    <div className="scroll" style={{ ...fila, marginTop: 8 }}>
-                      {(destinoDev === "caja"
-                        ? [["mismo", "Este mes"], ["siguiente", "El mes que viene"]]
-                        : [["mismo", "En el resumen de la 1.ª cuota"], ["siguiente", "En el resumen siguiente"]]
-                      ).map(([v, t]) => (
-                        <button key={v} className={"chip sm" + (cuandoDev === v ? " on" : "")}
-                          onClick={() => setDevMes(v)}>{t}</button>
+            </div>)}
+
+          {!pagoOtro && opcion("dev", "Reintegro",
+            hayDev ? `${dPct > 0 ? dPct + "%" : "Fijo"} · ${plata(montoDev)}` : "No", hayDev,
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                {[10, 20, 25, 30, 50].map((v) => (
+                  <button key={v} className={"chip sm" + (dPct === v ? " on" : "")}
+                    onClick={() => setDevPct(dPct === v ? "" : String(v))}>{v}%</button>
+                ))}
+                <input inputMode="numeric" value={[10, 20, 25, 30, 50].includes(dPct) ? "" : devPct} placeholder="otro %" {...foco}
+                  onChange={(e) => setDevPct(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                  style={{ width: 74, padding: "6px 8px", fontSize: 16, textAlign: "center" }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                <span style={{ fontSize: 13, color: T.suave, whiteSpace: "nowrap" }}>Tope $</span>
+                <input inputMode="numeric" value={devTope} placeholder="sin tope (o monto fijo)" {...foco}
+                  onChange={(e) => setDevTope(e.target.value.replace(/\D/g, ""))}
+                  style={{ flex: 1, padding: "8px 10px", fontSize: 16 }} />
+              </div>
+              {hayDev && (
+                <>
+                  {esTarjeta && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                      {[["tarjeta", "Al resumen"], ["caja", "A la caja de ahorro"]].map(([v, t]) => (
+                        <button key={v} className={"chip sm" + (destinoDev === v ? " on" : "")}
+                          onClick={() => { setDevDestino(v); setDevMes(""); }}>{t}</button>
                       ))}
                     </div>
-                    <div style={{ marginTop: 8, padding: "9px 12px", background: T.verdeBg, borderRadius: 10,
-                                  fontSize: 12.5, lineHeight: 1.5 }}>
-                      Te devuelven <b className="num">{plata(montoDev)}</b>
-                      {dPct > 0 && dTope > 0 && n * dPct / 100 > dTope ? " (llegaste al tope)" : ""}.
-                      {destinoDev === "caja" ? " Entra como plata en tu cuenta." : " Baja lo que pagás de esa tarjeta."}
-                      {" "}Cuenta en el flujo cuando el gasto pase a Movimientos.
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-            <div style={rotulo}>Nota</div>
-            <input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Opcional"
-              style={{ padding: "8px 12px", fontSize: 15 }} />
-          </>
-        )}
-        <div style={{ height: 10 }} />
+                  )}
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                    {(destinoDev === "caja"
+                      ? [["mismo", "Este mes"], ["siguiente", "El mes que viene"]]
+                      : [["mismo", "Con la 1.ª cuota"], ["siguiente", "En el resumen siguiente"]]
+                    ).map(([v, t]) => (
+                      <button key={v} className={"chip sm" + (cuandoDev === v ? " on" : "")}
+                        onClick={() => setDevMes(v)}>{t}</button>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 10, padding: "9px 12px", background: T.verdeBg, borderRadius: 10,
+                                fontSize: 12.5, lineHeight: 1.5 }}>
+                    Te devuelven <b className="num">{plata(montoDev)}</b>
+                    {dPct > 0 && dTope > 0 && n * dPct / 100 > dTope ? " (llegaste al tope)" : ""}.
+                    {destinoDev === "caja" ? " Entra como plata en tu cuenta." : " Baja lo que pagás de esa tarjeta."}
+                    {" "}Cuenta en el flujo cuando el gasto pase a Movimientos.
+                  </div>
+                </>
+              )}
+            </>)}
+
+          {opcion("nota", "Nota", nota.trim() || "Opcional", !!nota.trim(),
+            <input value={nota} onChange={(e) => setNota(e.target.value)} {...foco} onKeyDown={alListo}
+              placeholder="Lo que quieras recordar" enterKeyHint="done" style={{ padding: "10px 12px", fontSize: 16 }} />)}
+          <div style={{ borderTop: `1px solid ${T.linea}` }} />
+        </div>
+        <div style={{ height: 14 }} />
       </div>
 
-      <div style={{ padding: "8px 12px 14px", borderTop: `1px solid ${T.linea}` }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-          {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
-            <button key={t} onClick={() => tecla(t)}
-              style={{ padding: "11px 0", fontSize: t === "b" ? 18 : 21, fontWeight: 500,
-                       background: T.card, borderRadius: 12, border: `1px solid ${T.linea}` }}>
-              {t === "b" ? "⌫" : t}
-            </button>
-          ))}
-        </div>
-        <button className="btn" style={{ marginTop: 8, padding: 13, opacity: n > 0 ? 1 : 0.4 }} onClick={guardar}>
-          {inicial ? "Guardar cambios" : "Anotar"}
+      <div style={{ padding: "8px 12px calc(10px + env(safe-area-inset-bottom))", borderTop: `1px solid ${T.linea}`,
+                    background: T.papel, flex: "0 0 auto" }}>
+        {!escribiendo && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+            {["1","2","3","4","5","6","7","8","9","000","0","b"].map((t) => (
+              <button key={t} onClick={() => tecla(t)} aria-label={t === "b" ? "Borrar un número" : t}
+                style={{ padding: "10px 0", fontSize: t === "b" ? 18 : 21, fontWeight: 500,
+                         background: T.card, borderRadius: 12, border: `1px solid ${T.linea}` }}>
+                {t === "b" ? "⌫" : t}
+              </button>
+            ))}
+          </div>
+        )}
+        <button className="btn" style={{ marginTop: escribiendo ? 0 : 8, padding: 13, opacity: n > 0 ? 1 : 0.4 }}
+          onMouseDown={(e) => e.preventDefault()} onClick={guardar}>
+          {n > 0 ? (inicial ? "Guardar cambios" : `Anotar ${plata(n)}`) : "Poné el monto"}
         </button>
       </div>
+
+      {confirmaBorrar && (
+        <div onClick={() => setConfirmaBorrar(false)}
+          style={{ position: "absolute", inset: 0, background: "rgba(18,49,43,.45)", display: "flex", alignItems: "flex-end", zIndex: 2 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", background: T.papel, borderRadius: "20px 20px 0 0",
+                     padding: "20px 18px calc(16px + env(safe-area-inset-bottom))" }}>
+            <div style={{ fontSize: 17, fontWeight: 650 }}>¿Borrar este gasto?</div>
+            <div style={{ fontSize: 13.5, color: T.suave, marginTop: 6, lineHeight: 1.5 }}>
+              {(ini.detalle || "Gasto")} · {plata(Math.round(+ini.monto || 0))}
+              {+ini.restoCaja > 0 ? ". Te vuelve a sumar al saldo." : "."}
+            </div>
+            <button className="btn peligro" style={{ marginTop: 16 }}
+              onClick={() => { onBorrar(ini.id); onCerrar(); }}>Borrar</button>
+            <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => setConfirmaBorrar(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
