@@ -900,6 +900,40 @@ function siguienteCiclo(ult) {
   return { cierre: av(ult.cierre), vto: av(ult.vto), estimado: true };
 }
 
+// El ciclo anterior, estimado igual que siguienteCiclo pero hacia atrás
+function cicloAnterior(pri) {
+  const re = (iso) => {
+    const d = new Date(iso + "T12:00:00");
+    const mesOrig = d.getMonth();
+    d.setDate(d.getDate() - 28);
+    if (d.getMonth() === mesOrig) d.setDate(d.getDate() - 7);
+    return d.toISOString().slice(0, 10);
+  };
+  return { cierre: re(pri.cierre), vto: re(pri.vto), estimado: true };
+}
+
+// Si una tarjeta tiene resumen importado de un mes pero ningún ciclo que venza en ese mes,
+// se le perdieron fechas (pasaba al editarla en "Mis medios de pago"). Se rearman hacia atrás
+// desde el primer ciclo que queda, como estimadas, para que ese resumen no caiga en otro mes.
+function completarCiclosPerdidos(m, resumenes) {
+  if (!m || m.id === "efectivo" || !Array.isArray(m.ciclos) || !m.ciclos.length) return m;
+  const meses = Object.keys(resumenes || {})
+    .filter((k) => resumenes[k] && k.startsWith(m.id + "|")).map((k) => k.slice(m.id.length + 1)).sort();
+  if (!meses.length) return m;
+  const cs = ciclosDe(m).filter((c) => c && c.cierre && c.vto);
+  if (!cs.length) return m;
+  const tiene = (mk) => cs.some((c) => periodoDe(c.vto) === mk);
+  const desde = meses.find((mk) => !tiene(mk) && mk < periodoDe(cs[0].vto));
+  if (!desde) return m;
+  const nuevos = [];
+  let pri = cs[0];
+  for (let i = 0; i < 24 && periodoDe(pri.vto) > desde; i++) {
+    pri = cicloAnterior(pri);
+    nuevos.push(pri);
+  }
+  return nuevos.length ? normalizarCiclos({ ...m, ciclos: [...nuevos, ...cs] }) : m;
+}
+
 // Primer ciclo tentativo cuando la tarjeta no tiene ninguno cargado
 function cicloTentativo(m, desdeISO) {
   const d = new Date(desdeISO + "T12:00:00");
@@ -2307,13 +2341,19 @@ function Medios({ medios, movs, onGuardar, onCerrar }) {
     const e = edit;
     if (!e.nombre.trim()) return;
     const id = e.id || "t" + Date.now();
+    const orig = medios.find((x) => x.id === id) || {};
     const m = {
+      // Lo que el form no muestra (ciclos reales, tasa, deuda…) se conserva tal cual
+      ...orig,
       id, nombre: e.nombre.trim(),
       corto: (e.corto || e.nombre).trim().slice(0, 8),
       banco: e.banco, marca: e.marca,
       cierre: Math.min(31, Math.max(1, +e.cierre || 25)),
       vto: Math.min(28, Math.max(1, +e.vto || 10)),
     };
+    // Si cambiaste los días, las fechas provisorias se vuelven a estimar; las reales quedan
+    if (Array.isArray(orig.ciclos) && (m.cierre !== orig.cierre || m.vto !== orig.vto))
+      m.ciclos = orig.ciclos.filter((c) => c && !c.estimado);
     onGuardar(medios.some((x) => x.id === id) ? medios.map((x) => (x.id === id ? m : x)) : [...medios, m]);
     setEdit(null);
   };
@@ -3000,6 +3040,10 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
         ...(ag.persona ? { persona: ag.persona, pct: isFinite(+ag.pct) ? +ag.pct : 0.5 } : {}),
         ...(ag.categoria ? { categoria: ag.categoria } : {}),
         ...(ag.detalle ? { detalle: ag.detalle } : {}),
+        ...(ag.pagadoPor !== "otro" && (+ag.devPct > 0 || +ag.devTope > 0)
+          ? { ...(+ag.devPct > 0 ? { devPct: +ag.devPct } : {}), ...(+ag.devTope > 0 ? { devTope: +ag.devTope } : {}),
+              devDestino: ag.devDestino === "caja" ? "caja" : "tarjeta",
+              ...(ag.devMes ? { devMes: ag.devMes } : {}) } : {}),
       } : {};
       const hereda = viejo ? {
         ...(viejo.persona ? { persona: viejo.persona, pct: viejo.pct } : {}),
@@ -6484,6 +6528,23 @@ function aprender(aprendido, texto, cat) {
 function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
   const original = String(texto || "").trim();
   let t = " " + sinTildes(original) + " ";
+  // Reintegro: "reintegro del 25% (tope 20 mil) a la primer cuota / a la caja". Se saca antes del monto.
+  let dev = null;
+  const md = t.match(/\b(reintegro|devolucion|te devuelven|devuelven)\b[^.\n]*/);
+  if (md) {
+    const cl = md[0];
+    const mp = cl.match(/(\d{1,3})\s*(%|por ?ciento)/);
+    const mt = cl.match(/tope\s*(?:de\s*)?\$?\s*(\d[\d.,]*)\s*(k|mil|lucas?)?/);
+    const tope = mt ? Math.round(parseFloat(mt[1].replace(/[.,](?=\d{3})/g, "").replace(",", ".")) * (mt[2] ? 1000 : 1)) : 0;
+    const pctD = mp ? Math.min(100, +mp[1]) : 0;
+    if (pctD > 0 || tope > 0) {
+      dev = { ...(pctD > 0 ? { devPct: pctD } : {}), ...(tope > 0 ? { devTope: tope } : {}),
+              devDestino: /\b(caja|cuenta)\b/.test(cl) ? "caja" : "tarjeta",
+              ...(/primer|mismo resumen|este resumen/.test(cl) ? { devMes: "mismo" }
+                : /siguiente|proximo|que viene/.test(cl) ? { devMes: "siguiente" } : {}) };
+      t = t.replace(cl, " ");
+    }
+  }
   // Monto: el primer número, con miles, decimales y "k / mil / lucas / palos"
   const mm = t.match(/(\d[\d.,]*)\s*(k|mil|lucas?|luquitas?|palos?|m)?(?=[^a-z0-9]|$)/);
   if (!mm) return null;
@@ -6511,6 +6572,19 @@ function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
     if (m.id === "hipo") ["hipotecario"].forEach((a) => alias.push([a, m.id]));
     if (m.id === "bna") ["nacion", "banco nacion"].forEach((a) => alias.push([a, m.id]));
     if (m.id === "master") ["mastercard"].forEach((a) => alias.push([a, m.id]));
+  });
+  // El banco ("con provincia") y el nombre sin la marca ("Visa Provincia" → "provincia"),
+  // si no hay otra tarjeta que se llame igual
+  medios.forEach((m) => {
+    if (m.id === "efectivo") return;
+    const extra = [m.banco && m.banco !== "Otro" ? m.banco : "",
+                   String(m.nombre || "").replace(/\b(visa|master(card)?|amex|american express|cabal|signature|black|platinum|gold)\b/gi, "")];
+    extra.map((a) => sinTildes(a).replace(/\s+/g, " ").trim()).filter((a) => a.length >= 3).forEach((a) => {
+      if (alias.some(([x]) => x === a)) return;
+      if (medios.some((o) => o.id !== m.id && o.id !== "efectivo"
+          && (sinTildes(o.banco || "") === a || sinTildes(o.nombre || "").includes(a)))) return;
+      alias.push([a, m.id]);
+    });
   });
   alias.sort((a, b) => b[0].length - a[0].length);
   let medio = (medios.find((m) => m.id === "efectivo") || medios[0] || {}).id || "efectivo";
@@ -6551,7 +6625,9 @@ function interpretarGasto(texto, medios, aprendido, personas = [], fechaBase) {
   const categoria = adivinarConAprendido(detalle, aprendido).cat;
   return { monto, detalle, medio, fecha, categoria,
            ...(cuotas > 1 && medio !== "efectivo" ? { cuotas } : {}),
-           ...(persona ? { persona, pct, pagadoPor } : {}) };
+           ...(persona ? { persona, pct, pagadoPor } : {}),
+           ...(dev && pagadoPor !== "otro"
+             ? { ...dev, devDestino: medio === "efectivo" ? "caja" : dev.devDestino } : {}) };
 }
 
 // ---- Comprobantes: texto leído de la captura de un pago (Mercado Pago o MODO) ----
@@ -6674,7 +6750,12 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   const [pct, setPct] = useState(ini.pct != null ? Math.round(ini.pct * 100) : 50);
   const [pagoOtro, setPagoOtro] = useState(ini.pagadoPor === "otro");
   const [nota, setNota] = useState(ini.nota || "");
-  const [verMas, setVerMas] = useState(!!(ini.persona || ini.nota || (ini.cuotas || 1) > 1));
+  // Reintegro del banco: % con tope (o un fijo en el tope), a la caja de ahorro o al resumen
+  const [devPct, setDevPct] = useState(ini.devPct ? String(ini.devPct) : "");
+  const [devTope, setDevTope] = useState(ini.devTope ? String(ini.devTope) : "");
+  const [devDestino, setDevDestino] = useState(ini.devDestino === "tarjeta" ? "tarjeta" : "caja");
+  const [devMes, setDevMes] = useState(ini.devMes || "");
+  const [verMas, setVerMas] = useState(!!(ini.persona || ini.nota || (ini.cuotas || 1) > 1 || ini.devPct || ini.devTope));
 
   const n = parseInt(monto || "0", 10);
   const sug = adivinarConAprendido(detalle, aprendido);
@@ -6686,15 +6767,28 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
   };
   const quien = (agregandoPersona ? nuevaPersona.trim() : persona) || "";
   const parte = quien ? Math.round(n * (pct / 100)) : 0;
+  const dPct = Math.min(100, +devPct || 0), dTope = +devTope || 0;
+  const hayDev = !pagoOtro && (dPct > 0 || dTope > 0);
+  const destinoDev = medio === "efectivo" ? "caja" : devDestino;
+  const cuandoDev = devMes || (destinoDev === "caja" ? "mismo" : "siguiente");
+  const montoDev = hayDev ? Math.round(dPct > 0 ? Math.min(n * dPct / 100, dTope > 0 ? dTope : Infinity) : dTope) : 0;
   const guardar = () => {
     if (n <= 0) return;
+    // Se parte de lo que ya tenía (origen, comprobante, Mercado Pago…) y se pisa lo que muestra el form
+    const base = { ...ini };
+    ["cuotas", "persona", "pct", "pagadoPor", "nota", "catManual", "devPct", "devTope", "devMes", "devDestino", "sinMedio"]
+      .forEach((k) => { delete base[k]; });
+    if (ini.sinMedio && medio === ini.medio) base.sinMedio = true;
     onGuardar({
+      ...base,
       id: ini.id || "a" + Date.now(),
       fecha, monto: n, detalle: detalle.trim() || nomCat(catFinal),
       medio, categoria: catFinal, ...(cat ? { catManual: true } : {}),
       ...(medio !== "efectivo" && cuotas > 1 ? { cuotas } : {}),
       ...(quien ? { persona: quien, pct: pct / 100, pagadoPor: pagoOtro ? "otro" : "yo" } : {}),
       ...(nota.trim() ? { nota: nota.trim() } : {}),
+      ...(hayDev ? { ...(dPct > 0 ? { devPct: dPct } : {}), ...(dTope > 0 ? { devTope: dTope } : {}),
+                     devDestino: destinoDev, devMes: cuandoDev } : {}),
     });
     onCerrar();
   };
@@ -6755,7 +6849,7 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
         {!verMas && (
           <button onClick={() => setVerMas(true)}
             style={{ marginTop: 12, fontSize: 13, color: T.ambar, fontWeight: 600, width: "100%" }}>
-            + Compartido, cuotas o nota
+            + Compartido, cuotas, reintegro o nota
           </button>
         )}
         {verMas && (
@@ -6804,6 +6898,54 @@ function AltaGasto({ medios, inicial, personas = [], aprendido = {}, onGuardar, 
                       onClick={() => setCuotas(c)}>{c === 1 ? "1 pago" : c + " cuotas"}</button>
                   ))}
                 </div>
+              </>
+            )}
+            {!pagoOtro && (
+              <>
+                <div style={rotulo}>¿El banco te devuelve parte?</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {[10, 20, 25, 30].map((v) => (
+                    <button key={v} className={"chip sm" + (dPct === v ? " on" : "")}
+                      onClick={() => setDevPct(dPct === v ? "" : String(v))}>{v}%</button>
+                  ))}
+                  <input inputMode="numeric" value={devPct} placeholder="%"
+                    onChange={(e) => setDevPct(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                    style={{ width: 54, padding: "5px 8px", fontSize: 14, textAlign: "center" }} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                  <span style={{ fontSize: 13, color: T.suave }}>Tope $</span>
+                  <input inputMode="numeric" value={devTope} placeholder="sin tope"
+                    onChange={(e) => setDevTope(e.target.value.replace(/\D/g, ""))}
+                    style={{ flex: 1, padding: "6px 10px", fontSize: 14 }} />
+                </div>
+                {hayDev && (
+                  <>
+                    {medio !== "efectivo" && (
+                      <div className="scroll" style={{ ...fila, marginTop: 8 }}>
+                        {[["tarjeta", "Al resumen de la tarjeta"], ["caja", "A mi caja de ahorro"]].map(([v, t]) => (
+                          <button key={v} className={"chip sm" + (destinoDev === v ? " on" : "")}
+                            onClick={() => { setDevDestino(v); setDevMes(""); }}>{t}</button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="scroll" style={{ ...fila, marginTop: 8 }}>
+                      {(destinoDev === "caja"
+                        ? [["mismo", "Este mes"], ["siguiente", "El mes que viene"]]
+                        : [["mismo", "En el resumen de la 1.ª cuota"], ["siguiente", "En el resumen siguiente"]]
+                      ).map(([v, t]) => (
+                        <button key={v} className={"chip sm" + (cuandoDev === v ? " on" : "")}
+                          onClick={() => setDevMes(v)}>{t}</button>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 8, padding: "9px 12px", background: T.verdeBg, borderRadius: 10,
+                                  fontSize: 12.5, lineHeight: 1.5 }}>
+                      Te devuelven <b className="num">{plata(montoDev)}</b>
+                      {dPct > 0 && dTope > 0 && n * dPct / 100 > dTope ? " (llegaste al tope)" : ""}.
+                      {destinoDev === "caja" ? " Entra como plata en tu cuenta." : " Baja lo que pagás de esa tarjeta."}
+                      {" "}Cuenta en el flujo cuando el gasto pase a Movimientos.
+                    </div>
+                  </>
+                )}
               </>
             )}
             <div style={rotulo}>Nota</div>
@@ -7518,6 +7660,8 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
                     <span style={{ display: "block", fontSize: 11.5, color: T.tenue, marginTop: 1 }}>
                       {nomCat(catDe(g))} · {nomMedio(g.medio)}
                       {g.cuotas > 1 ? ` · ${g.cuotas} cuotas` : ""}
+                      {+g.devPct > 0 || +g.devTope > 0
+                        ? ` · reintegro ${+g.devPct > 0 ? g.devPct + "%" : corta(+g.devTope)}` : ""}
                       {g.origen === "siri" ? " · por Siri" : ""}
                       {g.persona ? (g.pagadoPor === "otro"
                         ? ` · pagó ${g.persona}`
@@ -10223,6 +10367,8 @@ export default function App() {
       c.resumenes = resum;
       // Ciclos repetidos de las tarjetas: uno por cierre
       if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
+      // Fechas de tarjeta que se perdieron: se rearman para los meses con resumen importado
+      if (Array.isArray(c.medios)) c.medios = c.medios.map((m) => completarCiclosPerdidos(m, c.resumenes));
       // Gastos que el anotador trajo del flujo sin marcar: ya están en el flujo, no se liquidan otra vez
       if (Array.isArray(c.anotador)) c.anotador = c.anotador.map((g) =>
         !g.mov && g.origen && vivos.has(g.origen) ? { ...g, mov: g.origen } : g);
@@ -10408,6 +10554,10 @@ export default function App() {
         pagadoPor: g.pagadoPor === "otro" ? "otro" : "yo",
         ...(g.persona ? { persona: g.persona, pct: +g.pct || 0 } : {}),
         ...(g.nota ? { nota: g.nota } : {}), desdeAnotador: g.id,
+        ...(g.pagadoPor !== "otro" && (+g.devPct > 0 || +g.devTope > 0)
+          ? { ...(+g.devPct > 0 ? { devPct: +g.devPct } : {}), ...(+g.devTope > 0 ? { devTope: +g.devTope } : {}),
+              devDestino: g.devDestino === "tarjeta" && (g.medio || "efectivo") !== "efectivo" ? "tarjeta" : "caja",
+              devMes: g.devMes === "siguiente" ? "siguiente" : g.devMes === "mismo" ? "mismo" : undefined } : {}),
       });
       if (efvo && g.pagadoPor !== "otro") {
         // Ya salió de la caja: queda saldado sin volver a mover el saldo
