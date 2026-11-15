@@ -2297,7 +2297,7 @@ function Acceso() {
 /* ===================== CUENTA ===================== */
 function Cuenta({ perfil, onCerrar, onSalir, estado }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 60, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 60, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Mi cuenta</span>
@@ -2367,7 +2367,7 @@ function Medios({ medios, movs, onGuardar, onCerrar }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 70, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 70, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Mis medios de pago</span>
@@ -2411,7 +2411,7 @@ function Medios({ medios, movs, onGuardar, onCerrar }) {
       </div>
 
       {edit && (
-        <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 80, overflowY: "auto" }}>
+        <div style={{ ...PANTALLA, background: T.papel, zIndex: 80, overflowY: "auto" }}>
           <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                         padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <button onClick={() => setEdit(null)} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -2517,11 +2517,11 @@ function ActualizarCiclos({ pendientes, medios, onGuardar, onPostergar }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(18,49,43,.45)", zIndex: 90,
+    <div style={{ ...PANTALLA, background: "rgba(18,49,43,.45)", zIndex: 90,
                   display: "flex", alignItems: "flex-end" }}>
       <div className="bz" style={{ width: "100%", maxWidth: 470, margin: "0 auto",
             background: T.papel, borderRadius: "22px 22px 0 0", padding: 22,
-            maxHeight: "92vh", overflowY: "auto",
+            maxHeight: "calc(var(--vv-h, 100vh) * .92)", overflowY: "auto",
             boxShadow: "0 -8px 40px -12px rgba(14,43,37,.3)" }}>
         <div style={{ fontSize: 12, color: T.suave, marginBottom: 4 }}>
           {pendientes.length > 1 ? `Tarjeta ${i + 1} de ${pendientes.length}` : "Actualizá tu tarjeta"}
@@ -2619,7 +2619,7 @@ function Rapido({ medios, movs = [], cfg = {}, onGuardar, onDetallado, onImporta
   const elegido = candidatos.find((x) => x.mv.id === consume);
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 85,
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 85,
                   display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between",
                     alignItems: "center" }}>
@@ -3104,7 +3104,7 @@ function ImportarResumen({ medios, movs, anotador = [], aprendido = {}, resumene
   const cuadra = res && dif !== null && Math.abs(dif) < 1;
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 88, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 88, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -3526,7 +3526,7 @@ function Invertido({ cfg, setCfg, tc }) {
       </div>
 
       {edit && (
-        <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 80, overflowY: "auto" }}>
+        <div style={{ ...PANTALLA, background: T.papel, zIndex: 80, overflowY: "auto" }}>
           <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                         padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <button onClick={() => setEdit(null)} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -3714,7 +3714,7 @@ function Financiar({ medios, cfg, onCerrar }) {
 
   if (!conDatos.length) {
     return (
-      <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 82, overflowY: "auto" }}>
+      <div style={{ ...PANTALLA, background: T.papel, zIndex: 82, overflowY: "auto" }}>
         <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                       padding: "14px 16px", display: "flex", justifyContent: "space-between" }}>
           <span style={{ fontSize: 15, fontWeight: 620 }}>¿Pago todo o el mínimo?</span>
@@ -3731,7 +3731,7 @@ function Financiar({ medios, cfg, onCerrar }) {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 82, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 82, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15, fontWeight: 620 }}>¿Pago todo o el mínimo?</span>
@@ -3880,7 +3880,7 @@ function Reportar({ sesion, cfg, movs, medios, tab, onCerrar }) {
 
   if (estado === "listo" || estado === "copiado") {
     return (
-      <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 92,
+      <div style={{ ...PANTALLA, background: T.papel, zIndex: 92,
                     display: "flex", flexDirection: "column", justifyContent: "center", padding: 28 }}>
         <div style={{ fontSize: 34, marginBottom: 14 }}>✓</div>
         <div style={{ fontSize: 21, fontWeight: 660, letterSpacing: "-0.02em", marginBottom: 10 }}>
@@ -3897,7 +3897,7 @@ function Reportar({ sesion, cfg, movs, medios, tab, onCerrar }) {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 92, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 92, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -4004,7 +4004,7 @@ function Compartir({ sesion, medios, onListo, onCerrar }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 86, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 86, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -4388,7 +4388,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 50, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 50, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Cancelar</button>
@@ -5720,12 +5720,12 @@ function Hoy({ cfg, setCfg, filas, medios, movs, onAbrirAjustes, onAjustar, onPa
                             const cambiar = (c) => onGuardarMov && onGuardarMov({ ...real, ...c });
                             return (
                               <div onClick={() => setEditItem(null)}
-                                style={{ position: "fixed", inset: 0, background: "rgba(16,24,20,.38)", zIndex: 80,
+                                style={{ ...PANTALLA, background: "rgba(16,24,20,.38)", zIndex: 80,
                                          display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
                                 <div onClick={(e) => e.stopPropagation()} className="sube"
                                   style={{ background: T.card, width: "100%", maxWidth: 520, borderRadius: "18px 18px 0 0",
                                            padding: "10px 18px calc(20px + env(safe-area-inset-bottom))",
-                                           maxHeight: "86vh", overflowY: "auto", boxShadow: "0 -8px 30px rgba(0,0,0,.12)" }}>
+                                           maxHeight: "calc(var(--vv-h, 100vh) * .86)", overflowY: "auto", boxShadow: "0 -8px 30px rgba(0,0,0,.12)" }}>
                                   <div style={{ width: 38, height: 4, borderRadius: 4, background: T.linea, margin: "0 auto 12px" }} />
                                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                                     <div style={{ minWidth: 0 }}>
@@ -6734,6 +6734,23 @@ function interpretarComprobante(texto, medios, mpTarjetas = {}, aprendido = {}, 
            ...(sinMedio ? { sinMedio: true, nota: "Revisá con qué pagaste (el comprobante no lo dice)" } : {}) };
 }
 
+// Las pantallas y hojas fijas siguen al "viewport visual" (lo que se ve con el teclado abierto).
+// En iPhone, si quedan pegadas a la ventana entera, Safari dibuja el cursor de los campos fuera de lugar.
+const PANTALLA = { position: "fixed", left: 0, right: 0, top: "var(--vv-top, 0px)", height: "var(--vv-h, 100%)" };
+function seguirViewport() {
+  if (typeof window === "undefined") return () => {};
+  const vv = window.visualViewport;
+  const poner = () => {
+    const r = document.documentElement.style;
+    r.setProperty("--vv-top", (vv ? vv.offsetTop : 0) + "px");
+    r.setProperty("--vv-h", (vv ? vv.height : window.innerHeight) + "px");
+  };
+  poner();
+  if (!vv) return () => {};
+  vv.addEventListener("resize", poner); vv.addEventListener("scroll", poner);
+  return () => { vv.removeEventListener("resize", poner); vv.removeEventListener("scroll", poner); };
+}
+
 // Alto real de la pantalla visible. En iPhone, con el teclado abierto, Safari achica y corre el "viewport visual":
 // si la pantalla fija no lo sigue, el cursor de los campos queda flotando en otro lado.
 function useViewportVisible() {
@@ -7109,7 +7126,7 @@ function ConfigAtajo({ sesion, onCerrar, onTraer }) {
     </div>
   );
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 90, overflowY: "auto",
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 90, overflowY: "auto",
                   maxWidth: 470, margin: "0 auto" }}>
       <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15, fontWeight: 620 }}>Anotar con Siri</span>
@@ -7191,11 +7208,11 @@ function EditorPresupuestos({ presupuestos, onGuardar, onCerrar }) {
     </div>
   );
   return (
-    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,20,.38)", zIndex: 80,
+    <div onClick={onCerrar} style={{ ...PANTALLA, background: "rgba(16,24,20,.38)", zIndex: 80,
                                      display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div onClick={(e) => e.stopPropagation()} className="sube"
         style={{ background: T.card, width: "100%", maxWidth: 520, borderRadius: "18px 18px 0 0",
-                 padding: "14px 18px calc(20px + env(safe-area-inset-bottom))", maxHeight: "86vh", overflowY: "auto" }}>
+                 padding: "14px 18px calc(20px + env(safe-area-inset-bottom))", maxHeight: "calc(var(--vv-h, 100vh) * .86)", overflowY: "auto" }}>
         <div style={{ fontSize: 16, fontWeight: 640 }}>Presupuestos por sueldo</div>
         <div style={{ fontSize: 12.5, color: T.suave, margin: "4px 0 10px", lineHeight: 1.5 }}>
           Poné un tope a lo que quieras controlar. Dejá vacío lo que no. Cuenta tu parte de lo que anotás en Gastos.
@@ -7271,7 +7288,7 @@ function ConfigMP({ sesion, estado, onRecargar, onCerrar }) {
   );
   const conectado = estado && estado.configurado && !estado.error;
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 90, overflowY: "auto", maxWidth: 470, margin: "0 auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 90, overflowY: "auto", maxWidth: 470, margin: "0 auto" }}>
       <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15, fontWeight: 620 }}>Mercado Pago</span>
         <button onClick={onCerrar} style={{ fontSize: 15, color: T.suave }}>Listo</button>
@@ -8080,7 +8097,7 @@ function Ajustes({ cfg, setCfg, medios, movs, onBorrarVarios, onReiniciar, onImp
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: T.papel, zIndex: 50, overflowY: "auto" }}>
+    <div style={{ ...PANTALLA, background: T.papel, zIndex: 50, overflowY: "auto" }}>
       <div style={{ position: "sticky", top: 0, background: T.card, borderBottom: `1px solid ${T.linea}`,
                     padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 15.5, fontWeight: 620 }}>Ajustes</span>
@@ -10306,6 +10323,7 @@ function aplicarCambiosPaquete(cfg, movs, medios, p, fecha) {
 const CFG_INI = { saldoHoy: 0, reservasUsd: 0, tcAuto: true, tcFuente: 'blue', tcLado: 'compra', tc: 1550, sellos: 0.012, ajuste: 0, horizonte: 6, diaCobro: 28, nombre: '', inversiones: [], resumenes: {}, confirmados: {}, ritmoBase: null, desdeMes: null, ajustes: {}, aplicados: {}, medios: null, revisadas: {}, escenarios: [], simulaciones: [], planes: [], anotador: [] };
 
 export default function App() {
+  useEffect(() => seguirViewport(), []);
   const [sesion, setSesion] = useState(undefined);   // undefined = averiguando
   const [perfil, setPerfil] = useState(null);
   const [estado, setEstado] = useState("");
