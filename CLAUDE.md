@@ -61,7 +61,7 @@ Idioma de la UI y de los mensajes: español rioplatense, informal y corto.
   de Mercado Pago o MODO y lo manda a la bandeja; la app arma el gasto (monto, comercio, fecha, tarjeta/banco, cuotas). Si el comprobante no dice con qué se pagó,
   se supone la única tarjeta asociada a MP y queda una nota, o no toca el saldo. `supabase/atajo_comprobantes.sql` amplía el largo del texto (1500).
 - **Meta de ahorro** (`cfg.meta`, `estadoMeta`): lee `reservasUsd` y las compras de dólares programadas (`tipo: "ahorro"`); no cambia la proyección.
-- **Presupuestos** (`cfg.presupuestos = [{k: "cat:…" | "txt:…", monto}]`): topes por sueldo sobre lo anotado en Gastos (solo la parte propia).
+- **Presupuestos** (`cfg.presupuestos = [{k: "cat:…" | "txt:…" | "med:efectivo", monto}]`): topes por sueldo sobre lo anotado en Gastos (solo la parte propia). `med:efectivo` = todo lo pagado en efectivo o débito.
 - **Escenarios** (`cfg.escenarios`) son una capa ficticia: nunca tocan los movimientos reales.
 
 ## Reglas de trabajo

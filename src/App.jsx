@@ -7178,17 +7178,19 @@ function ConfigAtajo({ sesion, onCerrar, onTraer }) {
 }
 
 // ---- Presupuestos: tope por categoría o por nombre ("uber") para el sueldo en curso ----
-// cfg.presupuestos = [{ k: "cat:Transporte y nafta" | "txt:uber", monto }]
+// cfg.presupuestos = [{ k: "cat:Transporte y nafta" | "txt:uber" | "med:efectivo", monto }]
+// "med:efectivo" es el tope de todo lo que pagás en efectivo o con débito, sea de la categoría que sea
 function estadoPresupuestos(presupuestos, gastos, catDe) {
   // Lo tuyo de cada gasto: si es compartido, solo tu parte
   const mio = (g) => (+g.monto || 0) * (g.persona ? 1 - (+g.pct || 0) : 1);
   return (presupuestos || []).filter((p) => p && p.k && +p.monto > 0).map((p) => {
-    const esTxt = p.k.startsWith("txt:");
+    const esTxt = p.k.startsWith("txt:"), esMed = p.k.startsWith("med:");
     const clave = p.k.slice(4);
-    const van = gastos.filter((g) => !g.sinAnotar && (esTxt
-      ? sinTildes(g.detalle).includes(sinTildes(clave)) : catDe(g) === clave));
+    const van = gastos.filter((g) => !g.sinAnotar && (esMed ? (g.medio || "efectivo") === clave
+      : esTxt ? sinTildes(g.detalle).includes(sinTildes(clave)) : catDe(g) === clave));
     const gastado = Math.round(van.reduce((a, g) => a + mio(g), 0));
-    return { ...p, nombre: esTxt ? clave.charAt(0).toUpperCase() + clave.slice(1) : nomCat(clave),
+    return { ...p, nombre: esMed ? "Efectivo y débito (todo)"
+               : esTxt ? clave.charAt(0).toUpperCase() + clave.slice(1) : nomCat(clave),
              gastado, pct: gastado / p.monto, quedan: Math.round(p.monto - gastado) };
   });
 }
@@ -7217,6 +7219,7 @@ function EditorPresupuestos({ presupuestos, onGuardar, onCerrar }) {
         <div style={{ fontSize: 12.5, color: T.suave, margin: "4px 0 10px", lineHeight: 1.5 }}>
           Poné un tope a lo que quieras controlar. Dejá vacío lo que no. Cuenta tu parte de lo que anotás en Gastos.
         </div>
+        {fila("med:efectivo", "Efectivo y débito (todo junto)")}
         {extra.map((t) => fila("txt:" + t, `"${t}" (por nombre)`))}
         {CATEGORIAS.filter((c) => c !== "Ingresos").map((c) => fila("cat:" + c, nomCat(c)))}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
