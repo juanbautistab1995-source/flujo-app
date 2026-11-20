@@ -7432,6 +7432,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const [vista, setVista] = useState("medio");    // medio | cat
   const [alta, setAlta] = useState(null);         // null | {} nuevo | gasto a editar
   const [filtro, setFiltro] = useState(null);     // porción tocada de la torta
+  const [busca, setBusca] = useState("");          // buscador: busca en todas las fechas
 
   const aprendido = cfg.anotadorAprende || {};
   const guardarLista = (l) => setCfg({ ...cfg, anotador: l });
@@ -7541,7 +7542,22 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
   const datos = Object.entries(grupos).sort((a, b) => b[1] - a[1])
     .map(([k, v], i) => ({ k, v, color: ANOT_COLORES[i % ANOT_COLORES.length],
                            nom: vista === "medio" ? nomMedio(k) : nomCat(k) }));
-  const visibles = filtro ? enRango.filter((g) => clave(g) === filtro) : enRango;
+  // Buscador: todas las palabras tienen que aparecer en el nombre, la categoría, el medio,
+  // la persona o la nota. Un número busca también por monto ("25000" o "25.000").
+  const q = normBusca(busca);
+  const buscando = q.length > 0;
+  const coincide = (g) => {
+    const texto = normBusca([g.detalle, nomCat(catDe(g)), catDe(g), nomMedio(g.medio), g.persona, g.nota].filter(Boolean).join(" "));
+    const montoTxt = String(Math.round(+g.monto || 0));
+    return q.split(/\s+/).every((t) => {
+      const num = t.replace(/[.$]/g, "");
+      if (/^\d+$/.test(num) && num.length >= 3) return montoTxt.includes(num) || texto.includes(t);
+      return texto.includes(t);
+    });
+  };
+  const encontrados = buscando ? lista.filter(coincide) : [];
+  const totEnc = encontrados.reduce((a, g) => a + pagado(g), 0);
+  const visibles = buscando ? encontrados : filtro ? enRango.filter((g) => clave(g) === filtro) : enRango;
 
   // Lista por día, el más nuevo arriba
   const porDia = {};
@@ -7665,7 +7681,35 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
         ))}
       </div>
 
-      <div className="cima" style={{ padding: "16px 18px", marginTop: 12 }}>
+      <div style={{ position: "relative", marginTop: 12 }}>
+        <input value={busca} onChange={(e) => setBusca(e.target.value)} enterKeyHint="search" autoCorrect="off"
+          placeholder="Buscar gastos: Uber, súper, Sol, 25000…" style={{ paddingRight: 38 }} />
+        {busca && (
+          <button onClick={() => setBusca("")} aria-label="Borrar búsqueda"
+            style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                     fontSize: 17, color: T.tenue, padding: "4px 8px" }}>×</button>
+        )}
+      </div>
+      {buscando && (
+        <div className="card" style={{ padding: "13px 15px", marginTop: 10 }}>
+          {encontrados.length
+            ? <>
+                <div style={{ fontSize: 14, fontWeight: 620 }}>
+                  {encontrados.length} {encontrados.length === 1 ? "gasto" : "gastos"} · <span className="num">{plata(totEnc)}</span>
+                </div>
+                <div style={{ fontSize: 12, color: T.suave, marginTop: 2 }}>
+                  En todas las fechas
+                  {(() => {
+                    const fs = encontrados.map((g) => g.fecha).sort();
+                    return fs.length > 1 ? ` · del ${fs[0].slice(8, 10)}/${fs[0].slice(5, 7)}/${fs[0].slice(2, 4)} al ${fs[fs.length - 1].slice(8, 10)}/${fs[fs.length - 1].slice(5, 7)}/${fs[fs.length - 1].slice(2, 4)}` : "";
+                  })()}
+                </div>
+              </>
+            : <div style={{ fontSize: 13.5, color: T.suave }}>No encontré gastos con "{busca.trim()}".</div>}
+        </div>
+      )}
+
+      {!buscando && <div className="cima" style={{ padding: "16px 18px", marginTop: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           {rango === "mes"
             ? <button onClick={() => { setMesVer(sumaMes(mesVer, -1)); setFiltro(null); }}
@@ -7689,9 +7733,9 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
             {debes > 0 && <>Debés <b className="num">{corta(debes)}</b></>}
           </div>
         )}
-      </div>
+      </div>}
 
-      {(() => {
+      {!buscando && (() => {
         // Presupuestos: siempre sobre el sueldo en curso, mires el rango que mires
         const delSueldo = lista.filter((g) => periodoDe(g.fecha) === mesDeHoy());
         const pres = estadoPresupuestos(cfg.presupuestos, delSueldo, catDe);
@@ -7735,7 +7779,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
       {verPres && <EditorPresupuestos presupuestos={cfg.presupuestos}
         onGuardar={(l) => setCfg({ ...cfg, presupuestos: l })} onCerrar={() => setVerPres(false)} />}
 
-      {enRango.length > 0 && (
+      {!buscando && enRango.length > 0 && (
         <div className="card" style={{ padding: 14, marginTop: 12 }}>
           <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
             <button className={"chip sm" + (vista === "medio" ? " on" : "")}
@@ -7777,7 +7821,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
       )}
       {(() => {
         const sinLiq = enRango.filter((g) => !g.mov && !g.sinAnotar && +g.monto > 0);
-        if (!sinLiq.length || !onLiquidar) return null;
+        if (buscando || !sinLiq.length || !onLiquidar) return null;
         const tot = sinLiq.reduce((a, g) => a + (+g.monto || 0), 0);
         return (
           <div className="card" style={{ padding: "13px 15px", marginTop: 12, display: "flex",
@@ -7795,7 +7839,7 @@ function Anotador({ cfg, setCfg, medios, movs, onVerMovs, onLiquidar, sesion, on
         );
       })()}
 
-      {enRango.length === 0 && (
+      {!buscando && enRango.length === 0 && (
         <div className="card" style={{ padding: "22px 16px", marginTop: 12, textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Todavía no anotaste nada {rango === "sueldo" ? "en este sueldo" : rango === "mes" ? "este mes" : "esta semana"}</div>
           <div style={{ fontSize: 12.5, color: T.suave, marginTop: 5, lineHeight: 1.5 }}>
