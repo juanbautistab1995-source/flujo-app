@@ -4292,9 +4292,17 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     montoUsd: inicial?.montoUsd ?? "",
     pct: inicial?.pct != null ? Math.round(inicial.pct * 100) : 50,
     // Al editar, las cuotas que quedan salen de "hasta": si no, guardar lo borraba
-    cuotasRestantes: inicial?.recurrente && inicial?.hasta && idxMes(inicial.hasta) >= idxMes(mesDeHoy())
-      ? String(idxMes(inicial.hasta) - idxMes(mesDeHoy()) + 1) : "",
+    cuotasRestantes: (() => {
+      if (!inicial?.recurrente || !inicial?.hasta) return "";
+      const base = inicial.desde && idxMes(inicial.desde) > idxMes(mesDeHoy()) ? inicial.desde : mesDeHoy();
+      return idxMes(inicial.hasta) >= idxMes(base) ? String(idxMes(inicial.hasta) - idxMes(base) + 1) : "";
+    })(),
+    // Mes desde el que cuenta un recurrente (si arranca más adelante, por ejemplo en enero)
+    desde: inicial?.desde && idxMes(inicial.desde) > idxMes(mesDeHoy()) ? inicial.desde : "",
+    desdeTocado: false,
   }));
+  // Primer mes en que cuenta el recurrente, para las cuentas de la pantalla
+  const arranque = f.desde && idxMes(f.desde) > idxMes(mesDeHoy()) ? f.desde : mesDeHoy();
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
   const tcUsar = +f.tcCompra || tcRef;
@@ -4368,6 +4376,10 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
       const cambiaMeses = !esNuevo && mesesAntes !== (f.meses || []).join(",");
       let desde = esNuevo ? hoyMk : antes;
       if (cambiaMeses && (!desde || idxMes(desde) < idxMes(hoyMk))) desde = hoyMk;
+      // Si elegiste que arranque más adelante, manda eso
+      if (f.desde && idxMes(f.desde) > idxMes(hoyMk)) desde = f.desde;
+      else if (f.desdeTocado && !desde) desde = hoyMk;
+      else if (f.desdeTocado && !f.desde && desde && idxMes(desde) > idxMes(hoyMk)) desde = hoyMk;
       if (desde) mv.desde = desde;
     } else {
       mv.cuotas = Math.max(1, +f.cuotas || 1);
@@ -4386,7 +4398,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     if (f.tipo === "gasto" && f.recurrente && f.categoria === "Préstamos" &&
         ["fija", "inflacion", "sueldo"].includes(f.ajustaPor)) mv.ajustaPor = f.ajustaPor;
     if (f.recurrente && +f.cuotasRestantes > 0)
-      mv.hasta = sumaMes(mesDeHoy(), +f.cuotasRestantes - 1);
+      mv.hasta = sumaMes(arranque, +f.cuotasRestantes - 1);
     if (f.pagadoPor === "otro") mv.pagadoPor = "otro";
     // Solo tiene sentido si lo pusiste vos y hay alguien que te lo devuelve
     if (f.soloDeuda && f.pagadoPor !== "otro" && f.persona) mv.soloDeuda = true;
@@ -4656,6 +4668,27 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
           </>
         ) : (
           <>
+            <label className="lbl" style={{ marginTop: 16 }}>{esIngreso ? "¿Desde cuándo lo cobrás?" : "¿Desde cuándo lo pagás?"}</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {[0, 1, 2, 3, 4, 5].map((k) => {
+                const mk = sumaMes(mesDeHoy(), k);
+                const on = arranque === mk;
+                return (
+                  <button key={mk} className={"chip sm" + (on ? " on" : "")}
+                    onClick={() => setF((p) => ({ ...p, desde: k === 0 ? "" : mk, desdeTocado: true }))}>
+                    {k === 0 ? "Este mes" : etiqMesLargo(mk)}
+                  </button>
+                );
+              })}
+              <MesIn value={idxMes(arranque) > idxMes(sumaMes(mesDeHoy(), 5)) ? arranque : ""}
+                onChange={(v) => v && setF((p) => ({ ...p, desde: idxMes(v) > idxMes(mesDeHoy()) ? v : "", desdeTocado: true }))} />
+            </div>
+            {arranque !== mesDeHoy() && (
+              <div style={{ fontSize: 12, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+                Hasta {etiqMesLargo(sumaMes(arranque, -1))} no cuenta: arranca en <b>{etiqMesLargo(arranque)}</b>.
+              </div>
+            )}
+
             <label className="lbl" style={{ marginTop: 16 }}>
               {esIngreso ? "¿Por cuántos meses más? (vacío = no termina)" : "¿Cuántas cuotas le quedan? (vacío = no termina)"}
             </label>
@@ -4670,7 +4703,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
             </div>
             {+f.cuotasRestantes > 0 && (
               <div style={{ fontSize: 12.5, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-                Última en <b>{etiqMesLargo(sumaMes(mesDeHoy(), +f.cuotasRestantes - 1))}</b>.
+                Última en <b>{etiqMesLargo(sumaMes(arranque, +f.cuotasRestantes - 1))}</b>.{" "}
                 {esIngreso ? "Así la app sabe hasta cuándo lo cobrás." : "Sirve para préstamos: así la app sabe cuándo dejás de pagarlo."}
               </div>
             )}
@@ -4690,7 +4723,7 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
               ))}
             </div>
             <div style={{ fontSize: 12, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
-              Cuenta de {etiqMesLargo(mesDeHoy())} en adelante: los meses que ya pasaron no se tocan.
+              Cuenta de {etiqMesLargo(arranque)} en adelante: los meses que ya pasaron no se tocan.
             </div>
           </>
         )}
