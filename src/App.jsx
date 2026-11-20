@@ -209,6 +209,15 @@ const periodoDe = (iso) => {
   return +t.slice(8, 10) >= DIA_CORTE ? sumaMes(mk, 1) : mk;
 };
 const mesDeHoy = () => periodoDe(fechaLocal());
+// Período en que se cargó un movimiento, sacado de su id ("m" + milisegundos).
+// Sirve para que un recurrente no cuente en meses anteriores a su alta.
+const mesAltaDeId = (id) => {
+  const r = /^m(\d{13})$/.exec(String(id || ""));
+  if (!r) return null;
+  const d = new Date(+r[1]);
+  if (isNaN(d)) return null;
+  return periodoDe(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+};
 const hoyISO = () => fechaLocal();
 
 const plata = (n, d = 0) =>
@@ -4282,6 +4291,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
     monto: inicial?.monto ?? "",
     montoUsd: inicial?.montoUsd ?? "",
     pct: inicial?.pct != null ? Math.round(inicial.pct * 100) : 50,
+    // Al editar, las cuotas que quedan salen de "hasta": si no, guardar lo borraba
+    cuotasRestantes: inicial?.recurrente && inicial?.hasta && idxMes(inicial.hasta) >= idxMes(mesDeHoy())
+      ? String(idxMes(inicial.hasta) - idxMes(mesDeHoy()) + 1) : "",
   }));
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -4348,6 +4360,15 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
       if (f.auto === false) mv.auto = false;
       if (f.auto === false && f.manual === false) mv.manual = false;
       if (f.meses?.length) mv.meses = f.meses;
+      // Desde cuándo cuenta: nunca antes de cargarlo. Si le cambiás los meses, el cambio
+      // vale de acá en adelante; si no, los meses que ya pasaron aparecían como deuda.
+      const hoyMk = mesDeHoy();
+      const antes = (inicial && inicial.desde) || mesAltaDeId(inicial && inicial.id) || null;
+      const mesesAntes = ((inicial && inicial.meses) || []).join(",");
+      const cambiaMeses = !esNuevo && mesesAntes !== (f.meses || []).join(",");
+      let desde = esNuevo ? hoyMk : antes;
+      if (cambiaMeses && (!desde || idxMes(desde) < idxMes(hoyMk))) desde = hoyMk;
+      if (desde) mv.desde = desde;
     } else {
       mv.cuotas = Math.max(1, +f.cuotas || 1);
       mv.mesInicio = mesPago;
@@ -4667,6 +4688,9 @@ function FormMov({ inicial, medios, personas, onGuardar, onBorrar, onCerrar, tcR
                   }}
                 >{n}</button>
               ))}
+            </div>
+            <div style={{ fontSize: 12, color: T.suave, marginTop: 7, lineHeight: 1.5 }}>
+              Cuenta de {etiqMesLargo(mesDeHoy())} en adelante: los meses que ya pasaron no se tocan.
             </div>
           </>
         )}
@@ -10480,6 +10504,13 @@ export default function App() {
         if (String(m.id).startsWith("imp") && m.medio && m.mesInicio) resum[m.medio + "|" + m.mesInicio] = true;
       });
       c.resumenes = resum;
+      // Recurrentes sin "desde": no cuentan antes del período en que los cargaste
+      // (si no, los meses previos aparecían como gasto sin pagar).
+      movsN = movsN.map((m) => {
+        if (!m.recurrente || m.desde) return m;
+        const alta = mesAltaDeId(m.id);
+        return alta ? { ...m, desde: alta } : m;
+      });
       // Ciclos repetidos de las tarjetas: uno por cierre
       if (Array.isArray(c.medios)) c.medios = c.medios.map(normalizarCiclos);
       // Fechas de tarjeta que se perdieron: se rearman para los meses con resumen importado
